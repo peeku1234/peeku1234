@@ -1,0 +1,67 @@
+package com.sbi.yb.cinb.repository.impl;
+
+import com.sbi.yb.cinb.constant.FileUploadStatusCodeConstants;
+import com.sbi.yb.cinb.constant.QueryConstants;
+import com.sbi.yb.cinb.repository.UploadFileDAO;
+import com.sbi.yb.exception.DAOException;
+import com.sbi.yb.exception.MicroServiceException;
+import com.sbi.yb.utils.LoggerUtil;
+import org.slf4j.Logger;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.BeanPropertyRowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.stereotype.Repository;
+
+import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+
+
+/**
+ * @author V1017263
+ * @version 1.0
+ */
+
+@Repository
+public class UploadFileDAOImpl implements UploadFileDAO {
+
+    private static final Logger logger = LoggerUtil.getLogger(UploadFileDAOImpl.class);
+
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+    public UploadFileDAOImpl(final NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
+        this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
+    }
+
+    @Override
+    public Integer saveUploadedFileDetails(SqlParameterSource parameterSource) {
+        logger.info("saveUploadedFileDetails -- Input params : {} ", parameterSource);
+            return namedParameterJdbcTemplate.update(
+                    QueryConstants.SAVE_UPLOADED_FILE_DETAILS,
+                    parameterSource);
+    }
+
+    @Override
+    public BigInteger getNextNumberFromSequences() {
+        logger.info("getNextNumberFromSequences()");
+            return namedParameterJdbcTemplate.queryForObject(QueryConstants.GET_XML_FILE_SNO, new MapSqlParameterSource(),BigInteger.class);
+    }
+
+    @Override
+    public List<Integer> getEncryptedForCorporate(String corporateId, String fileType) {
+        logger.info("getEncryptedForCorporate -- Input param corporate ID :{} & config Type :{}",corporateId,fileType);
+
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue("corporateIds", Arrays.asList("default",corporateId))
+                .addValue("corporateType","Corporate")
+                .addValue("txnType","%" + fileType + "%")
+                .addValue("stage","%IN%")
+                .addValue("status",1);
+
+         return namedParameterJdbcTemplate.queryForList(QueryConstants.GET_ENCRYPT_FOR_CORPORATE, parameters, Integer.class);
+    }
+}
