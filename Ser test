@@ -1,0 +1,240 @@
+package com.sbi.yb.cinb.service.impl;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+import java.io.IOException;
+import java.math.BigInteger;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.List;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.sbi.yb.cinb.configuration.FileUploadProperties;
+import com.sbi.yb.cinb.constant.FileUploadConstants;
+import com.sbi.yb.cinb.constant.FileUploadStatusCodeConstants;
+import com.sbi.yb.cinb.model.UploadFileResponse;
+import com.sbi.yb.cinb.repository.UploadFileDAO;
+import com.sbi.yb.exception.CommonException;
+import com.sbi.yb.exception.DAOException;
+import com.sbi.yb.exception.MicroServiceException;
+
+@ExtendWith(MockitoExtension.class)
+class UploadFileServiceImplTest {
+
+    @Mock
+    private UploadFileDAO uploadFileDAO;
+
+    @Mock
+    private FileUploadProperties configurationFilePath;
+
+    @InjectMocks
+    private UploadFileServiceImpl uploadFileService;
+
+    @Captor
+    private ArgumentCaptor<SqlParameterSource> paramCaptor;
+
+    private MultipartFile mockFile;
+    private final String TEST_SEQUENCE = "12345";
+    private final String CORPORATE_ID = "CORP123";
+    private final String USERNAME = "testUser";
+
+    @BeforeEach
+    void setUp() {
+        mockFile = new MockMultipartFile(
+            "testFile", 
+            "test.txt", 
+            "text/plain", 
+            "test content".getBytes()
+        );
+        
+        when(configurationFilePath.getProperty(any()))
+            .thenReturn("/test/path/");
+    }
+
+    @Test
+    void uploadConfigurationFile_SameBankAddBene_Success() throws Exception {
+        // Setup DAO mocks
+        when(uploadFileDAO.getNextNumberFromSequences())
+            .thenReturn(BigInteger.valueOf(12345));
+        when(uploadFileDAO.getEncryptedForCorporate(any(), any()))
+            .thenReturn(List.of(1));
+        when(uploadFileDAO.saveUploadedFileDetails(any()))
+            .thenReturn(1);
+
+        // Execute
+        UploadFileResponse response = uploadFileService.uploadConfigurationFile(
+            mockFile, 
+            FileUploadConstants.SAME_BANK_ADD_BENE, 
+            USERNAME, 
+            CORPORATE_ID
+        );
+
+        // Verify
+        assertNotNull(response);
+        assertEquals(TEST_SEQUENCE, response.getSequenceNo());
+        verify(uploadFileDAO).saveUploadedFileDetails(paramCaptor.capture());
+        
+        SqlParameterSource params = paramCaptor.getValue();
+        assertEquals("/C3P//SameBankAddBene12345.xml", params.getValue("fileName"));
+    }
+
+    @Test
+    void uploadConfigurationFile_CompositeBene_Success() throws Exception {
+        when(uploadFileDAO.getNextNumberFromSequences())
+            .thenReturn(BigInteger.valueOf(12345));
+        when(uploadFileDAO.getEncryptedForCorporate(any(), any()))
+            .thenReturn(List.of(1));
+        when(uploadFileDAO.saveUploadedFileDetails(any()))
+            .thenReturn(1);
+
+        UploadFileResponse response = uploadFileService.uploadConfigurationFile(
+            mockFile, 
+            FileUploadConstants.COMPOSITE_BENE, 
+            USERNAME, 
+            CORPORATE_ID
+        );
+
+        verify(uploadFileDAO).saveUploadedFileDetails(paramCaptor.capture());
+        assertEquals("COMPOSITE_BENE", paramCaptor.getValue().getValue("fileType"));
+    }
+
+    @Test
+    void uploadConfigurationFile_InvalidFileType_ThrowsException() {
+        assertThrows(MicroServiceException.class, () -> {
+            uploadFileService.uploadConfigurationFile(
+                mockFile, 
+                "INVALID_TYPE", 
+                USERNAME, 
+                CORPORATE_ID
+            );
+        });
+    }
+
+    @Test
+    void uploadConfigurationFile_EncryptedFile_Success() throws Exception {
+        when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
+        when(uploadFileDAO.getEncryptedForCorporate(any(), any()))
+            .thenReturn(List.of(1));
+        when(uploadFileDAO.saveUploadedFileDetails(any())).thenReturn(1);
+
+        UploadFileResponse response = uploadFileService.uploadConfigurationFile(
+            mockFile, 
+            FileUploadConstants.SAME_BANK_ADD_BENE, 
+            USERNAME, 
+            CORPORATE_ID
+        );
+
+        assertNotNull(response);
+        verify(configurationFilePath).getProperty("path.SAME_BANK_ADD_BENE");
+    }
+
+    @Test
+    void uploadConfigurationFile_NonEncryptedFile_Success() throws Exception {
+        when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
+        when(uploadFileDAO.getEncryptedForCorporate(any(), any()))
+            .thenReturn(List.of(0));
+        when(uploadFileDAO.saveUploadedFileDetails(any())).thenReturn(1);
+
+        UploadFileResponse response = uploadFileService.uploadConfigurationFile(
+            mockFile, 
+            FileUploadConstants.SAME_BANK_ADD_BENE, 
+            USERNAME, 
+            CORPORATE_ID
+        );
+
+        assertNotNull(response);
+        verify(configurationFilePath).getProperty("path.temp");
+    }
+
+    @Test
+    void uploadConfigurationFile_DataAccessException_ThrowsDAOException() {
+        when(uploadFileDAO.getNextNumberFromSequences())
+            .thenThrow(new DataAccessException("DB Error") {});
+
+        assertThrows(DAOException.class, () -> {
+            uploadFileService.uploadConfigurationFile(
+                mockFile, 
+                FileUploadConstants.SAME_BANK_ADD_BENE, 
+                USERNAME, 
+                CORPORATE_ID
+            );
+        });
+    }
+
+    @Test
+    void uploadConfigurationFile_IOException_ThrowsMicroServiceException() throws Exception {
+        when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
+        when(uploadFileDAO.getEncryptedForCorporate(any(), any()))
+            .thenReturn(List.of(0));
+
+        MultipartFile badFile = mock(MultipartFile.class);
+        when(badFile.transferTo(any())).thenThrow(new IOException());
+
+        assertThrows(CommonException.class, () -> {
+            uploadFileService.uploadConfigurationFile(
+                badFile, 
+                FileUploadConstants.SAME_BANK_ADD_BENE, 
+                USERNAME, 
+                CORPORATE_ID
+            );
+        });
+    }
+
+    @Test
+    void uploadConfigurationFile_InvalidSequence_ThrowsException() {
+        when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(null);
+
+        assertThrows(MicroServiceException.class, () -> {
+            uploadFileService.uploadConfigurationFile(
+                mockFile, 
+                FileUploadConstants.SAME_BANK_ADD_BENE, 
+                USERNAME, 
+                CORPORATE_ID
+            );
+        });
+    }
+
+    @Test
+    void createNewFileAndWrite_Success() throws IOException {
+        UploadFileServiceImpl service = new UploadFileServiceImpl(
+            uploadFileDAO, configurationFilePath
+        );
+
+        when(configurationFilePath.getProperty(any()))
+            .thenReturn(System.getProperty("java.io.tmpdir"));
+
+        service.createNewFileAndWrite(mockFile, 
+            System.getProperty("java.io.tmpdir") + "/testfile.txt");
+
+        // Verify no exceptions thrown
+        assertTrue(true);
+    }
+
+    @Test
+    void createNewFileAndWrite_IOException_ThrowsException() throws IOException {
+        MultipartFile badFile = mock(MultipartFile.class);
+        when(badFile.transferTo(any())).thenThrow(new IOException());
+
+        assertThrows(IOException.class, () -> {
+            uploadFileService.createNewFileAndWrite(
+                badFile, 
+                "/invalid/path/testfile.txt"
+            );
+        });
+    }
+}
