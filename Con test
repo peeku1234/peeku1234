@@ -1,0 +1,121 @@
+package com.sbi.yb.cinb.controller;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.yb.cinb.constant.FileUploadConstants;
+import com.sbi.yb.cinb.constant.FileUploadStatusCodeConstants;
+import com.sbi.yb.cinb.exception.UploadBeneficiaryFileException;
+import com.sbi.yb.cinb.model.UploadFileRequest;
+import com.sbi.yb.cinb.model.UploadFileResponse;
+import com.sbi.yb.cinb.service.UploadFileService;
+import com.sbi.yb.cinb.util.FileUploadUtil;
+import com.sbi.yb.exception.CommonException;
+import com.sbi.yb.exception.MicroServiceException;
+import com.sbi.yb.model.SBIApplicationResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.*;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.Base64;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class UploadFileControllerTest {
+
+    @InjectMocks
+    private UploadFileController uploadFileController;
+
+    @Mock
+    private UploadFileService uploadFileServiceImpl;
+
+    @Mock
+    private HttpServletRequest httpServletRequest;
+
+    @Mock
+    private HttpServletResponse httpServletResponse;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        uploadFileController = new UploadFileController(uploadFileServiceImpl);
+        ReflectionTestUtils.setField(uploadFileController, "excludedFiletypes", ".exe,.bat");
+    }
+
+    @Test
+    void testUploadBeneficiaryFile_Success() throws Exception {
+        UploadFileRequest request = new UploadFileRequest();
+        request.setFileType("IMPS_TXN");
+        request.setFileName("test.csv");
+        request.setUserName("user1");
+        request.setCorporateAlias("corp1");
+        request.setFileContent(Base64.getEncoder().encodeToString("sample data".getBytes()));
+
+        String payload = objectMapper.writeValueAsString(request);
+        when(httpServletRequest.getParameter("plainPayload")).thenReturn(payload);
+
+        SBIApplicationResponse expectedResponse = new SBIApplicationResponse();
+        when(uploadFileServiceImpl.uploadConfigurationFile(any(MultipartFile.class), eq("IMPS_TXN"), eq("user1"), eq("corp1")))
+                .thenReturn(new UploadFileResponse());
+        ResponseEntity<SBIApplicationResponse> responseEntity = uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse);
+
+        assertEquals(200, responseEntity.getStatusCodeValue());
+        verify(uploadFileServiceImpl, times(1)).uploadConfigurationFile(any(MultipartFile.class), any(), any(), any());
+    }
+
+    @Test
+    void testUploadBeneficiaryFile_InvalidFileType() throws Exception {
+        UploadFileRequest request = new UploadFileRequest();
+        request.setFileType("INVALID_TYPE");
+        request.setFileName("test.csv");
+        request.setUserName("user1");
+        request.setCorporateAlias("corp1");
+        request.setFileContent(Base64.getEncoder().encodeToString("sample data".getBytes()));
+
+        String payload = objectMapper.writeValueAsString(request);
+        when(httpServletRequest.getParameter("plainPayload")).thenReturn(payload);
+
+        assertThrows(UploadBeneficiaryFileException.class, () ->
+                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testUploadBeneficiaryFile_InvalidFileFormat() throws Exception {
+        UploadFileRequest request = new UploadFileRequest();
+        request.setFileType("IMPS_TXN");
+        request.setFileName("malware.exe");
+        request.setUserName("user1");
+        request.setCorporateAlias("corp1");
+        request.setFileContent(Base64.getEncoder().encodeToString("sample data".getBytes()));
+
+        String payload = objectMapper.writeValueAsString(request);
+        when(httpServletRequest.getParameter("plainPayload")).thenReturn(payload);
+
+        assertThrows(UploadBeneficiaryFileException.class, () ->
+                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testUploadBeneficiaryFile_InvalidJson() throws Exception {
+        when(httpServletRequest.getParameter("plainPayload")).thenReturn("{ invalid json }");
+
+        assertThrows(MicroServiceException.class, () ->
+                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testUploadBeneficiaryFile_EmptyPayload() {
+        when(httpServletRequest.getParameter("plainPayload")).thenReturn(null);
+        assertThrows(MicroServiceException.class, () ->
+                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
+    }
+}
