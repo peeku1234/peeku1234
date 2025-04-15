@@ -1,245 +1,38 @@
-package com.sbi.yb.cinb.service.impl;
+@Test
+void uploadConfigurationFile_ThrowsMicroServiceExceptionOnIOException() throws Exception {
+    MultipartFile badFile = mock(MultipartFile.class);
+    when(badFile.getOriginalFilename()).thenReturn("test.txt");
+    doThrow(IOException.class).when(badFile).transferTo(any(File.class));
 
-import com.sbi.yb.cinb.configuration.FileUploadProperties;
-import com.sbi.yb.cinb.constant.FileUploadConstants;
-import com.sbi.yb.cinb.constant.FileUploadStatusCodeConstants;
-import com.sbi.yb.cinb.model.UploadFileResponse;
-import com.sbi.yb.cinb.repository.UploadFileDAO;
-import com.sbi.yb.cinb.service.UploadFileService;
-import com.sbi.yb.cinb.util.FileUploadUtil;
-import com.sbi.yb.exception.CommonException;
-import com.sbi.yb.exception.DAOException;
-import com.sbi.yb.exception.MicroServiceException;
-import com.sbi.yb.utils.LoggerUtil;
-import org.slf4j.Logger;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
-import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
+    when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
+    when(uploadFileDAO.getEncryptedForCorporate(anyString(), anyString())).thenReturn(List.of(0));
 
-import java.io.File;
-import java.io.IOException;
-import java.math.BigInteger;
-import java.sql.Timestamp;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
-
-/**
- * @author V1017263
- * @version 1.0+
- */
-
-@Service
-public class UploadFileServiceImpl implements UploadFileService {
-
-  private static final Logger logger = LoggerUtil.getLogger(UploadFileServiceImpl.class);
-
-  private UploadFileDAO uploadFileDAO;
-
-  private FileUploadProperties configurationFilePath;
-
-  public UploadFileServiceImpl(UploadFileDAO uploadFileDAO, FileUploadProperties configurationFilePath) {
-    this.uploadFileDAO = uploadFileDAO;
-    this.configurationFilePath = configurationFilePath;
-  }
-
-  @Override
-  public UploadFileResponse uploadConfigurationFile(MultipartFile file, String fileType, String userName, String corporateId) throws CommonException {
-    logger.info("uploadConfigurationFile method begins");
-    UploadFileResponse uploadFileResponse = null;
-
-    String trickleFeed = FileUploadConstants.NO;
-    String fileStatus = FileUploadConstants.PENDING;
-    String validateCrAcc = FileUploadConstants.EMPTY_STRING;
-
-    /*
-    Generating sequence number
-    */
-    String sequenceNo = Optional.ofNullable(uploadFileDAO.getNextNumberFromSequences())
-            .orElseThrow(() -> new MicroServiceException(FileUploadStatusCodeConstants.INVALID_SEQUENCE)).toString();
-      logger.info("Sequence Number :{}", sequenceNo);
-
-    try {
-        // XML File type & name based on uploaded file type
-      String xmlFileType = FileUploadConstants.C3P;
-      String xmlFileName = switch (fileType) {
-        case FileUploadConstants.SAME_BANK_ADD_BENE ->
-                FileUploadUtil.addPrefixSuffix("/", "/", FileUploadConstants.SAME_BANK_ADD_BENE) + sequenceNo + FileUploadConstants.XML_EXTENSION;
-        case FileUploadConstants.SAME_BANK_DELETE_BENE ->
-                FileUploadUtil.addPrefixSuffix("/", "/", FileUploadConstants.XML) + sequenceNo + FileUploadConstants.XML_EXTENSION;
-        case FileUploadConstants.OTHER_BANK_ADD_BENE ->
-                FileUploadUtil.addPrefixSuffix("/", "/", FileUploadConstants.OTHER_BANK_ADD_BENE) + sequenceNo + FileUploadConstants.XML_EXTENSION;
-        case FileUploadConstants.OTHER_BANK_DELETE_BENE ->
-                FileUploadUtil.addPrefixSuffix("/", "/", FileUploadConstants.OTHER_BANK_DELETE_BENE) + sequenceNo + FileUploadConstants.XML_EXTENSION;
-        case FileUploadConstants.COMPOSITE_BENE -> {
-          xmlFileType = FileUploadConstants.COMPOSITE_BENE;
-          yield FileUploadUtil.addPrefixSuffix("/", "/", FileUploadConstants.COMPOSITE_BENE) + sequenceNo + FileUploadConstants.XML_EXTENSION;
-        }
-        default -> throw new MicroServiceException(FileUploadStatusCodeConstants.INVALID_FILE_TYPE);
-      };
-      logger.info("XML file type :{} & name : {}", xmlFileType, xmlFileName);
-
-      String path = configurationFilePath.getProperty("path.".concat(fileType)) + sequenceNo + FileUploadConstants.XML_EXTENSION;
-      logger.info("Path : {}", path);
-
-      Integer encryptValue = Optional.ofNullable(uploadFileDAO.getEncryptedForCorporate(corporateId, fileType))
-              .stream().flatMap(List::stream).findFirst().orElseThrow(() -> new MicroServiceException(FileUploadStatusCodeConstants.INVALID_ENCRYPT_VALUE));
-      logger.info("encrypted : {}", encryptValue);
-
-       /*
-       If file is not encrypted
-       */
-      if (encryptValue.equals(FileUploadConstants.FILE_NOT_ENCRYPTED)) {
-        logger.info("File is not encrypted");
-        String tempFilePath = configurationFilePath.getProperty("path.temp") + File.separator + sequenceNo + FileUploadConstants.TEXT_EXTENSION;
-        logger.info(" Temporary file path : {}", tempFilePath);
-
-        createNewFileAndWrite(file, tempFilePath);
-
-        Runtime runtime = Runtime.getRuntime();
-
-        //THIS SHOULD BE ENABLED FOR AIX SERVER
-        String cmd = "dos2unix -ascii -n -f " + tempFilePath + " " + path;
-        logger.info(" Cmd  :: {} ", cmd);
-
-        //------------------------Commented for LOCAL-------------------------------- -
-                //runtime.exec(cmd);
-
-      }
-      /*
-      If file is encrypted
-      */
-      else if (encryptValue.equals(FileUploadConstants.FILE_ENCRYPTED)) {
-        logger.info("File is encrypted");
-        createNewFileAndWrite(file, path);
-      }
-
-      //String currentLocalDateTime = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").format(LocalDateTime.now());
-     LocalDateTime currentLocalDateTime = LocalDateTime.now();
-      SqlParameterSource mapSqlParameterSource = new MapSqlParameterSource()
-              .addValue("fileType", xmlFileType)
-              .addValue("additionalField5", fileType)
-              .addValue("sno", sequenceNo)
-              .addValue("fileName", xmlFileName)
-              .addValue("fileStatus", fileStatus)
-              .addValue("userName", userName)
-              .addValue("creationTime", currentLocalDateTime)
-              .addValue("lastModifiedTime", currentLocalDateTime)
-              .addValue("additionalField3", corporateId)
-              .addValue("additionalField6", file.getOriginalFilename())
-              .addValue("additionalField7", encryptValue.toString())
-              .addValue("additionalField1", validateCrAcc)
-              .addValue("trickleFeed", trickleFeed);
-
-      Optional<Integer> insertedRows = Optional.ofNullable(uploadFileDAO.saveUploadedFileDetails(mapSqlParameterSource));
-      //Optional<Integer> insertedRows = Optional.of(1);
-      logger.info("Records created: {}", insertedRows.orElse(0));
-      if (insertedRows.isPresent() && insertedRows.get().equals(1))
-        uploadFileResponse = new UploadFileResponse(sequenceNo, file.getOriginalFilename(), currentLocalDateTime.format(DateTimeFormatter.ofPattern("dd MMMM,yyyy HH:mm:ss")), fileStatus);
-
-    } catch (IllegalStateException | IOException exception) {
-      logger.info("Exception occurred in uploadConfigurationFile() while uploading file");
-      MicroServiceException.throwException(FileUploadStatusCodeConstants.ERROR_STORING_FILE, exception);
-    } catch (DataAccessException dataAccessException) {
-      logger.info("Data access exception occurred in uploadConfigurationFile()");
-      DAOException.throwException(FileUploadStatusCodeConstants.DB_ACCESS_FAILURE, dataAccessException);
-    }
-    logger.info("uploadConfigurationFile method ends : {}", uploadFileResponse);
-    return uploadFileResponse;
-  }
-
-
-  public void createNewFileAndWrite(MultipartFile multipartFile, String path) throws IOException {
-    File filePath = new File(path);
-    if (!filePath.getParentFile().exists()) {
-      logger.info(filePath.getParentFile().mkdirs() ? "Directory was created, along with all necessary parent directories" : "Directory creation failed");
-    }
-    logger.info(filePath.createNewFile() ? "File successfully created" : "Named file already exists");
-
-    multipartFile.transferTo(filePath);
-
-  }
+    assertThrows(MicroServiceException.class, () -> {
+        uploadFileService.uploadConfigurationFile(badFile, "SAME_BANK_ADD_BENE", "user", "corpId");
+    });
 }
 
-I want test cases for catch blocks.... remaining i covered by given below test cases
+@Test
+void uploadConfigurationFile_ThrowsMicroServiceExceptionOnIllegalState() throws Exception {
+    MultipartFile badFile = mock(MultipartFile.class);
+    when(badFile.getOriginalFilename()).thenReturn("test.txt");
+    doThrow(IllegalStateException.class).when(badFile).transferTo(any(File.class));
 
-package com.sbi.yb.cinb.service.impl;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
-import java.math.BigInteger;
-import java.util.List;
-import com.sbi.yb.exception.CommonException;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.*;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
-import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.web.multipart.MultipartFile;
-import com.sbi.yb.cinb.configuration.FileUploadProperties;
-import com.sbi.yb.cinb.model.UploadFileResponse;
-import com.sbi.yb.cinb.repository.UploadFileDAO;
-import com.sbi.yb.exception.MicroServiceException;
+    when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
+    when(uploadFileDAO.getEncryptedForCorporate(anyString(), anyString())).thenReturn(List.of(0));
 
-@SpringBootTest
-class UploadFileServiceImplTest {
-    @InjectMocks
-    private UploadFileServiceImpl uploadFileService;
-    @Mock
-    private UploadFileDAO uploadFileDAO;
-    @Mock
-    private FileUploadProperties configurationFilePath;
-    @Captor
-    private ArgumentCaptor<SqlParameterSource> paramCaptor;
-    private MultipartFile mockFile;
+    assertThrows(MicroServiceException.class, () -> {
+        uploadFileService.uploadConfigurationFile(badFile, "SAME_BANK_ADD_BENE", "user", "corpId");
+    });
+}
 
-    @BeforeEach
-    void setUp() {
-        mockFile = new MockMultipartFile(
-                "testFile",
-                "test.txt",
-                "text/plain",
-                "testContent".getBytes()
-        );
+@Test
+void uploadConfigurationFile_ThrowsDAOExceptionOnDataAccessFailure() {
+    when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
+    when(uploadFileDAO.getEncryptedForCorporate(anyString(), anyString())).thenReturn(List.of(0)));
+    when(uploadFileDAO.saveUploadedFileDetails(any())).thenThrow(new DataAccessException("DB Error") {});
 
-        Mockito.when(configurationFilePath.getProperty(any()))
-                .thenReturn("/test/path/");
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"3P","D3P","DIBTP","COMPOSITE_BEN","IBTP"})
-    void uploadConfigurationFiles(String fileType) throws CommonException {
-        Mockito.when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.valueOf(12345));
-        Mockito.when(uploadFileDAO.getEncryptedForCorporate(any(), any())).thenReturn(List.of(0));
-        Mockito.when(uploadFileDAO.saveUploadedFileDetails(any())).thenReturn(1);
-        UploadFileResponse response = uploadFileService.uploadConfigurationFile(mockFile, fileType, "YBM1Upload", "250250");
-        assertNotNull(response);
-        Mockito.verify(uploadFileDAO,times(1)).saveUploadedFileDetails(paramCaptor.capture());
-    }
-
-    @Test
-    void uploadConfigurationFile_default() {
-        Mockito.when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.valueOf(12345));
-        Mockito.when(uploadFileDAO.getEncryptedForCorporate(any(), any())).thenReturn(List.of(0));
-        Mockito.when(uploadFileDAO.saveUploadedFileDetails(any())).thenReturn(1);
-        assertThrows(MicroServiceException.class, () -> uploadFileService.uploadConfigurationFile(mockFile, "INVALID_TYPE", "YBM1Upload", "250250"));
-    }
-
-    @Test
-    void uploadConfigurationFile_fileNotEncrypted() throws Exception {
-        when(uploadFileDAO.getNextNumberFromSequences()).thenReturn(BigInteger.TEN);
-        when(uploadFileDAO.getEncryptedForCorporate(any(), any())).thenReturn(List.of(1));
-        when(uploadFileDAO.saveUploadedFileDetails(any())).thenReturn(1);
-        UploadFileResponse response = uploadFileService.uploadConfigurationFile(mockFile, "3P", "YBM1Upload", "250250");
-        assertNotNull(response);
-        verify(configurationFilePath).getProperty("path.3P");
-    }
-
+    assertThrows(DAOException.class, () -> {
+        uploadFileService.uploadConfigurationFile(mockFile, "SAME_BANK_ADD_BENE", "user", "corpId");
+    });
 }
