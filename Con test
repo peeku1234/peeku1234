@@ -1,10 +1,9 @@
 package com.sbi.yb.cinb.controller;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sbi.yb.cinb.constant.FileUploadConstants;
 import com.sbi.yb.cinb.constant.FileUploadStatusCodeConstants;
 import com.sbi.yb.cinb.exception.UploadBeneficiaryFileException;
+import com.sbi.yb.cinb.model.CustomMultipartFile;
 import com.sbi.yb.cinb.model.UploadFileRequest;
 import com.sbi.yb.cinb.model.UploadFileResponse;
 import com.sbi.yb.cinb.service.UploadFileService;
@@ -12,110 +11,196 @@ import com.sbi.yb.cinb.util.FileUploadUtil;
 import com.sbi.yb.exception.CommonException;
 import com.sbi.yb.exception.MicroServiceException;
 import com.sbi.yb.model.SBIApplicationResponse;
+import com.sbi.yb.utils.LoggerUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.*;
+import org.slf4j.Logger;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.mock.env.MockEnvironment;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.math.BigInteger;
+import java.net.URLConnection;
 import java.util.Base64;
+import java.util.Objects;
 import java.util.Optional;
 
+import static com.sbi.yb.cinb.constant.FileUploadStatusCodeConstants.FILE_UPLOAD_SUCCESS;
+
+
+/*
+ * @author V1017263
+ * @Description : This class {@code UploadFileController} includes method for Uploading files
+ */
+
+@RestController
+public class UploadFileController {
+
+  private static final Logger logger = LoggerUtil.getLogger(UploadFileController.class);
+
+  private UploadFileService uploadFileServiceImpl;
+
+  public UploadFileController(UploadFileService uploadFileServiceImpl) {
+    this.uploadFileServiceImpl = uploadFileServiceImpl;
+
+  }
+
+  @Value("${upload-file.excluded.extensions}")
+  String excludedFiletypes;
+
+  /**
+   * This method is to upload beneficiary files
+   *
+   * @param httpServletRequest
+   * @param httpServletResponse
+   * @return {@code ResponseEntity<SBIApplicationResponse>}
+   */
+  @PostMapping(value = "/beneficiary")
+  public ResponseEntity<SBIApplicationResponse> uploadBeneficiaryFile(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) throws CommonException, JsonProcessingException {
+    logger.info("uploadBeneficiaryFile - starts");
+
+    Optional<String> plainPayload = FileUploadUtil.safeGetParameter(httpServletRequest, "plainPayload");
+
+    UploadFileRequest uploadFileRequest = null;
+    SBIApplicationResponse sbiApplicationResponse = null;
+    try {
+            /*
+            Deserializing JSON content
+             */
+      uploadFileRequest = (UploadFileRequest) FileUploadUtil.toObject(plainPayload.orElseThrow(() ->
+              new MicroServiceException(FileUploadStatusCodeConstants.INVALID_REQUEST)), UploadFileRequest.class);
+
+    } catch (JsonProcessingException jsonProcessingException) {
+      logger.info("Request could not be parsed as JSON.");
+      MicroServiceException.throwException(FileUploadStatusCodeConstants.INVALID_REQUEST, jsonProcessingException);
+    }
+
+    plainPayload.ifPresent(payload -> logger.info("plainPayload: {}", payload));
+    logger.info("UploadBeneficiaryFileRequest : {}", uploadFileRequest);
+
+    if (Optional.ofNullable(uploadFileRequest).isPresent()) {
+        /*
+        Validating file type
+         */
+      if (!FileUploadConstants.ACC_BENE_FILE_TYPES.stream().anyMatch(uploadFileRequest.getFileType()::equalsIgnoreCase))
+        UploadBeneficiaryFileException.throwException(FileUploadStatusCodeConstants.INVALID_FILE_TYPE);
+
+      logger.info("File type is valid");
+
+                /*
+                Validating file name & format
+                 */
+      if (!FileUploadUtil.validateFileFormat(excludedFiletypes, uploadFileRequest.getFileName()))
+        UploadBeneficiaryFileException.throwException(FileUploadStatusCodeConstants.INVALID_FILE_FORMAT);
+
+      logger.info("File format validation successful");
+
+            /*
+            Building custom multipart file object
+             */
+      MultipartFile file = new CustomMultipartFile(Base64.getDecoder().decode(uploadFileRequest.getFileContent())
+              , uploadFileRequest.getFileName(), URLConnection.guessContentTypeFromName(uploadFileRequest.getFileName()));
+
+      logger.info("MultipartFile : {}", file);
+
+
+      if (Objects.nonNull(file) && !file.isEmpty() && Objects.nonNull(uploadFileRequest.getUserName())
+              && Objects.nonNull(uploadFileRequest.getCorporateAlias()))
+
+        sbiApplicationResponse = FileUploadUtil.buildSuccessResponse(
+                /*
+                 * Creates a new file & writes the content
+                 * Transfers the file to specified path & inserts uploaded file details in DB
+                 */
+                uploadFileServiceImpl.uploadConfigurationFile(file, uploadFileRequest.getFileType().toUpperCase(),
+                        uploadFileRequest.getUserName(), uploadFileRequest.getCorporateAlias())
+                , FILE_UPLOAD_SUCCESS);
+    }
+    logger.info("uploadBeneficiaryFile() - response : {}",sbiApplicationResponse);
+
+    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
+  }
+}
+
+
+junit test cases to cover all lines it shd be similar to 
+
+package com.sbi.yb.cinb.controller;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.yb.cinb.model.ActualFileDownloadRequest;
+import com.sbi.yb.cinb.model.ActualFileDownloadResponse;
+import com.sbi.yb.cinb.service.impl.ManageFileBeneficiaryServiceImpl;
+import com.sbi.yb.constants.StatusCodeConstants;
+import com.sbi.yb.exception.MicroServiceException;
+import com.sbi.yb.model.Status;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.springframework.boot.test.context.SpringBootTest;
+import java.util.HashMap;
+import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
 
-class UploadFileControllerTest {
-
+@SpringBootTest
+class ManageFileBeneficiaryControllerTest {
     @InjectMocks
-    private UploadFileController uploadFileController;
-
+    private ManageFileBeneficiaryController manageFileBeneficiaryController;
     @Mock
-    private UploadFileService uploadFileServiceImpl;
-
+    private ManageFileBeneficiaryServiceImpl manageFileBeneficiaryService;
     @Mock
     private HttpServletRequest httpServletRequest;
-
     @Mock
     private HttpServletResponse httpServletResponse;
-
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    @BeforeEach
-    void setUp() {
-        MockitoAnnotations.openMocks(this);
-        uploadFileController = new UploadFileController(uploadFileServiceImpl);
-        ReflectionTestUtils.setField(uploadFileController, "excludedFiletypes", ".exe,.bat");
-    }
-
     @Test
-    void testUploadBeneficiaryFile_Success() throws Exception {
-        UploadFileRequest request = new UploadFileRequest();
-        request.setFileType("IMPS_TXN");
-        request.setFileName("test.csv");
-        request.setUserName("user1");
-        request.setCorporateAlias("corp1");
-        request.setFileContent(Base64.getEncoder().encodeToString("sample data".getBytes()));
+    void downloadActualFile() throws Exception {
+        ActualFileDownloadRequest fileDownloadRequest = new ActualFileDownloadRequest();
+        ActualFileDownloadResponse fileDownloadResponse = new ActualFileDownloadResponse();
+        fileDownloadRequest.setFileName("250250");
+        fileDownloadRequest.setFileExtension("CSV");
+        fileDownloadRequest.setFileReferenceNo("41006289");
+        Map<String, Object> mockFileContent = new HashMap<>();
+        mockFileContent.put("SUCCESS", Status.SUCCESS);
+        mockFileContent.put("API000000", StatusCodeConstants.API000000);
+        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(fileDownloadRequest));
+        Mockito.when(manageFileBeneficiaryService.downloadActualFile(any(ActualFileDownloadRequest.class))).thenReturn(fileDownloadResponse);
+        manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse);
+        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+        assertEquals("250250",fileDownloadRequest.getFileName());
 
-        String payload = objectMapper.writeValueAsString(request);
-        when(httpServletRequest.getParameter("plainPayload")).thenReturn(payload);
-
-        SBIApplicationResponse expectedResponse = new SBIApplicationResponse();
-        when(uploadFileServiceImpl.uploadConfigurationFile(any(MultipartFile.class), eq("IMPS_TXN"), eq("user1"), eq("corp1")))
-                .thenReturn(new UploadFileResponse());
-        ResponseEntity<SBIApplicationResponse> responseEntity = uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse);
-
-        assertEquals(200, responseEntity.getStatusCodeValue());
-        verify(uploadFileServiceImpl, times(1)).uploadConfigurationFile(any(MultipartFile.class), any(), any(), any());
     }
-
     @Test
-    void testUploadBeneficiaryFile_InvalidFileType() throws Exception {
-        UploadFileRequest request = new UploadFileRequest();
-        request.setFileType("INVALID_TYPE");
-        request.setFileName("test.csv");
-        request.setUserName("user1");
-        request.setCorporateAlias("corp1");
-        request.setFileContent(Base64.getEncoder().encodeToString("sample data".getBytes()));
+    void exception() {
+        ActualFileDownloadRequest fileDownloadRequest = null;
+        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(fileDownloadRequest).thenThrow(new MicroServiceException("e"));
+        assertThrows(MicroServiceException.class, () -> manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse));
+        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+        assertEquals(null,fileDownloadRequest);
 
-        String payload = objectMapper.writeValueAsString(request);
-        when(httpServletRequest.getParameter("plainPayload")).thenReturn(payload);
-
-        assertThrows(UploadBeneficiaryFileException.class, () ->
-                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
     }
-
     @Test
-    void testUploadBeneficiaryFile_InvalidFileFormat() throws Exception {
-        UploadFileRequest request = new UploadFileRequest();
-        request.setFileType("IMPS_TXN");
-        request.setFileName("malware.exe");
-        request.setUserName("user1");
-        request.setCorporateAlias("corp1");
-        request.setFileContent(Base64.getEncoder().encodeToString("sample data".getBytes()));
-
-        String payload = objectMapper.writeValueAsString(request);
-        when(httpServletRequest.getParameter("plainPayload")).thenReturn(payload);
-
-        assertThrows(UploadBeneficiaryFileException.class, () ->
-                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
-    }
-
-    @Test
-    void testUploadBeneficiaryFile_InvalidJson() throws Exception {
-        when(httpServletRequest.getParameter("plainPayload")).thenReturn("{ invalid json }");
-
+    void downloadSampleFile_() throws Exception {
+        ActualFileDownloadRequest fileDownloadRequest = new ActualFileDownloadRequest();
+        fileDownloadRequest.setFileName(null);
+        fileDownloadRequest.setFileExtension(null);
+        fileDownloadRequest.setFileReferenceNo(null);
+        Map<String, Object> mockFileContent = new HashMap<>();
+        mockFileContent.put("SUCCESS", Status.SUCCESS);
+        mockFileContent.put("API000000", StatusCodeConstants.API000000);
+        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(fileDownloadRequest));
+        Mockito.when(manageFileBeneficiaryService.downloadActualFile(any(ActualFileDownloadRequest.class))).thenThrow(new MicroServiceException("f"));
         assertThrows(MicroServiceException.class, () ->
-                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
-    }
+            manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse));
+        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+        assertEquals(null,fileDownloadRequest.getFileName());
 
-    @Test
-    void testUploadBeneficiaryFile_EmptyPayload() {
-        when(httpServletRequest.getParameter("plainPayload")).thenReturn(null);
-        assertThrows(MicroServiceException.class, () ->
-                uploadFileController.uploadBeneficiaryFile(httpServletRequest, httpServletResponse));
     }
 }
