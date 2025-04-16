@@ -1,457 +1,135 @@
-/**
- * Package contains the DAO Implementation layer.
- */
-package com.sbi.yb.cinb.repository.impl;
-
-import com.sbi.yb.cinb.constants.DAOConstants;
-import com.sbi.yb.cinb.constants.QueryConstants;
-import com.sbi.yb.cinb.constants.ServiceErrorConstants;
-import com.sbi.yb.cinb.constants.UtilsConstant;
-import com.sbi.yb.cinb.model.DelimitedConfiguration;
-import com.sbi.yb.cinb.model.FileConfigurationEntity;
-import com.sbi.yb.cinb.model.FixedConfiguration;
-import com.sbi.yb.cinb.repository.FileConfigurationDAO;
-import com.sbi.yb.constants.LoggingConstants;
-import com.sbi.yb.exception.DAOException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.BeanPropertyRowMapper;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
-import org.springframework.util.StringUtils;
-
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_DELIMITED_FILE_CONFIGURATION_OID;
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_DELIMITED_FILE_CONFIGURATION;
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_FIXED_FILE_CONFIGURATION_OID;
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_FIXED_FILE_CONFIGURATION;
-import static com.sbi.yb.cinb.constants.QueryConstants.GET_FILE_CONFIGURATION;
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_COMPOSITE_BEN_FILE_STATUS;
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_IMPS_FILE_STATUS;
-import static com.sbi.yb.cinb.constants.QueryConstants.SELECT_CD_FILE_STATUS;
-import static com.sbi.yb.cinb.constants.QueryConstants.GET_FILE_CONFIGURATION_INTER_BANK;
-import static com.sbi.yb.cinb.constants.QueryConstants.GET_FILE_CONFIGURATION_INTRA_AND_BOTH_BANK;
+public class DelimitedConfigurationTest {
 
-/**
- * to get the configuration from filetypes.
- */
-@Repository
-public class FileConfigurationDAOImpl implements FileConfigurationDAO {
-    /**
-     * LOGGER to log the messages.
-     */
-    public static final Logger LOGGER = LoggerFactory.getLogger(FileConfigurationDAOImpl.class);
-    /**
-     * bean injection of jdbcTemplate to execute queries.
-     */
-    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+    @Test
+    public void testAddSameBankCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("OLD_FIELD_1", "10", 1, "Desc1", true, "String", "alias1"));
+        configs.add(new DelimitedConfiguration("OLD_FIELD_2", "20", 2, "Desc2", false, "Number", "alias2"));
 
-    /**
-     * using constructor injection.
-     *
-     * @param namedParamJdbcTemplate object
-     */
-    @Autowired
-    public FileConfigurationDAOImpl(final NamedParameterJdbcTemplate namedParamJdbcTemplate) {
-        this.namedParameterJdbcTemplate = namedParamJdbcTemplate;
+        // Setup the fieldNameMap3P with test values
+        UtilsConstant.fieldNameMap3P.put("OLD_FIELD_1", "NEW_FIELD_1");
+        UtilsConstant.fieldNameMap3P.put("OLD_FIELD_2", "NEW_FIELD_2");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.ADD_SAME_BANK);
+
+        assertEquals("NEW_FIELD_1", result.get(0).getFieldName());
+        assertEquals("NEW_FIELD_2", result.get(1).getFieldName());
     }
 
-    /**
-     * to get the default or existing configuration from the sbicorp_file_config_master table.
-     *
-     * @param corporateId corporate alias
-     * @param fileType    txnType
-     * @return List<FileConfigurationEntity>
-     */
-    @Override
-    public List<FileConfigurationEntity> getFileConfiguration(final String corporateId, final String fileType) {
-        LOGGER.info("[getFileConfiguration]File Configuration {}", LoggingConstants.METHODBEGIN);
-        List<FileConfigurationEntity> fileConfigurationEntity = new ArrayList<>();
-        LOGGER.info("CorporateId :: {}", corporateId);
-        try {
-            if (fileType.equalsIgnoreCase(UtilsConstant.INTER_BANK)) {
-                fileConfigurationEntity = namedParameterJdbcTemplate.query(GET_FILE_CONFIGURATION_INTER_BANK, Map.of(DAOConstants.DEFAULT_TYPE, DAOConstants.DEFAULT, DAOConstants.CORPORATE_ID, corporateId, DAOConstants.CORPORATE_TYPE, DAOConstants.CORPORATE), new BeanPropertyRowMapper<>(FileConfigurationEntity.class));
-            } else if (fileType.equalsIgnoreCase(UtilsConstant.INTRA_BANK) || fileType.equalsIgnoreCase(UtilsConstant.BOTH_BANK)) {
-                fileConfigurationEntity = namedParameterJdbcTemplate.query(GET_FILE_CONFIGURATION_INTRA_AND_BOTH_BANK, Map.of(DAOConstants.DEFAULT_TYPE, DAOConstants.DEFAULT, DAOConstants.CORPORATE_ID, corporateId, DAOConstants.CORPORATE_TYPE, DAOConstants.CORPORATE), new BeanPropertyRowMapper<>(FileConfigurationEntity.class));
-            } else {
-                fileConfigurationEntity = namedParameterJdbcTemplate.query(GET_FILE_CONFIGURATION, Map.of(DAOConstants.DEFAULT_TYPE, DAOConstants.DEFAULT, DAOConstants.CORPORATE_ID, corporateId, DAOConstants.CORPORATE_TYPE, DAOConstants.CORPORATE, DAOConstants.FILE_TYPE, fileType), new BeanPropertyRowMapper<>(FileConfigurationEntity.class));
-            }
-            LOGGER.info("[getFileConfiguration] File configuration {}", GET_FILE_CONFIGURATION);
-            LOGGER.info("[getFileConfiguration] File configuration result :: {}", fileConfigurationEntity);
-        } catch (DAOException exception) {
-            LOGGER.error("Error occurred : ", exception);
-            DAOException.throwException(ServiceErrorConstants.YBM002, exception);
-        }
-        LOGGER.info(" [getFileConfiguration] File Configuration {}", LoggingConstants.METHODEND);
-        return fileConfigurationEntity;
+    @Test
+    public void testAddOtherBankCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("OLD_FIELD_A", "10", 1, "DescA", true, "String", "aliasA"));
+        
+        UtilsConstant.fieldNameMapIBTP.put("OLD_FIELD_A", "NEW_FIELD_A");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.ADD_OTHER_BANK);
+
+        assertEquals("NEW_FIELD_A", result.get(0).getFieldName());
     }
 
-    /**
-     * to get the delimited fileConfiguration from the sbicorp_delimited_config table.
-     *
-     * @param corporateId             corporate alias
-     * @param fileType                txnType
-     * @param fileConfigurationEntity entity
-     * @return List<DelimitedConfiguration>
-     */
-    @Override
-    public List<DelimitedConfiguration> getDelimitedConfiguration(final String corporateId, final String fileType, FileConfigurationEntity fileConfigurationEntity) {
-        LOGGER.info("Delimited Configuration {}", LoggingConstants.METHODBEGIN);
-        List<DelimitedConfiguration> delimitedConfiguration = new ArrayList<>();
-        try {
-            if (Stream.of(UtilsConstant.CD, UtilsConstant.ADD_OTHER_BANK, UtilsConstant.ADD_SAME_BANK, UtilsConstant.DELETE_OTHER_BANK, UtilsConstant.DELETE_SAME_BANK, UtilsConstant.INTRA_BANK, UtilsConstant.INTER_BANK, UtilsConstant.BOTH_BANK).anyMatch(txnType -> txnType.equalsIgnoreCase(fileType))) {
-                delimitedConfiguration = namedParameterJdbcTemplate.query(SELECT_DELIMITED_FILE_CONFIGURATION_OID, Map.of(DAOConstants.OID, fileConfigurationEntity.getOid()), new DelimitedFileConfigurationMapper());
-                LOGGER.info("QUERY:::: " + SELECT_DELIMITED_FILE_CONFIGURATION_OID);
-            } else if (Stream.of(UtilsConstant.COMPOSITE_BEN, UtilsConstant.IMPS_BEN, UtilsConstant.IMPS_TXN).anyMatch(txnType -> txnType.equalsIgnoreCase(fileType))) {
-                delimitedConfiguration = namedParameterJdbcTemplate.query(SELECT_DELIMITED_FILE_CONFIGURATION, Map.of(DAOConstants.COMP_CONFIG_TYPE, fileConfigurationEntity.getCompConfigType()), new DelimitedFileConfigurationMapper());
-                LOGGER.info("QUERY:::: " + SELECT_DELIMITED_FILE_CONFIGURATION);
-            } else {
-                LOGGER.error("[FileConfigurationDAOImpl] (getDelimitedConfiguration) Exception occurred ");
-                DAOException.throwException(ServiceErrorConstants.YBM002);
-            }
-            delimitedConfiguration = setFieldNameDelimited(delimitedConfiguration, fileType);
-        } catch (DAOException exception) {
-            LOGGER.error("[FileConfigurationDAOImpl] (getDelimitedConfiguration) Exception occurred : ", exception);
-            DAOException.throwException(ServiceErrorConstants.YBM002, exception);
-        }
-        LOGGER.info("Delimited Configuration {}", LoggingConstants.METHODEND);
-        return delimitedConfiguration;
+    @Test
+    public void testCompositeBenCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("COMP_OLD", "15", 1, "DescComp", true, "String", "aliasComp"));
+        
+        UtilsConstant.fieldNameMapCompBen.put("COMP_OLD", "COMP_NEW");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.COMPOSITE_BEN);
+
+        assertEquals("COMP_NEW", result.get(0).getFieldName());
     }
 
-    /**
-     * to get the fixed fileConfiguration from the sbicorp_fixed_config table.
-     *
-     * @param corporateId             corporate alias
-     * @param fileType                txnType
-     * @param fileConfigurationEntity entity
-     * @return List<FixedConfiguration>
-     */
-    @Override
-    public List<FixedConfiguration> getFixedConfiguration(final String corporateId, final String fileType, FileConfigurationEntity fileConfigurationEntity) {
-        LOGGER.info("Fixed Configuration {}", LoggingConstants.METHODBEGIN);
-        List<FixedConfiguration> fixedConfiguration = new ArrayList<>();
-        try {
-            if (Stream.of(UtilsConstant.CD, UtilsConstant.ADD_OTHER_BANK, UtilsConstant.ADD_SAME_BANK, UtilsConstant.DELETE_OTHER_BANK, UtilsConstant.DELETE_SAME_BANK, UtilsConstant.INTRA_BANK, UtilsConstant.INTER_BANK, UtilsConstant.BOTH_BANK).anyMatch(txnType -> txnType.equalsIgnoreCase(fileType))) {
-                fixedConfiguration = namedParameterJdbcTemplate.query(SELECT_FIXED_FILE_CONFIGURATION_OID, Map.of(DAOConstants.OID, fileConfigurationEntity.getOid()), new FixedFileConfigurationMapper());
-                LOGGER.info("Query ::: " + SELECT_FIXED_FILE_CONFIGURATION_OID);
-            } else if (Stream.of(UtilsConstant.COMPOSITE_BEN, UtilsConstant.IMPS_BEN, UtilsConstant.IMPS_TXN).anyMatch(txnType -> txnType.equalsIgnoreCase(fileType))) {
-                fixedConfiguration = namedParameterJdbcTemplate.query(SELECT_FIXED_FILE_CONFIGURATION, Map.of(DAOConstants.COMP_CONFIG_TYPE, fileConfigurationEntity.getCompConfigType()), new FixedFileConfigurationMapper());
-                LOGGER.info("Query ::: " + SELECT_FIXED_FILE_CONFIGURATION);
-            } else {
-                LOGGER.error("[FileConfigurationDAOImpl] (getFixedConfiguration) Exception occurred ");
-                DAOException.throwException(ServiceErrorConstants.YBM002);
-            }
-            fixedConfiguration = setOrderNoAndLength(fixedConfiguration);
-            fixedConfiguration = setFieldNameFixed(fixedConfiguration, fileType);
-        } catch (DAOException exception) {
-            LOGGER.error("[FileConfigurationDAOImpl] (getFixedConfiguration) Exception occurred : ", exception);
-            DAOException.throwException(ServiceErrorConstants.YBM002, exception);
-        }
-        LOGGER.info("Fixed configuration {}", LoggingConstants.METHODEND);
-        return fixedConfiguration;
+    @Test
+    public void testIntraBankCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("INTRA_OLD", "10", 1, "DescIntra", true, "String", "aliasIntra"));
+        configs.add(new DelimitedConfiguration(DAOConstants.CREDIT_ACCOUNT_NUMBER, "20", 2, "CreditAcc", false, "Number", "aliasCredit"));
+        
+        UtilsConstant.fieldNameMapIntra.put("INTRA_OLD", "INTRA_NEW");
+        UtilsConstant.fieldNameMapIntra.put(DAOConstants.ACCOUNT_NUMBER, "ACC_NUM_INTRA");
+        UtilsConstant.fieldNameMapIntra.put(DAOConstants.BRANCH_CODE_INTRA, "BR_CODE_INTRA");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.INTRA_BANK);
+
+        assertEquals(1, result.size()); // Credit fields should be filtered out
+        assertEquals("INTRA_NEW", result.get(0).getFieldName());
     }
 
+    @Test
+    public void testInterBankCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("INTER_OLD", "10", 1, "DescInter", true, "String", "aliasInter"));
+        configs.add(new DelimitedConfiguration(DAOConstants.CREDIT_BRANCH_CODE, "20", 2, "CreditBranch", false, "Number", "aliasBranch"));
+        
+        UtilsConstant.fieldNameMapInter.put("INTER_OLD", "INTER_NEW");
+        UtilsConstant.fieldNameMapInter.put(DAOConstants.ACCOUNT_NUMBER, "ACC_NUM_INTER");
+        UtilsConstant.fieldNameMapInter.put(DAOConstants.BRANCH_CODE_INTER, "BR_CODE_INTER");
 
-    public List<DelimitedConfiguration> setFieldNameDelimited(List<DelimitedConfiguration> delimitedConfiguration, String fileType) {
-        switch (fileType) {
-            case UtilsConstant.ADD_SAME_BANK, UtilsConstant.DELETE_SAME_BANK:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMap3P.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMap3P.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.ADD_OTHER_BANK, UtilsConstant.DELETE_OTHER_BANK:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIBTP.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIBTP.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.COMPOSITE_BEN:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapCompBen.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapCompBen.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.INTRA_BANK:
-                List<DelimitedConfiguration> intraList = delimitedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                intraList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIntra.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIntra.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_INTRA)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return intraList;
-            case UtilsConstant.INTER_BANK:
-                List<DelimitedConfiguration> interList = delimitedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                interList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapInter.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapInter.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_INTER)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return interList;
-            case UtilsConstant.BOTH_BANK:
-                List<DelimitedConfiguration> list = delimitedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                list.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapBoth.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapBoth.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_BOTH)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return list;
-            case UtilsConstant.IMPS_TXN:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIMPSTXN.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIMPSTXN.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.CD: List<DelimitedConfiguration> cdList = delimitedConfiguration.stream().filter(l ->
-                    !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                            && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                cdList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapDD.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapDD.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER_CD) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_CD)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return cdList;
-            default:
-                return delimitedConfiguration;
-        }
-        return delimitedConfiguration;
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.INTER_BANK);
+
+        assertEquals(1, result.size()); // Credit fields should be filtered out
+        assertEquals("INTER_NEW", result.get(0).getFieldName());
     }
 
-    public List<FixedConfiguration> setFieldNameFixed(List<FixedConfiguration> fixedConfiguration, String fileType) {
-        switch (fileType) {
-            case UtilsConstant.ADD_SAME_BANK, UtilsConstant.DELETE_SAME_BANK:
-                fixedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMap3P.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMap3P.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.ADD_OTHER_BANK, UtilsConstant.DELETE_OTHER_BANK:
-                fixedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIBTP.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIBTP.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.COMPOSITE_BEN:
-                fixedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapCompBen.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapCompBen.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.INTRA_BANK:
-                List<FixedConfiguration> intraList = fixedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                intraList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIntra.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIntra.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_INTRA)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return intraList;
-            case UtilsConstant.INTER_BANK:
-                List<FixedConfiguration> interList = fixedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                interList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapInter.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapInter.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_INTER)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return interList;
-            case UtilsConstant.BOTH_BANK:
-                List<FixedConfiguration> list = fixedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                list.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapBoth.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapBoth.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_BOTH)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return list;
-            case UtilsConstant.IMPS_TXN:
-                fixedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIMPSTXN.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIMPSTXN.get(currentFieldName));
-                    }
-                });
-                break;
-            default:
-                return fixedConfiguration;
-        }
-        return fixedConfiguration;
+    @Test
+    public void testBothBankCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("BOTH_OLD", "10", 1, "DescBoth", true, "String", "aliasBoth"));
+        configs.add(new DelimitedConfiguration(DAOConstants.ACCOUNT_NUMBER, "20", 2, "Account", false, "Number", "aliasAcc"));
+        
+        UtilsConstant.fieldNameMapBoth.put("BOTH_OLD", "BOTH_NEW");
+        UtilsConstant.fieldNameMapBoth.put(DAOConstants.ACCOUNT_NUMBER, "ACC_NUM_BOTH");
+        UtilsConstant.fieldNameMapBoth.put(DAOConstants.BRANCH_CODE_BOTH, "BR_CODE_BOTH");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.BOTH_BANK);
+
+        assertEquals(2, result.size());
+        assertEquals("BOTH_NEW", result.get(0).getFieldName());
+        assertEquals(DAOConstants.BOTH_TYPE, result.get(1).getFieldType()); // Check field type changed
     }
 
-    /**
-     * to set the order number and field length for all the fields in the  fixed configurations.
-     *
-     * @param fixedConfiguration configuration
-     * @return List<FixedConfiguration>
-     */
-    @Override
-    public List<FixedConfiguration> setOrderNoAndLength(List<FixedConfiguration> fixedConfiguration) {
-        LOGGER.info("[getFileConfiguration] (setOrderNoAndLength) {}", LoggingConstants.METHODBEGIN);
-        // sets the order number and field length for credit and both field types
-        IntStream.range(0, fixedConfiguration.size()).forEach(i -> {
-            if (fixedConfiguration.get(i).getFieldType().equalsIgnoreCase("C") || fixedConfiguration.get(i).getFieldType().equalsIgnoreCase("B")) {
-                fixedConfiguration.get(i).setOrderNo(i + 1);
-                int endIndex = fixedConfiguration.get(i).getEndIndex();
-                int previousEndIndex = (i > 0) ? fixedConfiguration.get(i - 1).getEndIndex() : 0;
-                fixedConfiguration.get(i).setFieldLength(String.valueOf(endIndex - previousEndIndex));
-            }
-        });
-        // sets the order number and field length for debit and both field types
-        IntStream.range(0, fixedConfiguration.size()).forEach(i -> {
-            if (fixedConfiguration.get(i).getFieldType().equalsIgnoreCase("D") || fixedConfiguration.get(i).getFieldType().equalsIgnoreCase("B")) {
-                fixedConfiguration.get(i).setOrderNo(i + 1);
-                int endIndex = fixedConfiguration.get(i).getEndIndex();
-                int previousEndIndex = (i > 0) ? fixedConfiguration.get(i - 1).getEndIndex() : 0;
-                fixedConfiguration.get(i).setFieldLength(String.valueOf(endIndex - previousEndIndex));
-            }
-        });
-        LOGGER.info("[getFileConfiguration] (setOrderNoAndLength) {}", LoggingConstants.METHODEND);
-        return fixedConfiguration;
+    @Test
+    public void testImpsTxnCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("IMPS_OLD", "10", 1, "DescIMPS", true, "String", "aliasIMPS"));
+        
+        UtilsConstant.fieldNameMapIMPSTXN.put("IMPS_OLD", "IMPS_NEW");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.IMPS_TXN);
+
+        assertEquals("IMPS_NEW", result.get(0).getFieldName());
     }
 
-    /**
-     * DelimitedFileConfigurationMapper for delimited configuration.
-     */
-    public static class DelimitedFileConfigurationMapper implements RowMapper<DelimitedConfiguration> {
-        /**
-         * @param rs     result set
-         * @param rowNum row number
-         * @return DelimitedConfiguration
-         * @throws SQLException exception
-         */
-        public DelimitedConfiguration mapRow(ResultSet rs, int rowNum) throws SQLException {
-            DelimitedConfiguration delimitedConfigurationMapper = new DelimitedConfiguration();
-            delimitedConfigurationMapper.setFieldName(rs.getString("field_name"));
-            delimitedConfigurationMapper.setFieldAlias(rs.getString("ALIAS_NAME"));
-            delimitedConfigurationMapper.setOrderNo(rs.getInt("order_no"));
-            delimitedConfigurationMapper.setFieldType(rs.getString("TXN_CODE"));
-            delimitedConfigurationMapper.setDescription(rs.getString("DESCRIPTION"));
-            delimitedConfigurationMapper.setFieldLength(rs.getString("FIELD_LENGTH")); // for max length
-            delimitedConfigurationMapper.setOrderNo(delimitedConfigurationMapper.getOrderNo() + 1);
-            return delimitedConfigurationMapper;
-        }
+    @Test
+    public void testCdCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("CD_OLD", "10", 1, "DescCD", true, "String", "aliasCD"));
+        configs.add(new DelimitedConfiguration(DAOConstants.CREDIT_BRANCH_CODE, "20", 2, "CreditBranch", false, "Number", "aliasBranch"));
+        
+        UtilsConstant.fieldNameMapDD.put("CD_OLD", "CD_NEW");
+        UtilsConstant.fieldNameMapDD.put(DAOConstants.ACCOUNT_NUMBER_CD, "ACC_NUM_CD");
+        UtilsConstant.fieldNameMapDD.put(DAOConstants.BRANCH_CODE_CD, "BR_CODE_CD");
+
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, UtilsConstant.CD);
+
+        assertEquals(1, result.size()); // Credit fields should be filtered out
+        assertEquals("CD_NEW", result.get(0).getFieldName());
     }
 
-    /**
-     * FixedFileConfigurationMapper for fixed configuration.
-     */
-    public static class FixedFileConfigurationMapper implements RowMapper<FixedConfiguration> {
-        /**
-         * @param rs     result set
-         * @param rowNum rowNumber
-         * @return FixedConfiguration
-         * @throws SQLException exception
-         */
-        public FixedConfiguration mapRow(ResultSet rs, int rowNum) throws SQLException {
-            FixedConfiguration fixedConfigurationMapper = new FixedConfiguration();
-            fixedConfigurationMapper.setFieldName(rs.getString("FLD_NAME"));
-            fixedConfigurationMapper.setStartIndex(rs.getInt("START_INDEX"));
-            fixedConfigurationMapper.setEndIndex(rs.getInt("END_INDEX"));
-            fixedConfigurationMapper.setFieldAlias(rs.getString("ALIAS_NAME"));
-            fixedConfigurationMapper.setFieldType(rs.getString("TXN_CODE"));
-            fixedConfigurationMapper.setDescription(rs.getString("DESCRIPTION"));
-            fixedConfigurationMapper.setStartIndex(fixedConfigurationMapper.getStartIndex() + 1);
-            fixedConfigurationMapper.setEndIndex(fixedConfigurationMapper.getEndIndex() + 1);
-            return fixedConfigurationMapper;
-        }
-    }
+    @Test
+    public void testDefaultCase() {
+        List<DelimitedConfiguration> configs = new ArrayList<>();
+        configs.add(new DelimitedConfiguration("DEFAULT_FIELD", "10", 1, "DescDefault", true, "String", "aliasDefault"));
 
-    /**
-     * to check is there any pending files before configuration of account ben, imps and cd filetypes.
-     *
-     * @param corporateId CORPORATE_ID
-     * @param fileType    FILE_TYPE
-     * @return true or false
-     */
-    public boolean findFileStatusTP(final String corporateId, String fileType) {
-        LOGGER.info("findFileStatusTP {}", LoggingConstants.METHODBEGIN);
-        List<String> pendingList = new ArrayList<>();
-        LOGGER.info("corporateID : {}", corporateId);
-        LOGGER.info("findFileStatusTP finding for : {}", fileType);
-        if ((StringUtils.hasText(corporateId)) && (StringUtils.hasText(fileType))) {
-            try {
-                if (UtilsConstant.COMPOSITE_BEN.equalsIgnoreCase(fileType)) {
-                    pendingList = namedParameterJdbcTemplate.queryForList(SELECT_COMPOSITE_BEN_FILE_STATUS, Map.of(DAOConstants.CORPORATE_ID, corporateId, DAOConstants.FILE_STATUS, DAOConstants.PENDING_PICKED_FILE_STATUS, DAOConstants.COMP_BEN_FILETYPE, DAOConstants.COMP_BEN_FILETYPE_LIST, DAOConstants.ACCOUNT_BEN_TXN_TYPES, DAOConstants.ACCOUNT_BEN_TXN_TYPES_LIST), String.class);
-                } else if (UtilsConstant.BOTH_BANK.equalsIgnoreCase(fileType)) {
-                    fileType = DAOConstants.ACC_TXN_BOTH_BANK;
-                    String finalQuery = QueryConstants.SELECT_COMPOSITE_TXN_FILE_STATUS.replaceAll(DAOConstants.TO_BE_REPLACED, fileType);
-                    pendingList = namedParameterJdbcTemplate.queryForList(finalQuery, Map.of(DAOConstants.CORPORATE_ID, corporateId, DAOConstants.FILE_STATUS, DAOConstants.LOADING_PENDING_PICKED_FILE_STATUS, DAOConstants.CORPORATE_TYPE, DAOConstants.CORPORATE), String.class);
-                } else if (UtilsConstant.IMPS_BEN.equalsIgnoreCase(fileType) || UtilsConstant.IMPS_TXN.equalsIgnoreCase(fileType)) {
-                    if (UtilsConstant.IMPS_TXN.equalsIgnoreCase(fileType)) {
-                        fileType = DAOConstants.IMPS_TXN;
-                    }
-                    pendingList = namedParameterJdbcTemplate.queryForList(SELECT_IMPS_FILE_STATUS, Map.of(DAOConstants.CORPORATE_ID, corporateId, DAOConstants.FILE_TYPE, fileType, DAOConstants.FILE_STATUS, DAOConstants.PENDING_PICKED_FILE_STATUS), String.class);
-                } else if (UtilsConstant.CD.equalsIgnoreCase(fileType)) {
-                    pendingList = namedParameterJdbcTemplate.queryForList(SELECT_CD_FILE_STATUS, Map.of(DAOConstants.CORPORATE_ID, corporateId, DAOConstants.FILE_STATUS, DAOConstants.PENDING, DAOConstants.CORPORATE_TYPE, DAOConstants.CORPORATE), String.class);
-                }
-            } catch (DAOException exception) {
-                LOGGER.error("[FileConfigurationDAOImpl] (findFileStatusTP)  DataAccess Exception occurred : ", exception);
-                DAOException.throwException("YBM002", exception);
-            }
-        } else {
-            DAOException.throwException("CR002");
-        }
-        LOGGER.info("findFileStatusTP {}", LoggingConstants.METHODEND);
-        return pendingList.isEmpty();
+        List<DelimitedConfiguration> result = setFieldNameDelimited(configs, "UNKNOWN_TYPE");
+
+        assertEquals(1, result.size());
+        assertEquals("DEFAULT_FIELD", result.get(0).getFieldName()); // Should remain unchanged
     }
 }
