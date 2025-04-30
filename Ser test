@@ -1,103 +1,111 @@
-In delimited configuration these are the fields
-    private String fieldName;
-    private String fieldLength;
-    private int orderNo;
-    private String description;
-    private boolean isMandatory;
-    private String fieldType;
-    private String fieldAlias;
+package com.sbi.yb.cinb.repository.impl;
 
-public List<DelimitedConfiguration> setFieldNameDelimited(List<DelimitedConfiguration> delimitedConfiguration, String fileType) {
-        switch (fileType) {
-            case UtilsConstant.ADD_SAME_BANK, UtilsConstant.DELETE_SAME_BANK:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMap3P.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMap3P.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.ADD_OTHER_BANK, UtilsConstant.DELETE_OTHER_BANK:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIBTP.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIBTP.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.COMPOSITE_BEN:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapCompBen.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapCompBen.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.INTRA_BANK:
-                List<DelimitedConfiguration> intraList = delimitedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                intraList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIntra.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIntra.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_INTRA)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return intraList;
-            case UtilsConstant.INTER_BANK:
-                List<DelimitedConfiguration> interList = delimitedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                interList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapInter.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapInter.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_INTER)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return interList;
-            case UtilsConstant.BOTH_BANK:
-                List<DelimitedConfiguration> list = delimitedConfiguration.stream().filter(l ->
-                        !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                                && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                list.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapBoth.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapBoth.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_BOTH)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return list;
-            case UtilsConstant.IMPS_TXN:
-                delimitedConfiguration.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapIMPSTXN.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapIMPSTXN.get(currentFieldName));
-                    }
-                });
-                break;
-            case UtilsConstant.CD: List<DelimitedConfiguration> cdList = delimitedConfiguration.stream().filter(l ->
-                    !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_ACCOUNT_NUMBER)
-                            && !l.getFieldName().equalsIgnoreCase(DAOConstants.CREDIT_BRANCH_CODE)).toList();
-                cdList.forEach(l -> {
-                    String currentFieldName = l.getFieldName();
-                    if (UtilsConstant.fieldNameMapDD.containsKey(currentFieldName)) {
-                        l.setFieldName(UtilsConstant.fieldNameMapDD.get(currentFieldName));
-                        if (l.getFieldName().equals(DAOConstants.ACCOUNT_NUMBER_CD) || l.getFieldName().equals(DAOConstants.BRANCH_CODE_CD)) {
-                            l.setFieldType(DAOConstants.BOTH_TYPE);
-                        }
-                    }
-                });
-                return cdList;
-            default:
-                return delimitedConfiguration;
+import com.sbi.yb.cinb.constant.QueryConstants;
+import com.sbi.yb.cinb.model.ApproveRejectBeneRequest;
+
+import com.sbi.yb.cinb.repository.ManageFileBeneficiaryDAO;
+import com.sbi.yb.cinb.service.impl.ManageFileBeneficiaryServiceImpl;
+import com.sbi.yb.exception.MicroServiceException;
+import com.sbi.yb.utils.LoggerUtil;
+import org.slf4j.Logger;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.stereotype.Repository;
+import java.math.BigInteger;
+
+import static com.sbi.yb.cinb.constant.QueryConstants.MIS_FAILURE_COUNT;
+import static com.sbi.yb.cinb.constant.QueryConstants.MIS_SUCCESS_COUNT;
+import static com.sbi.yb.cinb.constant.QueryConstants.MIS_TOTAL_COUNT;
+import static com.sbi.yb.cinb.constant.QueryConstants.SAVE_WAC_REFERENCE_STATUS;
+import static com.sbi.yb.cinb.constant.UtilConstants.OTHER_BANK_ADD_BENE;
+import static com.sbi.yb.cinb.constant.UtilConstants.OTHER_BANK_DELETE_BENE;
+import static com.sbi.yb.cinb.constant.UtilConstants.SAME_BANK_ADD_BENE;
+import static com.sbi.yb.cinb.constant.UtilConstants.SAME_BANK_DELETE_BENE;
+
+
+/*
+ * @author V1017263
+ * @version 1.0
+ */
+
+
+@Repository
+public class ManageFileBeneficiaryDAOImpl implements ManageFileBeneficiaryDAO {
+
+  private static final Logger logger = LoggerUtil.getLogger(ManageFileBeneficiaryDAOImpl.class);
+
+  private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+  public ManageFileBeneficiaryDAOImpl(final NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
+    this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
+  }
+
+  /**
+   * @param query SQL query
+   * @param parameters parameters for query
+   * @return int affected row count
+   */
+  @Override
+  public int update(String query, SqlParameterSource parameters) {
+    return namedParameterJdbcTemplate.update(query, parameters);
+  }
+
+  /**
+   * @param query SQL query
+   * @param batchParameters parameter array for query
+   * @return int affected row count
+   */
+  @Override
+  public int[] batchUpdate(String query, SqlParameterSource[] batchParameters) {
+    return namedParameterJdbcTemplate.batchUpdate(query, batchParameters);
+  }
+
+
+  @Override
+  public String getValueFromNameValueMasterByNameAndStatus(String name) {
+    return namedParameterJdbcTemplate.queryForObject(QueryConstants.GET_VALUE_FROM_NAMEVALUEMASTER_BY_NAME,
+            new MapSqlParameterSource().addValue("name",name).addValue("status", 1),
+            String.class);
+  }
+
+  public void ValidateAndSaveToWACReferenceStatus(String sno) {
+
+    int misBenecount = 0;
+
+    logger.info("File Name received for MIS validation: {}",sno);
+
+    misBenecount=namedParameterJdbcTemplate.queryForObject(MIS_TOTAL_COUNT,
+            new MapSqlParameterSource().addValue("fileName", sno), Integer.class);
+    logger.info("Total count for File Name : {} " ,misBenecount);
+      if (misBenecount>0){
+        int processedBenecount = 0;
+        int failureBenecount = 0;
+        int insertCount;
+
+        processedBenecount = namedParameterJdbcTemplate.queryForObject(MIS_SUCCESS_COUNT,
+                new MapSqlParameterSource().addValue("fileName", sno), Integer.class);
+        failureBenecount = namedParameterJdbcTemplate.queryForObject(MIS_FAILURE_COUNT,
+                new MapSqlParameterSource().addValue("fileName", sno), Integer.class);
+
+        logger.info("Total success, rejected & deleted count : {}", processedBenecount);
+        logger.info("Total failure count : {}", failureBenecount);
+
+        if (misBenecount==(processedBenecount+failureBenecount)){
+
+          logger.info("Counts matched : Total count of beneficiary {}. Total success & Failure count --> {}." +
+                  "WAC insert initiated",misBenecount, processedBenecount+failureBenecount );
+          logger.info("INSERT INTO WAC_REFERENCE_STATUS(REFERENCE_NO,WORKFLOW_ID,STEP_ID,LAST_EVENT,LAST_EVENT_RESULT,RUN_NO,ERROR_CODE,CREATION_TIME) VALUES ('{}', 'beneficiary_processor','beneficiary_acknowledge_file','beneficiary_acknowledge_file','recovery',null,null,sysdate)",sno);
+
+          insertCount=update(SAVE_WAC_REFERENCE_STATUS, new MapSqlParameterSource().addValue("sno", sno));
+          logger.info("Saved to WAC_REFERENCE_STATUS - Inserted Row count : {}",insertCount);
+
+        }else{
+          this.logger.info("File: {} is not fully authorized", sno);
         }
-        return delimitedConfiguration;
-    }
+      }else{
+        this.logger.info("File count is zero");
+      }
+  }
+
+}
