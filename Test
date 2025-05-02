@@ -1,0 +1,539 @@
+package com.sbi.yb.cinb.service.impl;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+import com.sbi.yb.cinb.constant.ManageBeneStatusCode;
+import com.sbi.yb.cinb.model.ApproveRejectBeneRequest;
+import com.sbi.yb.cinb.repository.ManageFileBeneficiaryDAO;
+import com.sbi.yb.exception.DAOException;
+import com.sbi.yb.exception.MicroServiceException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+
+@ExtendWith(MockitoExtension.class)
+class ManageFileBeneficiaryServiceImplTest {
+
+    @Mock
+    private ManageFileBeneficiaryDAO manageFileBeneficiaryDAO;
+
+    @InjectMocks
+    private ManageFileBeneficiaryServiceImpl service;
+
+    private ApproveRejectBeneRequest request;
+
+    @BeforeEach
+    void setUp() {
+        request = new ApproveRejectBeneRequest();
+        request.setCorporateAlias("CORP123");
+        request.setUserName("USER1");
+        request.setFileReferenceNo("REF123");
+        request.setBeneficiaryIds(List.of("BEN1", "BEN2"));
+    }
+
+    @Test
+    void approveBeneficiary_shouldThrowExceptionWhenCoolingPeriodInvalid() {
+        when(manageFileBeneficiaryDAO.getValueFromNameValueMasterByNameAndStatus(anyString())).thenReturn("invalid");
+        
+        request.setBeneActionLevel(1); // ACTION_BY_TYPE_ACTION
+        
+        assertThrows(MicroServiceException.class, () -> service.approveBeneficiary(request));
+    }
+
+    @Test
+    void approveBeneficiary_shouldThrowExceptionWhenDataAccessFails() {
+        when(manageFileBeneficiaryDAO.getValueFromNameValueMasterByNameAndStatus(anyString())).thenReturn("0");
+        when(manageFileBeneficiaryDAO.update(anyString(), any())).thenThrow(new DataAccessException("...") {});
+        
+        request.setBeneActionLevel(1); // ACTION_BY_TYPE_ACTION
+        request.setBeneTypeAction("sameBankAdd");
+        
+        assertThrows(DAOException.class, () -> service.approveBeneficiary(request));
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_sameBankAdd() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_OR_REJECT_3P_BY_TYPE), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.approveBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_otherBankAdd() {
+        request.setBeneTypeAction("otherBankAdd");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_OR_REJECT_IBTP_BY_TYPE), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.approveBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_sameBankDelete_composite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("compositeBene");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_D3P_BY_TYPE_COMPBEN), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.approveBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).ValidateAndSaveToWACReferenceStatus("REF123");
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_sameBankDelete_nonComposite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("nonComposite");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_D3P_BY_TYPE_BEN), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.approveBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_otherBankDelete() {
+        request.setBeneTypeAction("otherBankDelete");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_DIBTP_BY_TYPE), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.approveBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_invalidType() {
+        request.setBeneTypeAction("invalidType");
+        
+        assertThrows(MicroServiceException.class, () -> service.approveBeneficiaryByTypeAction(request));
+    }
+
+    @Test
+    void approveBeneficiaryByTypeAction_noRecordsUpdated() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.update(anyString(), any())).thenReturn(0);
+        
+        assertThrows(MicroServiceException.class, () -> service.approveBeneficiaryByTypeAction(request));
+    }
+
+    @Test
+    void approveBeneficiaryByOid_sameBankAdd() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(APPROVE_3P_BY_OID), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.approveBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByOid_otherBankAdd() {
+        request.setBeneTypeAction("otherBankAdd");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(APPROVE_OR_REJECT_IBTP_BY_OID), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.approveBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByOid_sameBankDelete_composite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("compositeBene");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(APPROVE_D3P_BY_OID_COMPBEN), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.approveBeneficiaryByOid(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).ValidateAndSaveToWACReferenceStatus("REF123");
+    }
+
+    @Test
+    void approveBeneficiaryByOid_sameBankDelete_nonComposite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("nonComposite");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(APPROVE_D3P_BY_OID_BEN), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.approveBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByOid_otherBankDelete() {
+        request.setBeneTypeAction("otherBankDelete");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(APPROVE_DIBTP_BY_OID), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.approveBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void approveBeneficiaryByOid_invalidType() {
+        request.setBeneTypeAction("invalidType");
+        
+        assertThrows(MicroServiceException.class, () -> service.approveBeneficiaryByOid(request));
+    }
+
+    @Test
+    void approveBeneficiaryByOid_noRecordsUpdated() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(anyString(), any())).thenReturn(new int[]{0, 0});
+        
+        assertThrows(MicroServiceException.class, () -> service.approveBeneficiaryByOid(request));
+    }
+
+    @Test
+    void rejectBeneficiary_shouldThrowExceptionWhenDataAccessFails() {
+        when(manageFileBeneficiaryDAO.update(anyString(), any())).thenThrow(new DataAccessException("...") {});
+        
+        request.setBeneActionLevel(1); // ACTION_BY_TYPE_ACTION
+        request.setBeneTypeAction("sameBankAdd");
+        
+        assertThrows(DAOException.class, () -> service.rejectBeneficiary(request));
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_sameBankAdd() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_OR_REJECT_3P_BY_TYPE), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.rejectBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).update(eq(SAVE_WAC_AUDIT_TRAIL), any());
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_otherBankAdd() {
+        request.setBeneTypeAction("otherBankAdd");
+        
+        when(manageFileBeneficiaryDAO.update(eq(APPROVE_OR_REJECT_IBTP_BY_TYPE), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.rejectBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).update(eq(SAVE_WAC_AUDIT_TRAIL), any());
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_sameBankDelete_composite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("compositeBene");
+        
+        when(manageFileBeneficiaryDAO.update(eq(REJECT_D3P_BY_TYPE_COMPBEN), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.rejectBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).ValidateAndSaveToWACReferenceStatus("REF123");
+        verify(manageFileBeneficiaryDAO).update(eq(SAVE_WAC_AUDIT_TRAIL), any());
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_sameBankDelete_nonComposite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("nonComposite");
+        
+        when(manageFileBeneficiaryDAO.update(eq(REJECT_D3P_BY_TYPE_BEN), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.rejectBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).update(eq(SAVE_WAC_AUDIT_TRAIL), any());
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_otherBankDelete() {
+        request.setBeneTypeAction("otherBankDelete");
+        
+        when(manageFileBeneficiaryDAO.update(eq(REJECT_DIBTP_BY_TYPE), any(SqlParameterSource.class))).thenReturn(2);
+        
+        int result = service.rejectBeneficiaryByTypeAction(request);
+        assertEquals(2, result);
+        verify(manageFileBeneficiaryDAO).update(eq(SAVE_WAC_AUDIT_TRAIL), any());
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_invalidType() {
+        request.setBeneTypeAction("invalidType");
+        
+        assertThrows(MicroServiceException.class, () -> service.rejectBeneficiaryByTypeAction(request));
+    }
+
+    @Test
+    void rejectBeneficiaryByTypeAction_noRecordsUpdated() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.update(anyString(), any())).thenReturn(0);
+        
+        assertThrows(MicroServiceException.class, () -> service.rejectBeneficiaryByTypeAction(request));
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_sameBankAdd() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(REJECT_3P_BY_OID), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.rejectBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_otherBankAdd() {
+        request.setBeneTypeAction("otherBankAdd");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(APPROVE_OR_REJECT_IBTP_BY_OID), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.rejectBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_sameBankDelete_composite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("compositeBene");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(REJECT_D3P_BY_OID_COMPBEN), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.rejectBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_sameBankDelete_nonComposite() {
+        request.setBeneTypeAction("sameBankDelete");
+        request.setFileType("nonComposite");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(REJECT_D3P_BY_OID_BEN), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.rejectBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_otherBankDelete() {
+        request.setBeneTypeAction("otherBankDelete");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(eq(REJECT_DIBTP_BY_OID), any(SqlParameterSource[].class)))
+            .thenReturn(new int[]{1, 1});
+        
+        int result = service.rejectBeneficiaryByOid(request);
+        assertEquals(2, result);
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_invalidType() {
+        request.setBeneTypeAction("invalidType");
+        
+        assertThrows(MicroServiceException.class, () -> service.rejectBeneficiaryByOid(request));
+    }
+
+    @Test
+    void rejectBeneficiaryByOid_noRecordsUpdated() {
+        request.setBeneTypeAction("sameBankAdd");
+        
+        when(manageFileBeneficiaryDAO.batchUpdate(anyString(), any())).thenReturn(new int[]{0, 0});
+        
+        assertThrows(MicroServiceException.class, () -> service.rejectBeneficiaryByOid(request));
+    }
+
+    @Test
+    void approveBeneficiaryByTypeActionWithCoolingPeriod_shouldReturnZero() {
+        assertEquals(0, service.approveBeneficiaryByTypeActionWithCoolingPeriod(request));
+    }
+
+    @Test
+    void approveBeneficiaryByOidWithCoolingPeriod_shouldReturnZero() {
+        assertEquals(0, service.approveBeneficiaryByOidWithCoolingPeriod(request));
+    }
+}
+
+
+
+package com.sbi.yb.cinb.repository.impl;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+
+import com.sbi.yb.cinb.constant.QueryConstants;
+import com.sbi.yb.exception.MicroServiceException;
+
+@ExtendWith(MockitoExtension.class)
+class ManageFileBeneficiaryDAOImplTest {
+
+    @Mock
+    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+    @InjectMocks
+    private ManageFileBeneficiaryDAOImpl manageFileBeneficiaryDAO;
+
+    @Test
+    void testUpdate() {
+        String testQuery = "UPDATE test_table SET column = :value";
+        SqlParameterSource params = new MapSqlParameterSource().addValue("value", "test");
+        
+        when(namedParameterJdbcTemplate.update(eq(testQuery), eq(params))).thenReturn(1);
+        
+        int result = manageFileBeneficiaryDAO.update(testQuery, params);
+        assertEquals(1, result);
+        verify(namedParameterJdbcTemplate).update(eq(testQuery), eq(params));
+    }
+
+    @Test
+    void testBatchUpdate() {
+        String testQuery = "INSERT INTO test_table VALUES (:value)";
+        SqlParameterSource[] params = new SqlParameterSource[] {
+            new MapSqlParameterSource().addValue("value", "test1"),
+            new MapSqlParameterSource().addValue("value", "test2")
+        };
+        int[] expectedResult = new int[] {1, 1};
+        
+        when(namedParameterJdbcTemplate.batchUpdate(eq(testQuery), eq(params))).thenReturn(expectedResult);
+        
+        int[] result = manageFileBeneficiaryDAO.batchUpdate(testQuery, params);
+        assertArrayEquals(expectedResult, result);
+        verify(namedParameterJdbcTemplate).batchUpdate(eq(testQuery), eq(params));
+    }
+
+    @Test
+    void testGetValueFromNameValueMasterByNameAndStatus() {
+        String testName = "testName";
+        String expectedValue = "testValue";
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.GET_VALUE_FROM_NAMEVALUEMASTER_BY_NAME),
+            argThat(params -> 
+                params.getValue("name").equals(testName) && 
+                params.getValue("status").equals(1)),
+            eq(String.class))
+        ).thenReturn(expectedValue);
+        
+        String result = manageFileBeneficiaryDAO.getValueFromNameValueMasterByNameAndStatus(testName);
+        assertEquals(expectedValue, result);
+    }
+
+    @Test
+    void testValidateAndSaveToWACReferenceStatus_ZeroCount() {
+        String sno = "testFile";
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_TOTAL_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(0);
+        
+        manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
+        
+        verify(namedParameterJdbcTemplate, never()).queryForObject(
+            eq(QueryConstants.MIS_SUCCESS_COUNT), any(), eq(Integer.class));
+        verify(namedParameterJdbcTemplate, never()).queryForObject(
+            eq(QueryConstants.MIS_FAILURE_COUNT), any(), eq(Integer.class));
+        verify(namedParameterJdbcTemplate, never()).update(
+            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), any());
+    }
+
+    @Test
+    void testValidateAndSaveToWACReferenceStatus_CountsNotMatched() {
+        String sno = "testFile";
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_TOTAL_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(10);
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_SUCCESS_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(5);
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_FAILURE_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(4); // 5 + 4 = 9 != 10
+        
+        manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
+        
+        verify(namedParameterJdbcTemplate, never()).update(
+            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), any());
+    }
+
+    @Test
+    void testValidateAndSaveToWACReferenceStatus_CountsMatched() {
+        String sno = "testFile";
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_TOTAL_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(10);
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_SUCCESS_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(6);
+        
+        when(namedParameterJdbcTemplate.queryForObject(
+            eq(QueryConstants.MIS_FAILURE_COUNT),
+            argThat(params -> params.getValue("fileName").equals(sno)),
+            eq(Integer.class))
+        ).thenReturn(4); // 6 + 4 = 10
+        
+        when(namedParameterJdbcTemplate.update(
+            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
+            argThat(params -> params.getValue("sno").equals(sno))
+        ).thenReturn(1);
+        
+        manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
+        
+        verify(namedParameterJdbcTemplate).update(
+            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), 
+            argThat(params -> params.getValue("sno").equals(sno)));
+    }
+
+    @Test
+    void testConstructor() {
+        NamedParameterJdbcTemplate template = mock(NamedParameterJdbcTemplate.class);
+        ManageFileBeneficiaryDAOImpl dao = new ManageFileBeneficiaryDAOImpl(template);
+        assertNotNull(dao);
+    }
+}
