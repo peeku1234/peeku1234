@@ -537,3 +537,84 @@ class ManageFileBeneficiaryDAOImplTest {
         assertNotNull(dao);
     }
 }
+
+
+
+
+
+
+@Test
+void testUpdate_WithNullQuery() {
+    assertThrows(IllegalArgumentException.class, () -> {
+        manageFileBeneficiaryDAO.update(null, new MapSqlParameterSource());
+    });
+}
+
+@Test
+void testUpdate_WithNullParams() {
+    assertThrows(IllegalArgumentException.class, () -> {
+        manageFileBeneficiaryDAO.update("UPDATE table SET col=:val", null);
+    });
+}
+
+@Test
+void testBatchUpdate_WithEmptyParams() {
+    String testQuery = "INSERT INTO test_table VALUES (:value)";
+    SqlParameterSource[] emptyParams = new SqlParameterSource[0];
+    
+    when(namedParameterJdbcTemplate.batchUpdate(eq(testQuery), eq(emptyParams)))
+        .thenReturn(new int[0]);
+    
+    int[] result = manageFileBeneficiaryDAO.batchUpdate(testQuery, emptyParams);
+    assertEquals(0, result.length);
+}
+
+@Test
+void testGetValueFromNameValueMasterByNameAndStatus_NotFound() {
+    String testName = "nonExistentName";
+    
+    when(namedParameterJdbcTemplate.queryForObject(
+        eq(QueryConstants.GET_VALUE_FROM_NAMEVALUEMASTER_BY_NAME),
+        any(),
+        eq(String.class))
+    ).thenReturn(null);
+    
+    String result = manageFileBeneficiaryDAO.getValueFromNameValueMasterByNameAndStatus(testName);
+    assertNull(result);
+}
+
+@Test
+void testValidateAndSaveToWACReferenceStatus_UpdateFails() {
+    String sno = "testFile";
+    
+    when(namedParameterJdbcTemplate.queryForObject(
+        eq(QueryConstants.MIS_TOTAL_COUNT),
+        any(),
+        eq(Integer.class))
+    ).thenReturn(10);
+    
+    when(namedParameterJdbcTemplate.queryForObject(
+        eq(QueryConstants.MIS_SUCCESS_COUNT),
+        any(),
+        eq(Integer.class))
+    ).thenReturn(6);
+    
+    when(namedParameterJdbcTemplate.queryForObject(
+        eq(QueryConstants.MIS_FAILURE_COUNT),
+        any(),
+        eq(Integer.class))
+    ).thenReturn(4);
+    
+    when(namedParameterJdbcTemplate.update(
+        eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
+        any())
+    ).thenReturn(0); // update returns 0 rows affected
+    
+    manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
+    
+    verify(namedParameterJdbcTemplate).update(
+        eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), any());
+}
+
+
+
