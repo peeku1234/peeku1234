@@ -1,194 +1,27 @@
-package com.sbi.yb.cinb.service.impl;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
-
-import com.sbi.yb.cinb.constants.ConfigurationConstants;
-import com.sbi.yb.cinb.model.*;
-import com.sbi.yb.cinb.repository.SampleFileDownloadDao;
-import com.sbi.yb.exception.MicroServiceException;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.MediaType;
-
-@ExtendWith(MockitoExtension.class)
-class SampleFileDownloadServiceImplTest {
-
-    @Mock
-    private SampleFileDownloadDao fileDownloadDao;
-
-    @InjectMocks
-    private SampleFileDownloadServiceImpl service;
-
-    private SampleFileDownloadRequest validRequest;
-    private FileConfigMasterEntity delimitedConfig;
-    private FileConfigMasterEntity fixedConfig;
-
-    @BeforeEach
-    void setUp() {
-        validRequest = new SampleFileDownloadRequest();
-        validRequest.setCorporateAlias("CORP123");
-        validRequest.setFileType("PAYMENT");
-        validRequest.setFileExtension("txt");
-        validRequest.setUserName("testUser");
-
-        // Setup delimited config
-        delimitedConfig = new FileConfigMasterEntity();
-        delimitedConfig.setOid(1L);
-        delimitedConfig.setCompConfigType("DELIMITED");
-        delimitedConfig.setFormat(ConfigurationConstants.DELIMITED);
-        delimitedConfig.setFieldDelimiter("|");
-        
-        DelimitedConfiguration delimitedField = new DelimitedConfiguration();
-        delimitedField.setFieldName("Beneficiary Name");
-        delimitedField.setOrderNo(0);
-        delimitedField.setFieldType("BOTH");
-        delimitedField.setFieldLength("50");
-        delimitedConfig.setDelimitedConfiguration(Collections.singletonList(delimitedField));
-
-        // Setup fixed config
-        fixedConfig = new FileConfigMasterEntity();
-        fixedConfig.setOid(2L);
-        fixedConfig.setCompConfigType("FIXED");
-        fixedConfig.setFormat(ConfigurationConstants.FIXED);
-        
-        FixedConfiguration fixedField = new FixedConfiguration();
-        fixedField.setFieldName("Account Number");
-        fixedField.setStartIndex(0);
-        fixedField.setEndIndex(10);
-        fixedField.setFieldType("DEBIT");
-        fixedConfig.setFixedConfiguration(Collections.singletonList(fixedField));
-    }
-
-    @Test
-    void downloadSampleFile_DelimitedSuccess() {
-        // Mock DAO responses
-        when(fileDownloadDao.getFileConfiguration(anyString(), anyString()))
-            .thenReturn(Collections.singletonList(delimitedConfig));
-        when(fileDownloadDao.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
-            .thenReturn(delimitedConfig);
-
-        FileDownloadResponse response = service.downloadSampleFile(validRequest);
-
-        assertNotNull(response);
-        assertEquals("CORP123.txt", response.getFileName());
-        assertEquals(MediaType.TEXT_PLAIN.toString(), response.getContentType());
-        assertNotNull(response.getFileContent());
-    }
-
-    @Test
-    void downloadSampleFile_FixedSuccess() {
-        validRequest.setFileType("FIXED_TYPE");
-        
-        when(fileDownloadDao.getFileConfiguration(anyString(), anyString()))
-            .thenReturn(Collections.singletonList(fixedConfig));
-        when(fileDownloadDao.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
-            .thenReturn(fixedConfig);
-
-        FileDownloadResponse response = service.downloadSampleFile(validRequest);
-
-        assertNotNull(response);
-        assertTrue(response.getFileContent().length() > 0);
-    }
-
-    @Test
-    void downloadSampleFile_InvalidCorporateId() {
-        validRequest.setCorporateAlias(null);
-        
-        MicroServiceException exception = assertThrows(MicroServiceException.class,
-            () -> service.downloadSampleFile(validRequest));
-        
-        assertEquals(ConfigurationConstants.YBM002, exception.getErrorCode());
-    }
-
-    @Test
-    void downloadSampleFile_NoConfigurationFound() {
-        when(fileDownloadDao.getFileConfiguration(anyString(), anyString()))
-            .thenReturn(Collections.emptyList());
-
-        MicroServiceException exception = assertThrows(MicroServiceException.class,
-            () -> service.downloadSampleFile(validRequest));
-        
-        assertEquals(ConfigurationConstants.YBM003, exception.getErrorCode());
-    }
-
-    @Test
-    void downloadSampleFile_CompositeBeneficiary() {
-        validRequest.setFileType(ConfigurationConstants.COMPOSITE_BEN);
-        
-        // Setup composite config
-        List<DelimitedConfiguration> compositeFields = new ArrayList<>();
-        DelimitedConfiguration field1 = new DelimitedConfiguration();
-        field1.setFieldName("Beneficiary Type");
-        field1.setOrderNo(0);
-        compositeFields.add(field1);
-        delimitedConfig.setDelimitedConfiguration(compositeFields);
-
-        when(fileDownloadDao.getFileConfiguration(anyString(), anyString()))
-            .thenReturn(Collections.singletonList(delimitedConfig));
-        when(fileDownloadDao.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
-            .thenReturn(delimitedConfig);
-
-        FileDownloadResponse response = service.downloadSampleFile(validRequest);
-        
-        assertNotNull(response);
-        assertTrue(response.getFileContent().contains("Ankit Electricals Ltd"));
-    }
-
-    @Test
-    void getSampleFileData_CompositeType() {
-        List<String> configData = List.of("Line1", "Line2");
-        byte[] result = service.getSampleFileData(configData, ConfigurationConstants.COMPOSITE_BEN);
-        
-        assertTrue(result.length > 0);
-        assertEquals("Line1\r\nLine2\r\n", new String(result));
-    }
-
-    @Test
-    void getConfigurationString_FixedFormat() {
-        List<String> result = service.getConfigurationString(fixedConfig, "FIXED_TXN", "|", ConfigurationConstants.FIXED);
-        
-        assertFalse(result.isEmpty());
-        assertTrue(result.get(0).length() >= 10);
-    }
-
-    @Test
-    void fieldLengthCheck_TruncatesProperly() {
-        DelimitedConfiguration field = new DelimitedConfiguration();
-        field.setFieldName("Test Field");
-        field.setFieldLength("5");
-        field.setOrderNo(0);
-        field.setFieldType("DEBIT");
-        delimitedConfig.setDelimitedConfiguration(Collections.singletonList(field));
-
-        List<String> result = service.getConfigurationString(delimitedConfig, "TEST_TYPE", "|", ConfigurationConstants.DELIMITED);
-        
-        assertEquals(1, result.size());
-        assertEquals("TESTV".length(), result.get(0).split("\\|")[0].length());
-    }
-
-    @Test
-    void handleIOException() {
-        // Test error handling in getSampleFileData
-        List<String> configData = Collections.singletonList("valid data");
-        // Force IOException by closing stream
-        ByteArrayOutputStream closedStream = new ByteArrayOutputStream();
-        try {
-            closedStream.close();
-        } catch (IOException ignored) {}
-        
-        // Verify exception handling
-        assertThrows(MicroServiceException.class, 
-            () -> service.getSampleFileData(configData, "ERROR_CASE"));
-    }
-}
+public List<String> getResultForComposite(List<DelimitedConfiguration> delimitedConfigurationList, FileConfigMasterEntity response,
+                                            List<String> debitString) {
+    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODBEGIN);
+    List<Map<String, String>> configuration = getCompositeBen();
+    List<String> debit = new ArrayList<>();
+    configuration.forEach(configMap -> {
+      for (int i = 0; i < delimitedConfigurationList.size(); i++) {
+        DelimitedConfiguration delimitedFileConfiguration = response.getDelimitedConfiguration().get(i);
+        if (Optional.ofNullable(configMap.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), configMap.get(delimitedFileConfiguration.getFieldName().trim()));
+        } else {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), "");
+        }
+        if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
+          if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
+            debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
+          } else {
+            debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
+          }
+        }
+        debit.add(debitString.get(i));
+      }
+    });
+    LOGGER.info("Result :: {}", debit);
+    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODEND);
+    return debit;
+  }
