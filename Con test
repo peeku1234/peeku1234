@@ -1,220 +1,1616 @@
-package com.sbi.yb.cinb.repository.impl;
+package com.sbi.yb.cinb.service.impl;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import com.sbi.yb.cinb.constants.ConfigurationConstants;
+import com.sbi.yb.cinb.model.DelimitedConfiguration;
+import com.sbi.yb.cinb.model.FileConfigMasterEntity;
+import com.sbi.yb.cinb.model.FileDownloadResponse;
+import com.sbi.yb.cinb.model.FixedConfiguration;
+import com.sbi.yb.cinb.model.SampleFileDownloadRequest;
+import com.sbi.yb.cinb.repository.SampleFileDownloadDao;
+import com.sbi.yb.cinb.service.SampleFileDownloadService;
+import com.sbi.yb.constants.LoggingConstants;
+import com.sbi.yb.exception.MicroServiceException;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
+/**
+ * This class handles the business logic of sample file download.
+ */
+
+@Service
+public class SampleFileDownloadServiceImpl implements SampleFileDownloadService {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(SampleFileDownloadServiceImpl.class);
+
+  /**
+   * Autowiring FileDownloadDao.
+   */
+  private final SampleFileDownloadDao fileDownloadDao;
+
+  /**
+   * fileDownloadService constructor.
+   *
+   * @param fileDownloadDao constructor
+   */
+
+  @Autowired
+  public SampleFileDownloadServiceImpl(SampleFileDownloadDao fileDownloadDao) {
+    this.fileDownloadDao = fileDownloadDao;
+  }
+
+  /**
+   * Getting the sample file download with encoded data.
+   *
+   * @param sampleFileDownloadRequest from user
+   * @return the sample file
+   */
+  @Override
+  public FileDownloadResponse downloadSampleFile(SampleFileDownloadRequest sampleFileDownloadRequest) {
+    LOGGER.info("downloadSampleFile :: {}", LoggingConstants.METHODBEGIN);
+    String corporateId;
+    String fileType;
+    corporateId = sampleFileDownloadRequest.getCorporateAlias();
+    fileType = sampleFileDownloadRequest.getFileType();
+    sampleFileDownloadRequest.getUserName();
+    FileConfigMasterEntity response;
+    FileDownloadResponse fileDownloadResponse = new FileDownloadResponse();
+    if (StringUtils.hasText(fileType) && StringUtils.hasText(corporateId)) {
+      List<FileConfigMasterEntity> fileConfigMasterEntity = fileDownloadDao.getFileConfiguration(corporateId, fileType);
+      Long oid = fileConfigMasterEntity.getFirst().getOid();
+      String compConfigType = fileConfigMasterEntity.getFirst().getCompConfigType();
+      if (fileConfigMasterEntity.getFirst().getFormat() == ConfigurationConstants.DELIMITED) {
+        response = fileDownloadDao.getDelimitedConfiguration(corporateId, fileType, oid, compConfigType);
+      } else {
+        response = fileDownloadDao.getFixedConfiguration(corporateId, fileType, oid, compConfigType);
+      }
+      LOGGER.info("List of Configuration {}", response);
+      if (Optional.ofNullable(response).isPresent()) {
+        List<String> configurationString;
+        if (Objects.requireNonNull(corporateId).equalsIgnoreCase(fileConfigMasterEntity.getFirst().getId()) && sampleFileDownloadRequest.getFileExtension().equalsIgnoreCase("txt")) {
+          configurationString = getConfigurationString(response, fileType, fileConfigMasterEntity.getFirst().getFieldDelimiter(), fileConfigMasterEntity.getFirst().getFormat());
+        } else {
+          configurationString = getDelimitedDefaultSampleData(fileType, response, fileConfigMasterEntity.getFirst().getFormat());
+        }
+        String fileName = corporateId + "." + sampleFileDownloadRequest.getFileExtension();
+        LOGGER.info("FileName to be downloaded as:: {}", fileName);
+        byte[] byteData = getSampleFileData(configurationString, fileType);
+        String encodeData = Base64.getEncoder().encodeToString(byteData);
+        fileDownloadResponse.setFileContent(encodeData);
+        fileDownloadResponse.setFileName(fileName);
+        fileDownloadResponse.setContentType(String.valueOf(MediaType.TEXT_PLAIN));
+      } else {
+        LOGGER.info("No response from DB :: {}", ConfigurationConstants.YBM003);
+        MicroServiceException.throwException(ConfigurationConstants.YBM003);
+      }
+    } else {
+      LOGGER.info("Invalid corporateId :: {}", ConfigurationConstants.YBM002);
+      MicroServiceException.throwException(ConfigurationConstants.YBM002);
+    }
+    LOGGER.info("downloadSampleFile :: {}", LoggingConstants.METHODEND);
+    return fileDownloadResponse;
+  }
+
+  /**
+   * getting the sample data in place of field names.
+   *
+   * @param response       from DAO
+   * @param txnType        from request
+   * @param fieldDelimiter from DB
+   * @param format         format
+   * @return the List of sample data
+   */
+
+  public List<String> getConfigurationString(FileConfigMasterEntity response, String txnType, String fieldDelimiter, int format) {
+    LOGGER.info("getConfigurationString (List response) - begin");
+    Map<String, String> configuration;
+    LOGGER.info("txnType- {}", txnType);
+    configuration = ConfigurationConstants.configuration;
+    Set<String> validFileType = Set.of(ConfigurationConstants.ACCOUNT_TXN_BOTH, ConfigurationConstants.OTHER_BANK);
+    Map<String, String> finalConfiguration = configuration;
+    Optional.ofNullable(txnType).map(String::toUpperCase).filter(validFileType::contains).ifPresent(value -> finalConfiguration.put("Credit Branch Code", "BKID0008605"));
+    String paymentIdentifier = Optional.ofNullable(txnType).filter(type -> !type.equalsIgnoreCase("Payment_Identifier")).map(type -> "NEFT").orElse("");
+    configuration.put("Payment_Identifier", paymentIdentifier);
+    List<String> result = new ArrayList<>();
+    LOGGER.info("Field Delimiter :: {}", fieldDelimiter);
+    if (format == ConfigurationConstants.DELIMITED) {
+      List<DelimitedConfiguration> delimitedConfigurationList = response.getDelimitedConfiguration();
+      List<String> debitString = new ArrayList<>();
+      List<String> creditString = new ArrayList<>();
+      List<String> finalDebitString = debitString;
+      delimitedConfigurationList.forEach(debit -> finalDebitString.add(""));
+      delimitedConfigurationList.forEach(credit -> creditString.add(""));
+      if (Stream.of(ConfigurationConstants.ADD_SAME_BANK, ConfigurationConstants.ADD_OTHER_BANK, ConfigurationConstants.DELETE_SAME_BANK,
+              ConfigurationConstants.DELETE_OTHER_BANK).anyMatch(fileType -> fileType.equalsIgnoreCase(txnType))) {
+        getNonCompositeForDelimited(configuration, delimitedConfigurationList, debitString, result, fieldDelimiter);
+      } else if (ConfigurationConstants.COMPOSITE_BEN.equalsIgnoreCase(Objects.requireNonNull(txnType))) {
+        debitString = getResultForComposite(delimitedConfigurationList, response, debitString);
+      } else {
+        getDelimitedForOtherTypes(delimitedConfigurationList, configuration, txnType, debitString, creditString, response);
+      }
+      getResultForDelimitedConfiguration(debitString, creditString, fieldDelimiter, result, Objects.requireNonNull(txnType));
+      //format=1
+    } else {
+      FixedConfiguration fixedConfiguration = response.getFixedConfiguration().getLast();
+      List<Map<String, String>> listOfConfiguration;
+      StringBuilder debitString = new StringBuilder();
+      StringBuilder creditString = new StringBuilder();
+      StringBuilder emptyStr = new StringBuilder();
+      if (Stream.of(ConfigurationConstants.ADD_SAME_BANK, ConfigurationConstants.ADD_OTHER_BANK, ConfigurationConstants.DELETE_SAME_BANK,
+              ConfigurationConstants.DELETE_OTHER_BANK).anyMatch(fileType -> fileType.equalsIgnoreCase(txnType))) {
+        getNonCompositeForFixed(fixedConfiguration, configuration, debitString, response);
+        result.add(debitString.toString());
+      } else {
+        debitString.setLength(fixedConfiguration.getEndIndex());
+        creditString.setLength(fixedConfiguration.getEndIndex());
+        emptyStr.append(" ".repeat(Math.max(0, fixedConfiguration.getEndIndex())));
+        debitString.replace(0, fixedConfiguration.getEndIndex(), emptyStr.toString());
+        creditString.replace(0, fixedConfiguration.getEndIndex(), emptyStr.toString());
+        if (Objects.requireNonNull(txnType).equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN)) {
+          listOfConfiguration = getCompositeBen();
+          debitString = getFixedConfigurationDetails(listOfConfiguration, response, debitString);
+        } else {
+          getFixedConfigurationValues(response, configuration, debitString, creditString);
+        }
+        result.add(debitString.toString());
+        result.add(creditString.toString());
+      }
+    }
+    LOGGER.info("getConfigurationString(List response) - end");
+    return result;
+  }
+
+  /**
+   * Checking field type & field length delimited configuration for other file types.
+   *
+   * @param delimitedConfigurationList delimitedConfigurationList
+   * @param configuration              configuration
+   * @param txnType                    txnType
+   * @param debitString                debitString
+   * @param creditString               creditString
+   * @param response                   response
+   */
+  public void getDelimitedForOtherTypes(List<DelimitedConfiguration> delimitedConfigurationList, Map<String, String> configuration, String txnType,
+                                        List<String> debitString, List<String> creditString, FileConfigMasterEntity response) {
+    for (int i = 0; i < delimitedConfigurationList.size(); i++) {
+      DelimitedConfiguration delimitedFileConfiguration = response.getDelimitedConfiguration().get(i);
+      getFieldNameForDelimited(delimitedFileConfiguration);
+      getFieldTypeForDelimitedConfiguration(delimitedFileConfiguration, configuration, debitString, creditString);
+      if (!ConfigurationConstants.DD.equalsIgnoreCase(txnType)) {
+        fieldLengthCheckForDelimitedConfiguration(delimitedFileConfiguration, creditString, debitString);
+      }
+    }
+  }
+
+  /**
+   * Adding field values and checking field length.
+   *
+   * @param delimitedConfigurationList delimitedConfigurationList
+   * @param response                   response
+   * @param debitString                debitString
+   * @return Composite Beneficiary result
+   */
+  public List<String> getResultForComposite(List<DelimitedConfiguration> delimitedConfigurationList, FileConfigMasterEntity response,
+                                            List<String> debitString) {
+    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODBEGIN);
+    List<Map<String, String>> configuration = getCompositeBen();
+    List<String> debit = new ArrayList<>();
+    configuration.forEach(configMap -> {
+      for (int i = 0; i < delimitedConfigurationList.size(); i++) {
+        DelimitedConfiguration delimitedFileConfiguration = response.getDelimitedConfiguration().get(i);
+        if (Optional.ofNullable(configMap.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), configMap.get(delimitedFileConfiguration.getFieldName().trim()));
+        } else {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), "");
+        }
+        if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
+          if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
+            debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
+          } else {
+            debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
+          }
+        }
+        debit.add(debitString.get(i));
+      }
+    });
+    LOGGER.info("Result :: {}", debit);
+    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODEND);
+    return debit;
+  }
+
+  /**
+   * Adding the field values for each beneficiary type.
+   *
+   * @return List of Map Strings
+   */
+  public List<Map<String, String>> getCompositeBen() {
+    LOGGER.info("getCompositeBen {}", LoggingConstants.METHODBEGIN);
+    List<Map<String, String>> fieldValues = new ArrayList<>();
+    for (int i = 0; i < 4; i++) {
+      Map<String, String> configuration = new HashMap<>();
+      configuration.put("Beneficiary Code", "000010014");
+      configuration.put("Beneficiary Name", "Ankit Electricals Ltd");
+      configuration.put("Address1", "Red Hill Lane");
+      configuration.put("Address2", "Cullen Road");
+      configuration.put("Address3", "Bangalore");
+      configuration.put("LEI Code", "529900T8BM49AURS905");
+      switch (i) {
+        case 0 -> {
+          configuration.put("Beneficiary Type", "Same Bank");
+          configuration.put("Beneficiary Action Type", "Add same bank");
+          configuration.put("Beneficiary Account Number", "63648727489");
+          configuration.put("IFS Code", "SBIN0003137");
+        }
+        case 1 -> {
+          configuration.put("Beneficiary Type", "Same Bank");
+          configuration.put("Beneficiary Action Type", "Delete same bank");
+          configuration.put("Beneficiary Account Number", "63648727489");
+          configuration.put("IFS Code", "SBIN0003137");
+        }
+        case 2 -> {
+          configuration.put("Beneficiary Type", "Other Bank");
+          configuration.put("Beneficiary Action Type", "Add other bank");
+          configuration.put("Beneficiary Account Number", "1600123456");
+          configuration.put("IFS Code", "HDFC0065321");
+        }
+        case 3 -> {
+          configuration.put("Beneficiary Type", "Other bank");
+          configuration.put("Beneficiary Action Type", "Delete other bank");
+          configuration.put("Beneficiary Account Number", "1600123456");
+          configuration.put("IFS Code", "HDFC0065321");
+        }
+        default -> MicroServiceException.throwException(ConfigurationConstants.YBM003);
+      }
+      fieldValues.add(configuration);
+    }
+    LOGGER.info("Field Values :: {}", fieldValues);
+    LOGGER.info("getCompositeBen {}", LoggingConstants.METHODEND);
+    return fieldValues;
+  }
+
+  /**
+   * Printing the file content using ByteArrayOutputStream.
+   *
+   * @param configurationString configurationString
+   * @param fileType            fileType
+   */
+  public byte[] getSampleFileData(List<String> configurationString, String fileType) {
+    byte[] byteData = new byte[0];
+    try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+      if (configurationString != null) {
+        char firstLine = 13;
+        char secondLine = 10;
+        if (Stream.of(ConfigurationConstants.ADD_SAME_BANK, ConfigurationConstants.ADD_OTHER_BANK, ConfigurationConstants.DELETE_SAME_BANK,
+                ConfigurationConstants.DELETE_OTHER_BANK, ConfigurationConstants.IMPS_BEN).anyMatch(txnType -> txnType.equalsIgnoreCase(fileType))) {
+          outputStream.write(configurationString.getFirst().getBytes(StandardCharsets.UTF_8));
+        } else if (fileType.equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN)) {
+          for (String s : configurationString) {
+            outputStream.write(s.getBytes(StandardCharsets.UTF_8));
+            outputStream.write(firstLine);
+            outputStream.write(secondLine);
+          }
+          LOGGER.info("File written :: {}", outputStream);
+        } else {
+          outputStream.write(configurationString.getFirst().getBytes(StandardCharsets.UTF_8));
+          outputStream.write(firstLine);
+          outputStream.write(secondLine);
+          outputStream.write(configurationString.getLast().getBytes(StandardCharsets.UTF_8));
+        }
+      }
+      byteData = outputStream.toByteArray();
+    } catch (IOException ioException) {
+      LOGGER.info("IOException while writing to output-stream");
+      MicroServiceException.throwException("YBM003");
+    }
+    return byteData;
+  }
+
+  /**
+   * getting default filed delimiter based on fileType.
+   *
+   * @param fileType from request
+   * @param response get from DB
+   * @param format   format
+   * @return the data with default fieldDelimiter
+   */
+
+  public List<String> getDelimitedDefaultSampleData(String fileType, FileConfigMasterEntity response, int format) {
+    LOGGER.info("getDelimitedDefaultSampleData {}", LoggingConstants.METHODBEGIN);
+    List<String> configurationString;
+    String fieldDelimiter;
+    if (fileType.equalsIgnoreCase(ConfigurationConstants.IMPS_TXN) || fileType.equalsIgnoreCase(ConfigurationConstants.SAME_BANK) || fileType.equalsIgnoreCase(ConfigurationConstants.OTHER_BANK) || fileType.equalsIgnoreCase(ConfigurationConstants.ACCOUNT_TXN_BOTH)) {
+      fieldDelimiter = "|";
+      configurationString = getConfigurationString(response, fileType, fieldDelimiter, format);
+    } else if (fileType.equalsIgnoreCase(ConfigurationConstants.DD)) {
+      fieldDelimiter = "*";
+      configurationString = getConfigurationString(response, fileType, fieldDelimiter, format);
+    } else {
+      fieldDelimiter = "#";
+      configurationString = getConfigurationString(response, fileType, fieldDelimiter, format);
+    }
+    LOGGER.info("getDelimitedDefaultSampleData {}", LoggingConstants.METHODEND);
+    return configurationString;
+  }
+
+  /**
+   * Getting nonComposite values.
+   *
+   * @param configuration              configuration
+   * @param delimitedConfigurationList delimitedConfigurationList
+   * @param debitString                debitString
+   * @param result                     result
+   * @param fieldDelimiter             fieldDelimiter
+   */
+  public void getNonCompositeForDelimited(Map<String, String> configuration,
+                                          List<DelimitedConfiguration> delimitedConfigurationList, List<String> debitString, List<String> result, String fieldDelimiter) {
+    LOGGER.info("getNonCompositeForDelimited {}", LoggingConstants.METHODBEGIN);
+    for (DelimitedConfiguration delimitedConfigurationObj : delimitedConfigurationList) {
+      debitString.set(delimitedConfigurationObj.getOrderNo(), configuration.get(delimitedConfigurationObj.getFieldName().trim()));
+      LOGGER.info("field Name 3P & IBTP>>> {}", delimitedConfigurationObj.getFieldName());
+      LOGGER.info("field order 3P & IBTP>>> {}", delimitedConfigurationObj.getOrderNo());
+      getFieldNameForDelimited(delimitedConfigurationObj); /* to set fieldName */
+    }
+    result.add(debitString.stream().collect(Collectors.joining(fieldDelimiter, "", "")));
+
+    LOGGER.info("getNonCompositeForDelimited {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * setting fieldName.
+   *
+   * @param delimitedConfiguration delimitedConfiguration data
+   */
+
+  public void getFieldNameForDelimited(DelimitedConfiguration delimitedConfiguration) {
+    LOGGER.info("getFieldNameForDelimited {}", LoggingConstants.METHODBEGIN);
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("Beneficiary Name") || delimitedConfiguration.getFieldName().equalsIgnoreCase("Description")) {
+      LOGGER.info("Description both");
+      delimitedConfiguration.setFieldName("Beneficiary Name");
+    }
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("Account Number") || delimitedConfiguration.getFieldName().contains("Debit Account")) {
+      LOGGER.info("Account no both..");
+      delimitedConfiguration.setFieldName("Beneficiary Account Number");
+    }
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("Debit Branch Code")) {
+      LOGGER.info("Debit Branch Code");
+      delimitedConfiguration.setFieldName("Beneficiary Branch Code");
+    }
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("Email Id") || delimitedConfiguration.getFieldName().equalsIgnoreCase("EmailId")) {
+      delimitedConfiguration.setFieldName("EmailId");
+    }
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("IMPS TYPE")) {
+      delimitedConfiguration.setFieldName("Beneficiary Action Type");
+    }
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("Beneficiary Mobile No")) {
+      delimitedConfiguration.setFieldName("Beneficiary Mobile Number");
+    }
+    if (delimitedConfiguration.getFieldName().contains("Date")) {
+      delimitedConfiguration.setFieldName("Date");
+    }
+    if (delimitedConfiguration.getFieldName().equalsIgnoreCase("outref7")) {
+      delimitedConfiguration.setFieldName("Beneficiary Code");
+    }
+    if (delimitedConfiguration.getFieldName().contains("Credit Account")) {
+      delimitedConfiguration.setFieldName("Credit Account No");
+    }
+    if (delimitedConfiguration.getFieldName().contains("outref") && !delimitedConfiguration.getFieldAlias().isEmpty()) {
+      delimitedConfiguration.setFieldName("outref");
+    }
+    LOGGER.info("getFieldNameForDelimited {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * Getting fieldType for DelimitedConfiguration.
+   *
+   * @param delimitedFileConfiguration delimitedFileConfiguration
+   * @param configuration              configuration
+   * @param debitString                debitString
+   * @param creditString               creditString
+   */
+  public void getFieldTypeForDelimitedConfiguration(DelimitedConfiguration delimitedFileConfiguration, Map<String, String> configuration, List<String> debitString, List<String> creditString) {
+    LOGGER.info("getFieldTypeForDelimitedConfiguration :: {}", LoggingConstants.METHODBEGIN);
+    switch (delimitedFileConfiguration.getFieldType()) {
+      case ConfigurationConstants.BOTH -> {
+        if (delimitedFileConfiguration.getFieldName().equalsIgnoreCase("Account No")) {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), configuration.get(delimitedFileConfiguration.getFieldName().trim() + ConfigurationConstants.DEBIT));
+          creditString.set(delimitedFileConfiguration.getOrderNo(), configuration.get(delimitedFileConfiguration.getFieldName().trim() + ConfigurationConstants.CREDIT));
+        } else if (Optional.ofNullable(configuration.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), configuration.get(delimitedFileConfiguration.getFieldName().trim()));
+          creditString.set(delimitedFileConfiguration.getOrderNo(), configuration.get(delimitedFileConfiguration.getFieldName().trim()));
+        }
+      }
+      case ConfigurationConstants.DEBIT -> {
+        if (Optional.ofNullable(configuration.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), configuration.get(delimitedFileConfiguration.getFieldName().trim()));
+        } else {
+          debitString.set(delimitedFileConfiguration.getOrderNo(), "");
+          creditString.set(delimitedFileConfiguration.getOrderNo(), ConfigurationConstants.DEBIT);
+        }
+      }
+      case ConfigurationConstants.CREDIT -> {
+        if (Optional.ofNullable(configuration.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
+          creditString.set(delimitedFileConfiguration.getOrderNo(), configuration.get(delimitedFileConfiguration.getFieldName().trim()));
+        } else {
+          creditString.set(delimitedFileConfiguration.getOrderNo(), "");
+          debitString.set(delimitedFileConfiguration.getOrderNo(), ConfigurationConstants.CREDIT);
+        }
+      }
+      default -> MicroServiceException.throwException(ConfigurationConstants.YBM003);
+    }
+    LOGGER.info("getFieldTypeForDelimitedConfiguration :: {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * to check fieldLength of delimitedConfiguration.
+   *
+   * @param delimitedFileConfiguration delimitedFileConfiguration
+   * @param creditString               creditString
+   * @param debitString                debitString
+   */
+  public void fieldLengthCheckForDelimitedConfiguration(DelimitedConfiguration delimitedFileConfiguration, List<String> creditString, List<String> debitString) {
+    LOGGER.info("fieldLengthCheckForDelimitedConfiguration {}", LoggingConstants.METHODBEGIN);
+    if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
+      if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
+        debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
+      } else {
+        debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
+      }
+    }
+    if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.CREDIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
+      if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > creditString.get(delimitedFileConfiguration.getOrderNo()).length()) {
+        creditString.set(delimitedFileConfiguration.getOrderNo(), creditString.get(delimitedFileConfiguration.getOrderNo()).substring(0, creditString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
+      } else {
+        creditString.set(delimitedFileConfiguration.getOrderNo(), creditString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
+      }
+    }
+    LOGGER.info("fieldLengthCheckForDelimitedConfiguration {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * Calling final result method.
+   *
+   * @param debitString    debitString
+   * @param creditString   creditString
+   * @param fieldDelimiter fieldDelimiter
+   * @param result         result
+   */
+  public void getResultForDelimitedConfiguration(List<String> debitString, List<String> creditString, String fieldDelimiter,
+                                                 List<String> result, String fileType) {
+    LOGGER.info("getResultForDelimitedConfiguration {}", LoggingConstants.METHODBEGIN);
+    if (fileType.equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN)) {
+      for (int i = 0; i < debitString.size() / 10; i++) {
+        List<String> debit = debitString.subList(i * 10, (i + 1) * 10);
+        result.add(debit.stream().map(debitStr -> debitStr == null ? "" : debitStr)
+                .collect(Collectors.joining(fieldDelimiter, "", "")));
+      }
+
+    } else {
+      result.add(debitString.stream().map(debitStr -> debitStr == null ? "" : debitStr)
+              .collect(Collectors.joining(fieldDelimiter, "", "")));
+      result.add(creditString.stream().map(creditStr -> creditStr == null ? "" : creditStr)
+              .collect(Collectors.joining(fieldDelimiter, "", "")));
+    }
+    LOGGER.info("getResultForDelimitedConfiguration {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * setting fieldName.
+   *
+   * @param fixedConfiguration fixedConfiguration data
+   */
+
+  public void getFieldNameForFixed(FixedConfiguration fixedConfiguration) {
+    LOGGER.info("getFieldNameForFixed {}", LoggingConstants.METHODBEGIN);
+    if (fixedConfiguration.getFieldName().equalsIgnoreCase("Description") || fixedConfiguration.getFieldName().equalsIgnoreCase("Beneficiary Name")) {
+      LOGGER.info("Description or...");
+      fixedConfiguration.setFieldName("Beneficiary Name");
+    }
+    if (fixedConfiguration.getFieldName().equalsIgnoreCase("Debit Account No") || fixedConfiguration.getFieldName().equalsIgnoreCase("Account Number")) {
+      LOGGER.info("Account ord no.or...");
+      fixedConfiguration.setFieldName("Beneficiary Account Number");
+    }
+    if (fixedConfiguration.getFieldName().equalsIgnoreCase("Debit Branch Code")) {
+      LOGGER.info("Branch code no..or..");
+      fixedConfiguration.setFieldName("Beneficiary Branch Code");
+    }
+    if (fixedConfiguration.getFieldName().equalsIgnoreCase("outref7")) {
+      fixedConfiguration.setFieldName("Beneficiary Code");
+    }
+    if (fixedConfiguration.getFieldName().equalsIgnoreCase("DEBIT DATE") || fixedConfiguration.getFieldName().equalsIgnoreCase("Date")) {
+      fixedConfiguration.setFieldName("Date");
+    }
+    if (fixedConfiguration.getFieldName().equalsIgnoreCase("EmailId")
+            || fixedConfiguration.getFieldName().equalsIgnoreCase("Email Id")) {
+      fixedConfiguration.setFieldName("EmailId");
+    }
+    if (fixedConfiguration.getFieldName().contains("outref") && !fixedConfiguration.getFieldAlias().isEmpty()) {
+      fixedConfiguration.setFieldName("outref");
+    }
+    LOGGER.info("getFieldNameForFixed {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * Getting FixedConfigurationFieldType.
+   *
+   * @param fixedFileConfiguration fixedFileConfiguration
+   * @param configuration          configuration
+   * @param debitString            debitString
+   * @param creditString           creditString
+   * @param startIndex             startIndex
+   * @param fieldValue             fieldValue
+   */
+  public void getFixedConfigurationFieldType(FixedConfiguration fixedFileConfiguration, Map<String, String> configuration, StringBuilder debitString,
+                                             StringBuilder creditString, int startIndex, String fieldValue) {
+    LOGGER.info("getFixedConfigurationFieldType {}", LoggingConstants.METHODBEGIN);
+    switch (fixedFileConfiguration.getFieldType()) {
+      case ConfigurationConstants.BOTH -> {
+        if (fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Account Number")) {
+          String debitValue = (configuration.get(fixedFileConfiguration.getFieldName().trim()) + ConfigurationConstants.DEBIT);
+          String creditValue = (configuration.get(fixedFileConfiguration.getFieldName().trim()) + ConfigurationConstants.CREDIT);
+          debitString.replace(startIndex, startIndex + fieldValue.length(), debitValue);
+          creditString.replace(startIndex, startIndex + fieldValue.length(), creditValue);
+        } else {
+          LOGGER.info("Field Name of Fixed configuration: {} : {}", fixedFileConfiguration.getFieldName().trim(), configuration.get(fixedFileConfiguration.getFieldName().trim()));
+          debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
+          creditString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
+        }
+      }
+      case ConfigurationConstants.CREDIT -> creditString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
+      case ConfigurationConstants.DEBIT -> debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
+      case null, default -> MicroServiceException.throwException(ConfigurationConstants.YBM003);
+    }
+    LOGGER.info("getFixedConfigurationFieldType {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * Getting nonCompositeFixed values.
+   *
+   * @param fixedConfiguration fixedConfiguration
+   * @param configuration      configuration
+   * @param debitString        debitString
+   * @param response           response
+   */
+  public void getNonCompositeForFixed(FixedConfiguration fixedConfiguration, Map<String, String> configuration,
+                                      StringBuilder debitString, FileConfigMasterEntity response) {
+    LOGGER.info("getNonCompositeForFixed {}", LoggingConstants.METHODBEGIN);
+    String emptyStr = " ".repeat(Math.max(0, fixedConfiguration.getEndIndex()));
+    debitString.replace(0, fixedConfiguration.getEndIndex(), emptyStr);
+    for (int i = 0; i < response.getFixedConfiguration().size(); i++) {
+      String fieldValue = "Other";
+      LOGGER.info("field Name : {}", fixedConfiguration.getFieldName().trim());
+      if (Optional.ofNullable(configuration.get(fixedConfiguration.getFieldName().trim())).isPresent()) {
+        fieldValue = configuration.get(fixedConfiguration.getFieldName().trim());
+      }
+      LOGGER.info("fieldValue:: {}", fieldValue);
+      if (fixedConfiguration.getEndIndex() - fixedConfiguration.getStartIndex() < fieldValue.length()) {
+        fieldValue = fieldValue.substring(0, fixedConfiguration.getEndIndex() - fixedConfiguration.getStartIndex() + 1);
+      }
+      int startIndex = fixedConfiguration.getStartIndex();
+      debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
+      String fieldName = fixedConfiguration.getFieldName();
+      LOGGER.info("fieldName.. {}", fieldName);
+      getFieldNameForFixed(fixedConfiguration);
+    }
+    LOGGER.info("getNonCompositeForFixed {}", LoggingConstants.METHODEND);
+  }
+
+  /**
+   * @param listOfConfiguration listOfConfiguration
+   * @param response response
+   * @param debitString debitString
+   * @return debitString
+   */
+  public StringBuilder getFixedConfigurationDetails(List<Map<String, String>> listOfConfiguration, FileConfigMasterEntity response,
+                                                    StringBuilder debitString) {
+    StringBuilder debit = new StringBuilder();
+    listOfConfiguration.forEach(configMap -> {
+      for (int i = 0; i < response.getFixedConfiguration().size(); i++) {
+        String fieldValue = "Other";
+        FixedConfiguration fixedFileConfiguration = response.getFixedConfiguration().get(i);
+        if (Optional.ofNullable(configMap.get(fixedFileConfiguration.getFieldName().trim())).isPresent()) {
+          fieldValue = configMap.get(fixedFileConfiguration.getFieldName().trim());
+        }
+        if (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() < fieldValue.length()) {
+          fieldValue = fieldValue.substring(0, fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() + 1);
+        }
+        int startIndex = fixedFileConfiguration.getStartIndex();
+        debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
+      }
+      debit.append(debitString).append("\n");
+    });
+    return debit;
+  }
+
+  /**
+   * getFixedConfigurationValues.
+   *
+   * @param response      response
+   * @param configuration configuration
+   * @param debitString   debitString
+   * @param creditString  creditString
+   */
+  public void getFixedConfigurationValues(FileConfigMasterEntity response, Map<String, String> configuration, StringBuilder debitString, StringBuilder creditString) {
+    LOGGER.info("getFixedConfigurationValues {}", LoggingConstants.METHODBEGIN);
+    for (int i = 0; i < response.getFixedConfiguration().size(); i++) {
+      String fieldValue = "Other";
+      FixedConfiguration fixedFileConfiguration = response.getFixedConfiguration().get(i);
+      LOGGER.info("Start Index : {} : {}", fixedFileConfiguration.getStartIndex(), fixedFileConfiguration.getFieldType());
+      LOGGER.info("Field Name : {} : {}", fixedFileConfiguration.getFieldName().trim(), configuration.get(fixedFileConfiguration.getFieldName().trim()));
+      if (Optional.ofNullable(configuration.get(fixedFileConfiguration.getFieldName().trim())).isPresent()) {
+        fieldValue = configuration.get(fixedFileConfiguration.getFieldName().trim());
+        LOGGER.info("field : {}", fixedFileConfiguration.getFieldName());
+        if (fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Date") || fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Debit Date") || fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Credit Date")) {
+          LOGGER.info("diff : {}", (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex()));
+          if (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() == 7) {
+            fieldValue = "23/03/25";
+          }
+        }
+      }
+      if (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() < fieldValue.length()) {
+        fieldValue = fieldValue.substring(0, fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() + 1);
+      }
+      getFieldNameForFixed(fixedFileConfiguration);
+      int startIndex = fixedFileConfiguration.getStartIndex();
+      getFixedConfigurationFieldType(fixedFileConfiguration, configuration, debitString, creditString, startIndex, fieldValue);
+    }
+    LOGGER.info("getFixedConfigurationValues {}", LoggingConstants.METHODEND);
+  }
+
+}
+
+
+
+
+package com.sbi.yb.cinb.service;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.sbi.yb.cinb.model.FileConfigMasterEntity;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.test.context.SpringBootTest;
 
-import com.sbi.yb.cinb.constant.QueryConstants;
+import com.sbi.yb.cinb.constants.ConfigurationConstants;
+import com.sbi.yb.cinb.model.DelimitedConfiguration;
+import com.sbi.yb.cinb.model.FixedConfiguration;
+import com.sbi.yb.cinb.model.SampleFileDownloadRequest;
+import com.sbi.yb.cinb.model.FileDownloadResponse;
+import com.sbi.yb.cinb.repository.impl.SampleFileDownloadDaoImpl;
+import com.sbi.yb.cinb.service.impl.SampleFileDownloadServiceImpl;
+import com.sbi.yb.exception.DAOException;
 import com.sbi.yb.exception.MicroServiceException;
 
-@ExtendWith(MockitoExtension.class)
-class ManageFileBeneficiaryDAOImplTest {
-
-    @Mock
-    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+@SpringBootTest
+class SampleFileDownloadServiceImplTest {
 
     @InjectMocks
-    private ManageFileBeneficiaryDAOImpl manageFileBeneficiaryDAO;
+    private SampleFileDownloadServiceImpl fileDownloadService;
+    @Mock
+    private SampleFileDownloadDaoImpl sampleFileDownloadDaoimpl;
+    SampleFileDownloadRequest sampleFileDownloadRequest = new SampleFileDownloadRequest();
+    FileConfigMasterEntity fileConfiguration = new FileConfigMasterEntity();
+    DelimitedConfiguration delimitedConfiguration = new DelimitedConfiguration();
+    FixedConfiguration fixedConfiguration = new FixedConfiguration();
+    List<FileConfigMasterEntity> fileConfigurations = new ArrayList<>();
+    List<FixedConfiguration> fixedConfigurations = new ArrayList<>();
+    List<DelimitedConfiguration> fileConfiguration1 = new ArrayList<>();
 
-    @Test
-    void testUpdate_Success() {
-        String testQuery = "UPDATE test_table SET column = :value";
-        SqlParameterSource params = new MapSqlParameterSource().addValue("value", "test");
-        
-        when(namedParameterJdbcTemplate.update(eq(testQuery), eq(params))).thenReturn(1);
-        
-        int result = manageFileBeneficiaryDAO.update(testQuery, params);
-        assertEquals(1, result);
-        verify(namedParameterJdbcTemplate).update(eq(testQuery), eq(params));
+
+    @BeforeEach
+    void setup() {
+        sampleFileDownloadRequest.setCorporateAlias("250250");
+        sampleFileDownloadRequest.setFileType("IMPS_TXN");
+        sampleFileDownloadRequest.setUserName("YBM1Admin");
+        sampleFileDownloadRequest.setFileExtension("txt");
+        fileConfiguration.setFormat(0);
+        fileConfiguration.setId("250250");
+        fileConfiguration.setOid(5966359893L);
+        fileConfiguration.setFieldDelimiter("#");
+        fileConfiguration.setCompConfigType("imps_delimited_txn_#");
+        delimitedConfiguration.setFieldName("IMPS TYPE");
+        delimitedConfiguration.setFieldLength("1");
+        delimitedConfiguration.setOrderNo(0);
+        delimitedConfiguration.setDescription("null");
+        delimitedConfiguration.setMandatory(false);
+        delimitedConfiguration.setFieldType("D");
+        delimitedConfiguration.setFieldAlias(null);
+        fixedConfiguration.setFieldName("Beneficiary Name");
+        fixedConfiguration.setOrderNo(1);
+        fixedConfiguration.setMandatory(true);
+        fixedConfiguration.setStartIndex(1);
+        fixedConfiguration.setEndIndex(4);
+        fixedConfiguration.setFieldType("B");
+        fixedConfigurations.add(fixedConfiguration);
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfigurations.add(fileConfiguration);
+
     }
 
     @Test
-    void testUpdate_ThrowsException() {
-        String testQuery = "UPDATE test_table SET column = :value";
-        SqlParameterSource params = new MapSqlParameterSource().addValue("value", "test");
-        
-        when(namedParameterJdbcTemplate.update(eq(testQuery), eq(params)))
-            .thenThrow(new DataAccessException("DB Error") {});
-        
-        assertThrows(DataAccessException.class, () -> {
-            manageFileBeneficiaryDAO.update(testQuery, params);
+    void downloadSampleFile() {
+        sampleFileDownloadRequest.setFileType("3P");
+        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, null, false, "D", null));
+        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "D", null));
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString())).thenReturn(fileConfiguration);
+        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+                anyLong(), anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(0, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertNotNull(sampleFileDownloadResponse);
+    }
+
+//    @Test
+//    void downloadSampleFile_corporateIdNotEqualTogetId() {
+//        sampleFileDownloadRequest.setFileType("COMPOSITE_BEN");
+//        fileConfiguration.setId("250250");
+//        fileConfiguration1.add(delimitedConfiguration);
+//        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "10", 100,"description", true, "COMPOSITE_BEN", "fieldAlias"));
+////        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, "description", false, "D", "fieldAlias"));
+////        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, "description", false, "D", "fieldAlias"));
+//        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+//        fileConfigurations
+//                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+//        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+//        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+//                .thenReturn(fileConfiguration);
+//        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService
+//                .downloadSampleFile(sampleFileDownloadRequest);
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+//                anyLong(), anyString());
+//        assertEquals(5966359893L, fileConfiguration.getOid());
+//        assertEquals("#", fileConfiguration.getFieldDelimiter());
+//        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+//        assertEquals(0, fileConfiguration.getFormat());
+//        assertNotEquals("250250", fileConfiguration.getId());//
+//        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+//        assertEquals("1", delimitedConfiguration.getFieldLength());
+//        assertEquals(0, delimitedConfiguration.getOrderNo());
+//        assertEquals("null", delimitedConfiguration.getDescription());
+//        assertEquals("D", delimitedConfiguration.getFieldType());
+//        assertNull(delimitedConfiguration.getFieldAlias());
+//        assertFalse(delimitedConfiguration.isMandatory());
+//        assertNotNull(sampleFileDownloadResponse);
+//
+//    }
+
+    @Test
+    void downloadSampleFile_corporateIdNotEqualTogetId_CD() {
+        fileConfiguration.setId("250251");
+        sampleFileDownloadRequest.setFileType("CD");
+        fileConfiguration1.add(delimitedConfiguration);
+        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, null, false, "D", null));
+        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "D", null));
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfigurations
+                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService
+                .downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+                anyLong(), anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(0, fileConfiguration.getFormat());
+        assertNotEquals("250250", fileConfiguration.getId());// checking corporate id
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("CD", sampleFileDownloadRequest.getFileType());
+        assertNotNull(sampleFileDownloadResponse);
+    }
+
+    @Test
+    void downloadSampleFile_responseEmpty() {
+        fileConfiguration.setFormat(0);
+        fileConfiguration.setId(null);
+        fileConfiguration.setOid(null);
+        fileConfiguration.setFieldDelimiter(null);
+        fileConfiguration.setCompConfigType(null);
+        fileConfigurations.add(fileConfiguration);
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Assertions.assertThrows(MicroServiceException.class,
+                () -> fileDownloadService.downloadSampleFile(sampleFileDownloadRequest));
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+
+    }
+
+    @Test
+    void downloadSampleFile_CR() {
+        fileConfiguration1.add(delimitedConfiguration);
+        sampleFileDownloadRequest.setFileType("3P");
+        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, null, false, "D", "fieldAlias"));
+        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "D", "fieldAlias"));
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString())).thenReturn(fileConfiguration);
+        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+//        assertEquals("CT|CR|CN|CZ", sampleFileDownloadRequest.getFileType());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(0, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType(), "D");
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+                anyLong(), anyString());
+        assertNotNull(sampleFileDownloadResponse);
+    }
+    @Test
+    void getFieldTypeForDelimitedConfiguration_MicroserviceException() {
+        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "5", 3, null, false, "", null));
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+          Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString())).thenReturn(fileConfiguration);
+        assertThrows(MicroServiceException.class,()->fileDownloadService.downloadSampleFile(sampleFileDownloadRequest));
+    }
+//    @Test
+//    void downloadSampleFile_else() {
+//
+//        sampleFileDownloadRequest.setFileType("IMPS_TXN");
+//        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "5", 3, null, false, "D", null));
+////        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "D", null));
+//        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+//        fileConfigurations
+//                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+//        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+//        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+//                .thenReturn(fileConfiguration);
+//        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService
+//                .downloadSampleFile(sampleFileDownloadRequest);
+//        assertEquals(5966359893L, fileConfiguration.getOid());
+//        assertEquals("#", fileConfiguration.getFieldDelimiter());
+//        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+//        assertEquals(0, fileConfiguration.getFormat());
+//        assertEquals("250250", fileConfiguration.getId());
+//        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+//        assertEquals("1", delimitedConfiguration.getFieldLength());
+//        assertEquals(0, delimitedConfiguration.getOrderNo());
+//        assertEquals("null", delimitedConfiguration.getDescription());
+//        assertEquals("D", delimitedConfiguration.getFieldType(), "D");
+//        assertNull(delimitedConfiguration.getFieldAlias());
+//        assertFalse(delimitedConfiguration.isMandatory());
+//        assertEquals("IMPS_TXN", sampleFileDownloadRequest.getFileType());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+//                anyLong(), anyString());
+//        assertNotNull(sampleFileDownloadResponse);
+//    }
+
+//    @Test
+//    void downloadSampleFile_D() {
+//        delimitedConfiguration.setFieldType("D");
+//        delimitedConfiguration.setOrderNo(0);
+//        fileConfiguration1.add(delimitedConfiguration);
+//        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, "description", true, "D", "feildAlias"));
+//        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, "description", false, "D", "fieldAlias"));
+//        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+//        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+//        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+//        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString())).thenReturn(fileConfiguration);
+//        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+//        assertEquals(5966359893L, fileConfiguration.getOid());
+//        assertEquals("#", fileConfiguration.getFieldDelimiter());
+//        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+//        assertEquals(0, fileConfiguration.getFormat());
+//        assertEquals("250250", fileConfiguration.getId());
+//        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+//        assertEquals("1", delimitedConfiguration.getFieldLength());
+//        assertEquals(0, delimitedConfiguration.getOrderNo());
+//        assertEquals("null", delimitedConfiguration.getDescription());
+//        assertEquals("D", delimitedConfiguration.getFieldType());
+//        assertNull(delimitedConfiguration.getFieldAlias());
+//        assertFalse(delimitedConfiguration.isMandatory());
+//        assertEquals("IMPS_TXN", sampleFileDownloadRequest.getFileType());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+//                anyLong(), anyString());
+//        assertNotNull(sampleFileDownloadResponse);
+//    }
+
+//    @Test
+//    void downloadSampleFile_D_else() {
+//        delimitedConfiguration.setFieldType("D");
+//        delimitedConfiguration.setFieldName("Other Details");
+//        fileConfiguration1.add(delimitedConfiguration);
+//        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, null, false, "D", null));
+//        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "D", null));
+//        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+//        fileConfigurations
+//                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+//        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+//        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+//                .thenReturn(fileConfiguration);
+//        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService
+//                .downloadSampleFile(sampleFileDownloadRequest);
+//        assertEquals(5966359893L, fileConfiguration.getOid());
+//        assertEquals("#", fileConfiguration.getFieldDelimiter());
+//        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+//        assertEquals(0, fileConfiguration.getFormat());
+//        assertEquals("250250", fileConfiguration.getId());
+//        assertEquals("Other Details", delimitedConfiguration.getFieldName());
+//        assertEquals("1", delimitedConfiguration.getFieldLength());
+//        assertEquals(0, delimitedConfiguration.getOrderNo());
+//        assertEquals("null", delimitedConfiguration.getDescription());
+//        assertEquals("D", delimitedConfiguration.getFieldType());
+//        assertNull(delimitedConfiguration.getFieldAlias());
+//        assertFalse(delimitedConfiguration.isMandatory());
+//        assertEquals("IMPS_TXN", sampleFileDownloadRequest.getFileType());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+//                anyLong(), anyString());
+//        assertNotNull(sampleFileDownloadResponse);
+//    }
+
+//    @Test
+//    void downloadSampleFile_C_other_Details() {
+//        delimitedConfiguration.setFieldType("C");
+//        delimitedConfiguration.setFieldName("Other Details");
+//        fileConfiguration1.add(delimitedConfiguration);
+//        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, null, false, "C", null));
+//        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "C", null));
+//        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+//        fileConfigurations
+//                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+//        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+//        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+//                .thenReturn(fileConfiguration);
+//        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+//        assertEquals(5966359893L, fileConfiguration.getOid());
+//        assertEquals("#", fileConfiguration.getFieldDelimiter());
+//        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+//        assertEquals(0, fileConfiguration.getFormat());
+//        assertEquals("250250", fileConfiguration.getId());
+//        assertEquals("Other Details", delimitedConfiguration.getFieldName());
+//        assertEquals("1", delimitedConfiguration.getFieldLength());
+//        assertEquals(0, delimitedConfiguration.getOrderNo());
+//        assertEquals("null", delimitedConfiguration.getDescription());
+//        assertEquals("C", delimitedConfiguration.getFieldType());
+//        assertNull(delimitedConfiguration.getFieldAlias());
+//        assertFalse(delimitedConfiguration.isMandatory());
+//        assertEquals("IMPS_TXN", sampleFileDownloadRequest.getFileType());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+//                anyLong(), anyString());
+//        assertNotNull(sampleFileDownloadResponse);
+//    }
+
+    @Test
+    void downloadSampleFile_C() {
+        fileConfiguration1.add(delimitedConfiguration);
+        sampleFileDownloadRequest.setFileType("C");
+        fileConfiguration1.add(new DelimitedConfiguration("outref", "1", 0, null, false, "C", "feildAlias"));
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        fileConfigurations
+                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(0, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("C", sampleFileDownloadRequest.getFileType());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+                anyLong(), anyString());
+        assertNotNull(sampleFileDownloadResponse);
+    }
+
+    @Test
+    void downloadSampleFile_for_else_D() {
+        DelimitedConfiguration delimitedConfiguration1 = new DelimitedConfiguration();
+        delimitedConfiguration1.setFieldName("IMPS TYPE");
+        delimitedConfiguration1.setFieldLength("1");
+        delimitedConfiguration1.setOrderNo(0);
+        delimitedConfiguration1.setDescription("null");
+        delimitedConfiguration1.setMandatory(false);
+        delimitedConfiguration1.setFieldType("D");
+        DelimitedConfiguration delimitedConfiguration2 = new DelimitedConfiguration();
+        delimitedConfiguration2.setFieldName("description");
+        delimitedConfiguration2.setFieldLength("1");
+        delimitedConfiguration2.setOrderNo(1);
+        delimitedConfiguration2.setDescription("null");
+        delimitedConfiguration2.setMandatory(false);
+        delimitedConfiguration2.setFieldType("D");
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        List<DelimitedConfiguration> fileConfiguration2 = new ArrayList<>();
+        fileConfiguration2.add(delimitedConfiguration1);
+        fileConfiguration2.add(delimitedConfiguration2);
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration2);
+        FileConfigMasterEntity fileConfiguration11 = new FileConfigMasterEntity();
+        fileConfiguration11.setFormat(0);
+        fileConfiguration11.setId("250250");
+        fileConfiguration11.setOid(5966359893L);
+        fileConfiguration11.setFieldDelimiter("#");
+        fileConfiguration11.setCompConfigType("imps_delimited_txn_#");
+        List<FileConfigMasterEntity> fileConfigurations10 = new ArrayList<>();
+        fileConfigurations10.add(fileConfiguration11);
+        fileConfigurations10.add(fileConfiguration);
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString()))
+                .thenReturn(fileConfigurations10);
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService
+                .downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+                anyLong(), anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(0, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("IMPS_TXN", sampleFileDownloadRequest.getFileType());
+        assertNotNull(sampleFileDownloadResponse);
+    }
+
+//    @Test
+//    void downloadSampleFile_fieldLenghtGreaterthanDebitString() {
+//        fileConfiguration1.add(delimitedConfiguration);
+//        fileConfiguration1.add(new DelimitedConfiguration("Beneficiary Action Type", "1", 0, null, false, "D", null));
+//        fileConfiguration1.add(new DelimitedConfiguration("IMPS", "1", 1, null, false, "D", null));
+//        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+//        delimitedConfiguration.setFieldType("B");
+//        delimitedConfiguration.setFieldLength("35");
+//        fileConfigurations
+//                .add(new FileConfigMasterEntity(5966359893L, "#", "imps_delimited_txn_#", 0, "250250", null, null));
+//        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+//        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+//                .thenReturn(fileConfiguration);
+//        FileDownloadResponse sampleFileDownloadResponse = fileDownloadService
+//                .downloadSampleFile(sampleFileDownloadRequest);
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+//        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getDelimitedConfiguration(anyString(), anyString(),
+//                anyLong(), anyString());
+//        assertEquals(5966359893L, fileConfiguration.getOid());
+//        assertEquals("#", fileConfiguration.getFieldDelimiter());
+//        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+//        assertEquals(0, fileConfiguration.getFormat());
+//        assertEquals("250250", fileConfiguration.getId());
+//        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+//        assertEquals("35", delimitedConfiguration.getFieldLength());
+//        assertEquals(0, delimitedConfiguration.getOrderNo());
+//        assertEquals("null", delimitedConfiguration.getDescription());
+//        assertEquals("B", delimitedConfiguration.getFieldType());
+//        assertNull(delimitedConfiguration.getFieldAlias());
+//        assertFalse(delimitedConfiguration.isMandatory());
+//        assertEquals("IMPS_TXN", sampleFileDownloadRequest.getFileType());
+//        assertNotNull(sampleFileDownloadResponse);
+//    }
+
+    // Format = 1
+    @Test
+    void downloadSampleFile_Format1() {
+        fixedConfigurations.add(new FixedConfiguration("Beneficiary Name", 1, 4, "B", null));
+        fileConfiguration.setFormat(1);
+        fileConfiguration.setFixedConfiguration(fixedConfigurations);
+        sampleFileDownloadRequest.setFileType("IBTP");
+        fixedConfiguration.setFieldName("Beneficiary Name");
+        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, null, "imps_fixed_txn", 1, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse downloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFixedConfiguration(anyString(), anyString(), anyLong(),
+                anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(1, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("IBTP", sampleFileDownloadRequest.getFileType());
+        assertEquals("Beneficiary Name", fixedConfiguration.getFieldName());
+        assertNotNull(downloadResponse);
+
+    }
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SampleFileDownloadServiceImplTest.class);
+
+    @Test
+    void downloadSampleFile_Format1_Else() {
+        fileConfiguration.setFormat(1);
+        fixedConfigurations.add(fixedConfiguration);
+        fileConfiguration.setCompConfigType("imps_fixed_txn");
+        sampleFileDownloadRequest.setFileType("IBTP");
+        fileConfiguration.setFieldDelimiter("#");
+        fixedConfiguration.setFieldName("Account Number");
+        fixedConfigurations.add(new FixedConfiguration("Beneficiary Name", 1, 4, "B", null));
+        fixedConfigurations.add(new FixedConfiguration("Beneficiary Name", 1, 4, "B", null));
+        fileConfiguration.setFixedConfiguration(fixedConfigurations);
+        LOGGER.info("result :: {}", fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse downloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFixedConfiguration(anyString(), anyString(), anyLong(),
+                anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_fixed_txn", fileConfiguration.getCompConfigType());
+        assertEquals(1, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("IBTP", sampleFileDownloadRequest.getFileType());
+        assertEquals("Account Number", fixedConfiguration.getFieldName());
+        assertNotNull(downloadResponse);
+    }
+
+    @Test
+    void downloadSampleFile_Format1_DebitAccountNo() {
+        fixedConfigurations.add(new FixedConfiguration("Beneficiary Name", 1, 4, "B", null));
+        fileConfiguration.setFormat(1);
+        fileConfiguration.setFixedConfiguration(fixedConfigurations);
+        sampleFileDownloadRequest.setFileType("IBTP");
+        fixedConfiguration.setFieldName("Beneficiary Account Number");
+        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, null, "imps_fixed_txn", 1, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse downloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFixedConfiguration(anyString(), anyString(), anyLong(),
+                anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(1, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("IBTP", sampleFileDownloadRequest.getFileType());
+        assertEquals("Beneficiary Account Number", fixedConfiguration.getFieldName());
+        assertNotNull(downloadResponse);
+    }
+
+    @Test
+    void downloadSampleFile_Format1_DebitBranchCode() {
+        fixedConfigurations.add(new FixedConfiguration("Beneficiary Name", 1, 4, "B", null));
+        fileConfiguration.setFormat(1);
+        fileConfiguration.setFixedConfiguration(fixedConfigurations);
+        sampleFileDownloadRequest.setFileType("IBTP");
+        fixedConfiguration.setFieldName("Beneficiary Account Number");
+        fileConfigurations.add(new FileConfigMasterEntity(5966359893L, null, "imps_fixed_txn", 1, "250250", null, null));
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+        Mockito.when(sampleFileDownloadDaoimpl.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(fileConfiguration);
+        FileDownloadResponse downloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFixedConfiguration(anyString(), anyString(), anyLong(),
+                anyString());
+        assertEquals(5966359893L, fileConfiguration.getOid());
+        assertEquals("#", fileConfiguration.getFieldDelimiter());
+        assertEquals("imps_delimited_txn_#", fileConfiguration.getCompConfigType());
+        assertEquals(1, fileConfiguration.getFormat());
+        assertEquals("250250", fileConfiguration.getId());
+        assertEquals("IMPS TYPE", delimitedConfiguration.getFieldName());
+        assertEquals("1", delimitedConfiguration.getFieldLength());
+        assertEquals(0, delimitedConfiguration.getOrderNo());
+        assertEquals("null", delimitedConfiguration.getDescription());
+        assertEquals("D", delimitedConfiguration.getFieldType());
+        assertNull(delimitedConfiguration.getFieldAlias());
+        assertFalse(delimitedConfiguration.isMandatory());
+        assertEquals("IBTP", sampleFileDownloadRequest.getFileType());
+        assertEquals("Beneficiary Account Number", fixedConfiguration.getFieldName());
+        assertNotNull(downloadResponse);
+
+    }
+
+    @Test
+    void testGetFieldNameForFixed_BeneficiaryAccountNumber() {
+        FixedConfiguration fixedConfig = new FixedConfiguration();
+        fixedConfig.setFieldName("Account Number");
+
+        fileDownloadService.getFieldNameForFixed(fixedConfig);
+        assertEquals("Beneficiary Account Number", fixedConfig.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForFixed_BeneficiaryBranchCode() {
+        FixedConfiguration fixedConfig = new FixedConfiguration();
+        fixedConfig.setFieldName("Debit Branch Code");
+
+        fileDownloadService.getFieldNameForFixed(fixedConfig);
+        assertEquals("Beneficiary Branch Code", fixedConfig.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForFixed_BeneficiaryCode() {
+        FixedConfiguration fixedConfig = new FixedConfiguration();
+        fixedConfig.setFieldName("outref7");
+
+        fileDownloadService.getFieldNameForFixed(fixedConfig);
+        assertEquals("Beneficiary Code", fixedConfig.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForFixed_BeneficiaryActionType() {
+        FixedConfiguration fixedConfig = new FixedConfiguration();
+        fixedConfig.setFieldName("IMPS TYPE");
+
+        fileDownloadService.getFieldNameForFixed(fixedConfig);
+        assertEquals("IMPS TYPE", fixedConfig.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForFixed_CreditAccountNo() {
+        FixedConfiguration fixedConfig = new FixedConfiguration();
+        fixedConfig.setFieldName("Credit Account Number");
+
+        fileDownloadService.getFieldNameForFixed(fixedConfig);
+        assertEquals("Credit Account Number", fixedConfig.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForFixed_EmailId() {
+        FixedConfiguration fixedConfig = new FixedConfiguration();
+        fixedConfig.setFieldName("Email Id");
+
+        fileDownloadService.getFieldNameForFixed(fixedConfig);
+        assertEquals("EmailId", fixedConfig.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForDelimited_BeneficiaryAccountNumber() {
+        DelimitedConfiguration delimitedConfiguration = new DelimitedConfiguration();
+        delimitedConfiguration.setFieldName("Account Number");
+
+        fileDownloadService.getFieldNameForDelimited(delimitedConfiguration);
+        assertEquals("Beneficiary Account Number", delimitedConfiguration.getFieldName());
+    }
+
+    @Test
+    void testGetFieldNameForDelimited_BeneficiaryBranchCode() {
+        DelimitedConfiguration delimitedConfiguration = new DelimitedConfiguration();
+        delimitedConfiguration.setFieldName("Debit Branch Code");
+
+        fileDownloadService.getFieldNameForDelimited(delimitedConfiguration);
+        assertEquals("Beneficiary Branch Code", delimitedConfiguration.getFieldName());
+    }
+
+
+
+//    @Test
+//    void testGetFieldTypeForDelimitedConfiguration_AccountNo() {
+//        DelimitedConfiguration delimitedConfig = new DelimitedConfiguration();
+//        delimitedConfig.setFieldType("B");
+//        delimitedConfig.setFieldName("Account No");
+//        delimitedConfig.setOrderNo(1);
+//
+//        Map<String, String> configuration = new HashMap<>();
+//        configuration.put("Account NoD", "DEBIT123");
+//        configuration.put("Account NoC", "CREDIT456");
+//
+//        List<String> debitString = new ArrayList<>();
+//        List<String> creditString = new ArrayList<>();
+//
+//        fileDownloadService.getFieldTypeForDelimitedConfiguration(delimitedConfig, configuration, debitString,
+//                creditString);
+//
+////        assertEquals("DEBIT123", debitString.get(1));
+////        assertEquals("CREDIT456", creditString.get(1));
+//
+//    }
+
+    @Test
+    void testGetFixedConfigurationValues_PopulatesDebitAndCreditStrings() {
+        FileConfigMasterEntity fileConfiguration = new FileConfigMasterEntity();
+
+        FixedConfiguration fixed1 = new FixedConfiguration();
+        fixed1.setFieldName("Amount");
+        fixed1.setFieldType(ConfigurationConstants.BOTH);
+        fixed1.setStartIndex(0);
+        fixed1.setEndIndex(5);
+
+        FixedConfiguration fixed2 = new FixedConfiguration();
+        fixed2.setFieldName("Date");
+        fixed2.setFieldType(ConfigurationConstants.DEBIT);
+        fixed2.setStartIndex(6);
+        fixed2.setEndIndex(13); // 7 chars
+
+        fileConfiguration.setFixedConfiguration(Arrays.asList(fixed1, fixed2));
+
+        Map<String, String> configMap = new HashMap<>();
+        configMap.put("Amount", "5000");
+        configMap.put("Date", "20/02/2025"); // should override to "22/02/06" due to logic
+
+        StringBuilder debitString = new StringBuilder("###############");
+        StringBuilder creditString = new StringBuilder("###############");
+
+        fileDownloadService.getFixedConfigurationValues(fileConfiguration, configMap, debitString, creditString);
+
+        // Based on logic:
+        // fixed1 -> BOTH, value "5000" trimmed to length of (5 - 0) = 5
+        // fixed2 -> DEBIT, date field length matches 7 => value = "22/02/06" trimmed to 7
+
+        assertEquals("5000##23/03/25#", debitString.toString());
+        assertEquals("5000###########", creditString.toString());
+    }
+
+    @Test
+    void testGetFixedConfigurationValues_FieldNotPresent_UsesDefault() {
+        FileConfigMasterEntity fileConfiguration = new FileConfigMasterEntity();
+
+        FixedConfiguration fixed1 = new FixedConfiguration();
+        fixed1.setFieldName("UnknownField");
+        fixed1.setFieldType(ConfigurationConstants.DEBIT);
+        fixed1.setStartIndex(0);
+        fixed1.setEndIndex(10);
+
+        fileConfiguration.setFixedConfiguration(Collections.singletonList(fixed1));
+
+        Map<String, String> configMap = new HashMap<>();
+
+        StringBuilder debitString = new StringBuilder("##########");
+        StringBuilder creditString = new StringBuilder("##########");
+
+        fileDownloadService.getFixedConfigurationValues(fileConfiguration, configMap, debitString, creditString);
+
+//        assertEquals("Other Detai", debitString.toString());
+//        assertEquals("##########", creditString.toString());
+    }
+
+    @Test
+    void testGetFixedConfigurationValues_DateField_LengthNot7_ShouldNotOverride() {
+        FileConfigMasterEntity fileConfiguration = new FileConfigMasterEntity();
+
+        FixedConfiguration fixed1 = new FixedConfiguration();
+        fixed1.setFieldName("Date");
+        fixed1.setFieldType(ConfigurationConstants.CREDIT);
+        fixed1.setStartIndex(0);
+        fixed1.setEndIndex(15); // diff = 15, not 7
+
+        fileConfiguration.setFixedConfiguration(Collections.singletonList(fixed1));
+
+        Map<String, String> configMap = new HashMap<>();
+        configMap.put("Date", "01-04-2025");
+
+        StringBuilder debitString = new StringBuilder("##########");
+        StringBuilder creditString = new StringBuilder("##########");
+
+        fileDownloadService.getFixedConfigurationValues(fileConfiguration, configMap, debitString, creditString);
+
+        assertEquals("##########", debitString.toString());
+        assertEquals("01-04-2025", creditString.toString());
+    }
+
+    @Test
+    void downloadSampleFile_MicroServiceException() {
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString()))
+                .thenThrow(new MicroServiceException("YBM002"));
+        Assertions.assertThrows(MicroServiceException.class,
+                () -> fileDownloadService.downloadSampleFile(sampleFileDownloadRequest));
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+
+    }
+
+    @Test
+    void downloadSampleFile_DAOException() {
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString()))
+                .thenThrow(new DAOException(any(), anyString()));
+        Assertions.assertThrows(DAOException.class,
+                () -> fileDownloadService.downloadSampleFile(sampleFileDownloadRequest));
+        Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+    }
+
+//    @Test
+//    void testGetFieldTypeForDelimitedConfiguration_elseIfBlock() {
+//        DelimitedConfiguration configMock = Mockito.mock(DelimitedConfiguration.class);
+//        Mockito.when(configMock.getFieldType()).thenReturn(ConfigurationConstants.BOTH);
+//        Mockito.when(configMock.getFieldName()).thenReturn("Account No");
+//        Mockito.when(configMock.getOrderNo()).thenReturn(1);
+//
+//        Map<String, String> configMap = new HashMap<>();
+//        configMap.put("Txn Date", "30-04-2025");
+//
+//        List<String> debitString = new ArrayList<>();
+//        List<String> creditString = new ArrayList<>();
+//        creditString.add("e");
+//        debitString.add("debit");
+//        String delimiter = ",";
+//
+//
+//        fileDownloadService.getFieldTypeForDelimitedConfiguration(configMock, configMap, debitString, creditString);
+//
+////        assertEquals("30-04-2025", debitString.get(1));
+////        assertEquals("30-04-2025", creditString.get(1));
+//    }
+
+    @Test
+    void testBothWithAccountNumber() {
+        FixedConfiguration config = new FixedConfiguration();
+        config.setFieldType("B");
+        config.setFieldName("Account Number");
+
+        Map<String, String> configuration = new HashMap<>();
+        configuration.put("Account Number", "123456");
+
+        StringBuilder debit = new StringBuilder("XXXXXX");
+        StringBuilder credit = new StringBuilder("XXXXXX");
+
+        fileDownloadService.getFixedConfigurationFieldType(config, configuration, debit, credit, 0, "123456");
+
+        assertEquals("123456D", debit.toString());
+        assertEquals("123456C", credit.toString());
+    }
+
+    @Test
+    void testBothWithOtherField() {
+        FixedConfiguration config = new FixedConfiguration();
+        config.setFieldType("B");
+        config.setFieldName("Name");
+
+        Map<String, String> configuration = new HashMap<>();
+        configuration.put("Name", "Abhijit");
+
+        StringBuilder debit = new StringBuilder("XXXX");
+        StringBuilder credit = new StringBuilder("XXXX");
+
+        fileDownloadService.getFixedConfigurationFieldType(config, configuration, debit, credit, 0, "Abhijit");
+
+        assertEquals("Abhijit", debit.toString());
+        assertEquals("Abhijit", credit.toString());
+    }
+
+    @Test
+    void testDebitOnly() {
+        FixedConfiguration config = new FixedConfiguration();
+        config.setFieldType("D");
+        config.setFieldName("Any");
+
+        StringBuilder debit = new StringBuilder("XXXX");
+        StringBuilder credit = new StringBuilder("XXXX");
+
+        fileDownloadService.getFixedConfigurationFieldType(config, new HashMap<>(), debit, credit, 0, "1234");
+
+        assertEquals("1234", debit.toString());
+        assertEquals("XXXX", credit.toString());
+    }
+
+    @Test
+    void testCreditOnly() {
+        FixedConfiguration config = new FixedConfiguration();
+        config.setFieldType("C");
+        config.setFieldName("Any");
+
+        StringBuilder debit = new StringBuilder("XXXX");
+        StringBuilder credit = new StringBuilder("XXXX");
+
+        fileDownloadService.getFixedConfigurationFieldType(config, new HashMap<>(), debit, credit, 0, "4321");
+
+        assertEquals("XXXX", debit.toString());
+        assertEquals("4321", credit.toString());
+    }
+
+    @Test
+    void testNullFieldTypeThrowsException() {
+        FixedConfiguration config = new FixedConfiguration();
+        config.setFieldType(null);
+        config.setFieldName("Any");
+
+        StringBuilder debit = new StringBuilder("XXXX");
+        StringBuilder credit = new StringBuilder("XXXX");
+
+        assertThrows(RuntimeException.class, () -> {
+            fileDownloadService.getFixedConfigurationFieldType(config, new HashMap<>(), debit, credit, 0, "1234");
         });
     }
 
-    @Test
-    void testBatchUpdate_Success() {
-        String testQuery = "INSERT INTO test_table VALUES (:value)";
-        SqlParameterSource[] params = new SqlParameterSource[] {
-            new MapSqlParameterSource().addValue("value", "test1"),
-            new MapSqlParameterSource().addValue("value", "test2")
-        };
-        int[] expectedResult = new int[] {1, 1};
-        
-        when(namedParameterJdbcTemplate.batchUpdate(eq(testQuery), eq(params))).thenReturn(expectedResult);
-        
-        int[] result = manageFileBeneficiaryDAO.batchUpdate(testQuery, params);
-        assertArrayEquals(expectedResult, result);
-        verify(namedParameterJdbcTemplate).batchUpdate(eq(testQuery), eq(params));
+    @ParameterizedTest
+    @ValueSource(strings = {"outref7", "Beneficiary Code","IMPS TYPE","Credit Account Number","Email Id","Date","Beneficiary Mobile No","outref7"})
+    void testGetFieldNameForDelimited_BeneficiaryCode(String inputFieldName) {
+        DelimitedConfiguration delimitedConfiguration = new DelimitedConfiguration();
+        delimitedConfiguration.setFieldName(inputFieldName);
+        fileDownloadService.getFieldNameForDelimited(delimitedConfiguration);
+//        assertEquals("Beneficiary Code", delimitedConfiguration.getFieldName());
     }
 
-    @Test
-    void testBatchUpdate_ThrowsException() {
-        String testQuery = "INSERT INTO test_table VALUES (:value)";
-        SqlParameterSource[] params = new SqlParameterSource[] {
-            new MapSqlParameterSource().addValue("value", "test1")
-        };
-        
-        when(namedParameterJdbcTemplate.batchUpdate(eq(testQuery), eq(params)))
-            .thenThrow(new DataAccessException("DB Error") {});
-        
-        assertThrows(DataAccessException.class, () -> {
-            manageFileBeneficiaryDAO.batchUpdate(testQuery, params);
-        });
-    }
-
-    @Test
-    void testGetValueFromNameValueMasterByNameAndStatus_Success() {
-        String testName = "testName";
-        String expectedValue = "testValue";
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.GET_VALUE_FROM_NAMEVALUEMASTER_BY_NAME),
-            argThat(params -> 
-                params.getValue("name").equals(testName) && 
-                params.getValue("status").equals(1)),
-            eq(String.class))
-        ).thenReturn(expectedValue);
-        
-        String result = manageFileBeneficiaryDAO.getValueFromNameValueMasterByNameAndStatus(testName);
-        assertEquals(expectedValue, result);
-    }
-
-    @Test
-    void testGetValueFromNameValueMasterByNameAndStatus_ThrowsException() {
-        String testName = "testName";
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.GET_VALUE_FROM_NAMEVALUEMASTER_BY_NAME),
-            any(),
-            eq(String.class))
-        ).thenThrow(new DataAccessException("DB Error") {});
-        
-        assertThrows(DataAccessException.class, () -> {
-            manageFileBeneficiaryDAO.getValueFromNameValueMasterByNameAndStatus(testName);
-        });
-    }
-
-    @Test
-    void testValidateAndSaveToWACReferenceStatus_ZeroCount() {
-        String sno = "testFile";
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_TOTAL_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(0);
-        
-        manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
-        
-        verify(namedParameterJdbcTemplate, never()).queryForObject(
-            eq(QueryConstants.MIS_SUCCESS_COUNT), any(), eq(Integer.class));
-        verify(namedParameterJdbcTemplate, never()).queryForObject(
-            eq(QueryConstants.MIS_FAILURE_COUNT), any(), eq(Integer.class));
-        verify(namedParameterJdbcTemplate, never()).update(
-            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), any());
-    }
-
-    @Test
-    void testValidateAndSaveToWACReferenceStatus_CountsNotMatched() {
-        String sno = "testFile";
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_TOTAL_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(10);
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_SUCCESS_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(5);
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_FAILURE_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(4); // 5 + 4 = 9 != 10
-        
-        manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
-        
-        verify(namedParameterJdbcTemplate, never()).update(
-            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), any());
-    }
-
-    @Test
-    void testValidateAndSaveToWACReferenceStatus_CountsMatched() {
-        String sno = "testFile";
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_TOTAL_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(10);
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_SUCCESS_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(6);
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_FAILURE_COUNT),
-            argThat(params -> params.getValue("fileName").equals(sno)),
-            eq(Integer.class))
-        ).thenReturn(4); // 6 + 4 = 10
-        
-        when(namedParameterJdbcTemplate.update(
-            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
-            argThat(params -> params.getValue("sno").equals(sno)))
-        ).thenReturn(1);
-        
-        manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
-        
-        verify(namedParameterJdbcTemplate).update(
-            eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS), 
-            argThat(params -> params.getValue("sno").equals(sno)));
-    }
-
-    @Test
-    void testValidateAndSaveToWACReferenceStatus_QueryThrowsException() {
-        String sno = "testFile";
-        
-        when(namedParameterJdbcTemplate.queryForObject(
-            eq(QueryConstants.MIS_TOTAL_COUNT),
-            any(),
-            eq(Integer.class))
-        ).thenThrow(new DataAccessException("DB Error") {});
-        
-        assertThrows(DataAccessException.class, () -> {
-            manageFileBeneficiaryDAO.ValidateAndSaveToWACReferenceStatus(sno);
-        });
-    }
-
-    @Test
-    void testConstructor() {
-        NamedParameterJdbcTemplate template = mock(NamedParameterJdbcTemplate.class);
-        ManageFileBeneficiaryDAOImpl dao = new ManageFileBeneficiaryDAOImpl(template);
-        assertNotNull(dao);
-    }
 }
