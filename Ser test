@@ -1,27 +1,49 @@
-public List<String> getResultForComposite(List<DelimitedConfiguration> delimitedConfigurationList, FileConfigMasterEntity response,
-                                            List<String> debitString) {
-    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODBEGIN);
-    List<Map<String, String>> configuration = getCompositeBen();
-    List<String> debit = new ArrayList<>();
-    configuration.forEach(configMap -> {
-      for (int i = 0; i < delimitedConfigurationList.size(); i++) {
-        DelimitedConfiguration delimitedFileConfiguration = response.getDelimitedConfiguration().get(i);
-        if (Optional.ofNullable(configMap.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
-          debitString.set(delimitedFileConfiguration.getOrderNo(), configMap.get(delimitedFileConfiguration.getFieldName().trim()));
-        } else {
-          debitString.set(delimitedFileConfiguration.getOrderNo(), "");
-        }
-        if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
-          if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
-            debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
-          } else {
-            debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
-          }
-        }
-        debit.add(debitString.get(i));
-      }
-    });
-    LOGGER.info("Result :: {}", debit);
-    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODEND);
-    return debit;
-  }
+package com.sbi.yb.cinb.service.impl;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.when;
+
+import com.sbi.yb.cinb.constants.ConfigurationConstants;
+import com.sbi.yb.cinb.model.ActualFileDownloadRequest;
+import com.sbi.yb.cinb.model.FileMasterEntity;
+import com.sbi.yb.exception.MicroServiceException;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+@ExtendWith(MockitoExtension.class)
+class ActualFileDownloadServiceImplTest {
+
+    @Mock
+    private ActualFileDownloadDao actualFileDownloadDao;
+
+    @InjectMocks
+    private ActualFileDownloadServiceImpl service;
+
+    @Test
+    void downloadActualFile_WhenIOExceptionOccurs_ThrowsMicroServiceException() {
+        // Setup request
+        ActualFileDownloadRequest request = new ActualFileDownloadRequest();
+        request.setFileReferenceNo("123");
+        request.setFileExtension("txt");
+
+        // Mock DAO response
+        FileMasterEntity mockEntity = new FileMasterEntity();
+        mockEntity.setSno("123");
+        mockEntity.setFileType(ConfigurationConstants.COMPOSITE_BEN);
+        when(actualFileDownloadDao.getFileDetails(request)).thenReturn(mockEntity);
+
+        // Inject invalid file path to force IOException
+        ReflectionTestUtils.setField(service, "compositeFilePath", "/invalid/path/");
+
+        // Execute and verify exception
+        MicroServiceException exception = assertThrows(MicroServiceException.class,
+            () -> service.downloadActualFile(request));
+
+        assertEquals("YBMFC008", exception.getErrorCode());
+        assertEquals("Error while downloading actual file", exception.getErrorMessage());
+    }
+}
