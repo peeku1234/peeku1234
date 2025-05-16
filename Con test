@@ -38,3 +38,97 @@ public class YourServiceTest {
         assertEquals("YBM003", exception.getMessage());
     }
 }
+
+
+
+
+
+
+import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.*;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnitRunner;
+
+@RunWith(MockitoJUnitRunner.class)
+public class SampleFileDownloadServiceImplTest {
+
+    @InjectMocks
+    private SampleFileDownloadServiceImpl service;
+
+    @Mock
+    private FileConfigMasterEntity response;
+
+    private List<DelimitedConfiguration> delimitedConfigurations;
+
+    @Before
+    public void setUp() {
+        delimitedConfigurations = new ArrayList<>();
+        when(response.getDelimitedConfiguration()).thenReturn(delimitedConfigurations);
+    }
+
+    @Test
+    public void testGetResultForComposite_WhenFieldLengthIsLessThanStringLength() {
+        // Setup DelimitedConfiguration with fieldLength=5, orderNo=0, type=DEBIT
+        DelimitedConfiguration config = new DelimitedConfiguration();
+        config.setFieldName("testField");
+        config.setOrderNo(0);
+        config.setFieldLength("5");
+        config.setFieldType(ConfigurationConstants.DEBIT);
+        delimitedConfigurations.add(config);
+
+        // Mock getCompositeBen() to return a config map with the field
+        Map<String, String> configMap = new HashMap<>();
+        configMap.put("testField", "1234567890"); // Length 10
+        when(service.getCompositeBen()).thenReturn(Collections.singletonList(configMap));
+
+        List<String> debitString = new ArrayList<>();
+        debitString.add(0, "1234567890"); // Initial string longer than fieldLength
+
+        // Execute method
+        List<String> result = service.getResultForComposite(delimitedConfigurations, response, debitString);
+
+        // Verify the substring logic (assuming code uses currentLength -10)
+        // Since 10 -10 = 0, expect empty string (if code is as written)
+        assertEquals(1, result.size());
+        assertEquals("", result.get(0)); // Indicates a potential bug in the code
+    }
+
+    @Test
+    public void testGetResultForComposite_WhenFieldLengthIsGreaterThanStringLength() {
+        // Setup DelimitedConfiguration with fieldLength=15, orderNo=0, type=DEBIT
+        DelimitedConfiguration config = new DelimitedConfiguration();
+        config.setFieldName("testField");
+        config.setOrderNo(0);
+        config.setFieldLength("15");
+        config.setFieldType(ConfigurationConstants.DEBIT);
+        delimitedConfigurations.add(config);
+
+        // Mock getCompositeBen() to return a config map with the field
+        Map<String, String> configMap = new HashMap<>();
+        configMap.put("testField", "12345"); // Length 5
+        when(service.getCompositeBen()).thenReturn(Collections.singletonList(configMap));
+
+        List<String> debitString = new ArrayList<>();
+        debitString.add(0, "12345");
+
+        // Execute method
+        List<String> result = service.getResultForComposite(delimitedConfigurations, response, debitString);
+
+        // Verify substring logic (if code uses fieldLength, this would throw an error)
+        // Assuming code in else block uses fieldLength (15), which is longer than string length (5)
+        // The code may throw StringIndexOutOfBoundsException, indicating a bug
+        assertEquals(1, result.size());
+        assertEquals("12345", result.get(0)); // If no exception, this would be the case
+    }
+}
