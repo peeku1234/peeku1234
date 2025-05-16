@@ -1,104 +1,21 @@
-package com.sbi.yb.cinb.service.impl;
+if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
+          if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
+            debitString.add(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
+          } else {
+            debitString.add(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
+          }
 
-import com.sbi.yb.cinb.constants.ConfigurationConstants;
-import com.sbi.yb.cinb.model.ActualFileDownloadRequest;
-import com.sbi.yb.cinb.model.FileDownloadResponse;
-import com.sbi.yb.cinb.model.FileMasterEntity;
-import com.sbi.yb.cinb.repository.ActualFileDownloadDao;
-import com.sbi.yb.cinb.service.ActualFileDownloadService;
-import com.sbi.yb.constants.LoggingConstants;
-import com.sbi.yb.exception.MicroServiceException;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.util.Base64;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
-import org.springframework.stereotype.Service;
+@Test
+    void downloadSampleFile_CompositeBeneficiary_fieldTypeD() {
+        sampleFileDownloadRequest.setFileType(ConfigurationConstants.COMPOSITE_BEN);
+        delimitedConfiguration.setFieldType(ConfigurationConstants.BOTH);
+//        delimitedConfiguration.setOrderNo(0);
+//        delimitedConfiguration.setFieldLength("10");
+        fileConfiguration1.add(delimitedConfiguration);
+        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
+        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(Collections.singletonList(fileConfiguration));
+        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString())).thenReturn(fileConfiguration);
+        FileDownloadResponse response = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+        assertNotNull(response);
 
-/**
- * ServiceImpl for BeneficiaryFileDownload.
- *
- * @author V1018111
- */
-@Service
-public class ActualFileDownloadServiceImpl implements ActualFileDownloadService {
-
-  private static final Logger LOGGER = LoggerFactory.getLogger(ActualFileDownloadServiceImpl.class);
-  private final ActualFileDownloadDao actualFileDownloadDao;
-
-  /**
-   * ServiceImpl Constructor.
-   *
-   * @param actualFileDownloadDao actualFileDownloadDao
-   */
-  @Autowired
-  public ActualFileDownloadServiceImpl(ActualFileDownloadDao actualFileDownloadDao) {
-    this.actualFileDownloadDao = actualFileDownloadDao;
-  }
-
-  /**
-   * Getting ActualFileDownload with encoded data.
-   */
-  @Value("${path.NON_COMPOSITE}")
-  private String nonCompositeFilePath;
-  @Value("${path.COMPOSITE}")
-  private String compositeFilePath;
-  @Value("${FILE_EXT_TXT}")
-  private String fileExtensionTxt;
-  @Value("${FILE_EXT_XML}")
-  private String fileExtensionXml;
-
-  /**
-   * Downloading actual file.
-   *
-   * @param actualFileDownloadRequest from user
-   * @return actualFileDownload response
-   */
-  @Override
-  public FileDownloadResponse downloadActualFile(ActualFileDownloadRequest actualFileDownloadRequest) {
-    LOGGER.info("downloadActualFile :: {}", LoggingConstants.METHODBEGIN);
-    File downloadFile;
-    byte[] byteData;
-    String encodeData;
-    FileMasterEntity actualFileConfiguration;
-    String fileReferenceNo = actualFileDownloadRequest.getFileReferenceNo();
-    String fileExtension = actualFileDownloadRequest.getFileExtension();
-    FileDownloadResponse fileDownloadResponse = new FileDownloadResponse();
-    try {
-      actualFileConfiguration = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
-      if (actualFileConfiguration.getSno().equalsIgnoreCase(fileReferenceNo)) {
-        String fileType = actualFileConfiguration.getFileType();
-        String fileName = fileReferenceNo + ".xml";
-        LOGGER.info("FileType :: {}", fileType);
-        String filePath = fileType.equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN) ? compositeFilePath : nonCompositeFilePath;
-        LOGGER.info("FilePath :: {}", filePath);
-        downloadFile = new File(filePath + fileName);
-        if (fileExtension.equalsIgnoreCase("txt")) {
-          fileName = fileReferenceNo + "." + fileExtensionTxt;
-          fileDownloadResponse.setFileName(fileName);
-          fileDownloadResponse.setContentType(String.valueOf(MediaType.TEXT_PLAIN));
-        } else {
-          fileName = fileReferenceNo + "." + fileExtensionXml;
-          fileDownloadResponse.setFileName(fileName);
-          fileDownloadResponse.setContentType(String.valueOf(MediaType.TEXT_XML));
-        }
-        try (FileInputStream inputStream = new FileInputStream(downloadFile.toString())) {
-          byteData = inputStream.readAllBytes();
-        }
-        encodeData = Base64.getEncoder().encodeToString(byteData);
-        LOGGER.info("Encoded the actual file of file Configuration {}", encodeData);
-        fileDownloadResponse.setFileContent(encodeData);
-      }
-    } catch (IOException ioException) {
-      LOGGER.error("Error while downloading actual file :: {}", ioException.getMessage());
-      MicroServiceException.throwException(ConfigurationConstants.YBMFC008);
     }
-    LOGGER.info("downloadActualFile :: {}", LoggingConstants.METHODEND);
-    return fileDownloadResponse;
-  }
-
-}
