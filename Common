@@ -1,1 +1,295 @@
+package com.sbi.microservice.framework.services;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.model.UserProfile;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+
+@ExtendWith(MockitoExtension.class)
+class CorporateValidatorTest {
+
+    @Mock
+    private APIBankingService apiBankingService;
+
+    @Mock
+    private UserService userService;
+
+    @Mock
+    private CorporateService corporateService;
+
+    @Mock
+    private Logger logger;
+
+    @InjectMocks
+    private CorporateValidator corporateValidator;
+
+    private Map<String, Object> channelDataMap;
+    private UserProfile userProfile;
+
+    @BeforeEach
+    void setUp() {
+        channelDataMap = new HashMap<>();
+        userProfile = mock(UserProfile.class);
+    }
+
+    @Test
+    void testValidateData_CorporateAliasNull() {
+        channelDataMap.put("corporateAlias", null);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("Corporate ID is not present in request body eventhough the channel is Corporate. Flow aborted.");
+    }
+
+    @Test
+    void testValidateData_CorporateAliasEmpty() {
+        channelDataMap.put("corporateAlias", "");
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("Corporate ID is not present in request body eventhough the channel is Corporate. Flow aborted.");
+    }
+
+    @Test
+    void testValidateData_CorporateAliasInvalidFormat() {
+        channelDataMap.put("corporateAlias", "ABC123");
+        channelDataMap.put("corpIdFromHeader", "123");
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("INVALID CORPORATE ALIAS");
+    }
+
+    @Test
+    void testValidateData_CorpDetailsNull() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(null);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("invalid corporate alias :12345 .Flow aborted.");
+    }
+
+    @Test
+    void testValidateData_CorpIdNullInDetails() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("active", "Y");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("invalid corporate alias :12345 .Flow aborted.");
+    }
+
+    @Test
+    void testValidateData_CorpIdNotMatchingHeader() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "54321");
+        channelDataMap.put("userProfile", userProfile);
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("apicTokenCorpId 54321 and corpId 12345 from payload are not equal");
+    }
+
+    @Test
+    void testValidateData_CorporateInactive() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "N");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("corporateAlias is inactive");
+    }
+
+    @Test
+    void testValidateData_UserRole4() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "N");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(4);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("Given corporateAlias is not direct corporate");
+    }
+
+    @Test
+    void testValidateData_IsSaralY() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "Y");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(3); // Not role 4
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("User role is not 4, but isSaral is Y, Given corporateAlias is not direct corporate");
+    }
+
+    @Test
+    void testValidateData_CorpStatusInactive() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "N");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(3); // Not role 4
+        when(apiBankingService.checkCorpStatus("12345")).thenReturn(false);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("invalid corporate ID. Flow aborted. corporate id may not be in active state in cnbccorp_corporate_profile");
+    }
+
+    @Test
+    void testValidateData_CorporateOnboardDetailNull() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "N");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(3);
+        when(apiBankingService.checkCorpStatus("12345")).thenReturn(true);
+        when(apiBankingService.getCorporateOnboardDetail("12345")).thenReturn(null);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("invalid corporate alias :12345 .Flow aborted.");
+    }
+
+    @Test
+    void testValidateData_CorporateHasAggregatorID() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "N");
+        
+        Map<String, String> onboardDetails = new HashMap<>();
+        onboardDetails.put("aggregatorID", "AGG123");
+        onboardDetails.put("status", "APPROVED");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(3);
+        when(apiBankingService.checkCorpStatus("12345")).thenReturn(true);
+        when(apiBankingService.getCorporateOnboardDetail("12345")).thenReturn(onboardDetails);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("Given corporateAlias is not direct corporate");
+    }
+
+    @Test
+    void testValidateData_CorporateNotApproved() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "N");
+        
+        Map<String, String> onboardDetails = new HashMap<>();
+        onboardDetails.put("status", "PENDING");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(3);
+        when(apiBankingService.checkCorpStatus("12345")).thenReturn(true);
+        when(apiBankingService.getCorporateOnboardDetail("12345")).thenReturn(onboardDetails);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("Given corporateAlias is not onboarded");
+    }
+
+    @Test
+    void testValidateData_ValidCorporate() {
+        channelDataMap.put("corporateAlias", "12345");
+        channelDataMap.put("corpIdFromHeader", "12345");
+        channelDataMap.put("userProfile", userProfile);
+        channelDataMap.put("aggregatorID", "AGG123");
+        
+        Map<String, String> corpDetails = new HashMap<>();
+        corpDetails.put("corpId", "12345");
+        corpDetails.put("active", "Y");
+        corpDetails.put("isSaral", "N");
+        
+        Map<String, String> onboardDetails = new HashMap<>();
+        onboardDetails.put("status", "APPROVED");
+        
+        when(apiBankingService.validateCorpID("12345")).thenReturn(corpDetails);
+        when(userProfile.userRole()).thenReturn(3);
+        when(apiBankingService.checkCorpStatus("12345")).thenReturn(true);
+        when(apiBankingService.getCorporateOnboardDetail("12345")).thenReturn(onboardDetails);
+        
+        corporateValidator.validateData(channelDataMap);
+        
+        verify(logger).info("corporate is valid");
+    }
+}
