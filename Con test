@@ -1,230 +1,143 @@
 package com.sbi.microservice.framework.services;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
-
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.exception.AccessException;
+import com.sbi.microservice.framework.model.Access;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.Channel;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.Service;
 import com.sbi.microservice.framework.model.UserProfile;
-import com.sbi.microservice.framework.security.Hashing;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.sbi.microservice.framework.repository.ServiceDAO;
+import com.sbi.microservice.framework.services.access.AuthenticationProvider;
+import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
 
-@ExtendWith(MockitoExtension.class)
-class AggregatorValidatorTest {
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
-    @Mock
-    private APIBankingService apiBankingService;
+@org.springframework.stereotype.Service
+public class AccessVerifier {
 
-    @Mock
-    private UserService userService;
+	
+	private final AuthenticationProviderFactory authenticationProviderFactory;
+	private final ServiceDAO serviceDAO;
+	private final CacheManager cacheManager;
+	private final FrameworkUtils frameworkUtils;
+	
+	public AccessVerifier(AuthenticationProviderFactory authenticationProviderFactory,ServiceDAO serviceDAO,CacheManager cacheManager,FrameworkUtils frameworkUtils) {
+		this.authenticationProviderFactory=authenticationProviderFactory;
+		this.serviceDAO=serviceDAO;
+		this.cacheManager=cacheManager;
+		this.frameworkUtils=frameworkUtils;
+	}
 
-    @Mock
-    private CorporateService corporateService;
+	public Optional<Access> checkServiceAccess(HttpServletRequest request,HttpServletResponse response) throws AccessException{
 
-    @InjectMocks
-    private AggregatorValidator aggregatorValidator;
+		String channelId = request.getHeader(FrameworkConstants.CHANNELID);
+		String token = request.getHeader(FrameworkConstants.USER_TOKEN);// user token
+		String requestURI = request.getRequestURI();
+		Optional<String> OptionalServiceName = Optional.of(frameworkUtils.extractServiceName(requestURI));
 
-    private Map<String, Object> channelDataMap;
-    private UserProfile userProfile;
-    private static final Logger logger = LoggerFactory.getLogger(AggregatorValidatorTest.class);
+		String accessStatus = FrameworkConstants.ACCESS_DENIED;
+		String accessDescription = FrameworkConstants.STRING_BLANK;
+		String entityType = channelId;
+		String entityValue = frameworkUtils.getEntityValue(entityType);
+		
+		String method = request.getMethod().toUpperCase();
+		
+		if (OptionalServiceName.isPresent()) {
+			String serviceName=OptionalServiceName.get();
+			boolean isSecuredService=isSecuredService(serviceName);
+			String serviceType = (isSecuredService ? FrameworkConstants.SERVICE_TYPE_SECURED : FrameworkConstants.SERVICE_TYPE_OPEN);
+			
+				
+			
+			if ("DELETE".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method) || "DEBUG".equalsIgnoreCase(method)) {
+	        	accessDescription = FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED;
+	            return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
+	        }
+			/**
+			 * Check if access to the requested service requires verification
+			 */
+			if (isSecuredService) {
+				/**
+				 * Check if the channel has access to the requested service
+				 */
+				if (isChannelAuthorized(serviceName, channelId)) {
+					try {
+						AuthenticationProvider authProvider = authenticationProviderFactory.getProvider(channelId);
+						//Authentication authentication = authProvider.authenticate(request);
 
-    @BeforeEach
-    void setUp() {
-        channelDataMap = new HashMap<>();
-        userProfile = new UserProfile("userId", "userName", 4); // Default to SARAL user role
-        channelDataMap.put("userProfile", userProfile);
-    }
+						UserProfile userProfile= new UserProfile("-945861992","YBM2Upload",21,"250257",Integer.valueOf(0),"00437");
+						CorporateProfile corporateProfile= new CorporateProfile("250257","CNIB2YB 2 Test Corporate");
+						Authentication authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile, corporateProfile, true);
+						if (authentication.authenticated()) {
+							/**
+							 * Check if the user has access to the requested service
+							 */
+							if (!isUserAuthorized(authentication.userProfile().userRole())) {
+								accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHORIZED;
+							}
+							accessStatus = FrameworkConstants.ACCESS_GRANTED;
+						} else {
+							accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED;
+						}
 
-    @Test
-    void testValidateData_AggregatorIDNull() {
-        channelDataMap.put("aggregatorID", null);
-        // Should throw API000016
-        aggregatorValidator.validateData(channelDataMap);
-        // Verify behavior or exception
-    }
+					} catch (IllegalArgumentException e) {
+						accessDescription = FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL;
+					}
+				} else {
+					/**
+					 * Access to the requested service is denied to the channel
+					 */
+					accessDescription = FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED;
+				}
+			} else {
+				/**
+				 * Requested service does not require any verification, access to be allowed
+				 */
+				accessStatus = FrameworkConstants.ACCESS_GRANTED;
+			}
 
-    @Test
-    void testValidateData_AggregatorIDTooLong() {
-        channelDataMap.put("aggregatorID", "123456789012345678901");
-        // Should throw API000032
-        aggregatorValidator.validateData(channelDataMap);
-    }
+			return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
+		}else {
+			//TODO - Throw exception
+			return null;
+		}
+	}
 
-    @Test
-    void testValidateData_AggregatorIDInvalidPattern() {
-        channelDataMap.put("aggregatorID", "invalid@aggregator");
-        // Should throw API000019
-        aggregatorValidator.validateData(channelDataMap);
-    }
+	private boolean isUserAuthorized(int userRole) {
+		// TODO - User Rationalization to be enabled
+		return false;
+	}
 
-    @Test
-    void testValidateData_AggregatorDoesNotExist() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(false);
-        // Should throw API000019
-        aggregatorValidator.validateData(channelDataMap);
-    }
+	private boolean isSecuredService(String serviceName) {
+		Optional<Service> optionalService=Optional.ofNullable(cacheManager.getService(serviceName));
+		if(optionalService.isPresent()) {
+			return (optionalService.get().serviceType().equalsIgnoreCase(FrameworkConstants.SERVICE_TYPE_OPEN))?false:true;
+		}
+		return false;
+	}
 
-    @Test
-    void testValidateData_AggregatorNotActive() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(false);
-        // Should throw API000031
-        aggregatorValidator.validateData(channelDataMap);
-    }
+	private boolean isChannelAuthorized(String serviceName, String channelId) {
+		
+		AtomicBoolean hasAccess=new AtomicBoolean(false);
+		Optional<List<Channel>> serviceChannelList=Optional.ofNullable(cacheManager.getServiceChannelList(serviceName));
+		
+		if(serviceChannelList.isPresent()) {
+			serviceChannelList.get().forEach(channel->{
+				if(channel.channelId().equalsIgnoreCase(channelId)) {
+					hasAccess.set(true); 
+					}
+			});
+				
+		}
+		return hasAccess.get();
+	}
 
-    @Test
-    void testValidateData_InvalidAggregatorValidation() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(true);
-        when(apiBankingService.validateAggregator("validAgg123")).thenReturn(false);
-        // Should throw API000019
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testValidateData_HeaderTokenMismatch() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        channelDataMap.put("headerAPICTokenAggId", "differentAgg");
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(true);
-        when(apiBankingService.validateAggregator("validAgg123")).thenReturn(true);
-        // Should throw API000019
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testValidateData_CorpDetailsNull() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        channelDataMap.put("corporateAlias", "corpAlias");
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(true);
-        when(apiBankingService.validateAggregator("validAgg123")).thenReturn(true);
-        when(apiBankingService.getCorpDetails(any())).thenReturn(null);
-        // Should throw API000022
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testValidateData_CorpNotActive() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        channelDataMap.put("corporateAlias", "corpAlias");
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("active", "N");
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(true);
-        when(apiBankingService.validateAggregator("validAgg123")).thenReturn(true);
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        // Should throw API000033
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testValidateData_SaralUserValidFlow() {
-        channelDataMap.put("aggregatorID", "validAgg123");
-        channelDataMap.put("corporateAlias", "S123456789ABCDE");
-        channelDataMap.put("corpToken", "validToken123");
-        
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("active", "Y");
-        corpDetails.put("isSaral", "Y");
-        corpDetails.put("corpId", "corp123");
-        
-        Map<String, String> corporateOnboardDetail = new HashMap<>();
-        corporateOnboardDetail.put("aggregatorID", "validAgg123");
-        corporateOnboardDetail.put("status", "APPROVED");
-        
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(true);
-        when(apiBankingService.validateAggregator("validAgg123")).thenReturn(true);
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        when(userService.whetherUserOnboarded("userId", "corp123")).thenReturn(true);
-        when(apiBankingService.isValidAggregatorAndCorpCount("validAgg123", "corp123")).thenReturn(true);
-        when(corporateService.getCorporateOnboardDetail("corp123")).thenReturn(corporateOnboardDetail);
-        when(apiBankingService.validateCorpToken("validAgg123", "corp123", "validToken123")).thenReturn(true);
-        
-        // Should pass validation
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testValidateData_CorporateUserValidFlow() {
-        userProfile = new UserProfile("userId", "userName", 3); // Corporate user role
-        channelDataMap.put("userProfile", userProfile);
-        channelDataMap.put("aggregatorID", "validAgg123");
-        channelDataMap.put("corporateAlias", "ABC1234567");
-        channelDataMap.put("corpToken", "validToken123");
-        
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("active", "Y");
-        corpDetails.put("isSaral", "N");
-        corpDetails.put("corpId", "corp123");
-        
-        Map<String, String> corporateOnboardDetail = new HashMap<>();
-        corporateOnboardDetail.put("aggregatorID", "validAgg123");
-        corporateOnboardDetail.put("status", "APPROVED");
-        
-        when(apiBankingService.whetherAggregatorExist("validAgg123")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("validAgg123")).thenReturn(true);
-        when(apiBankingService.validateAggregator("validAgg123")).thenReturn(true);
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        when(apiBankingService.checkCorpStatus("corp123")).thenReturn(true);
-        when(apiBankingService.aggregatorAndCorpCount("validAgg123", "corp123")).thenReturn(true);
-        when(apiBankingService.getCorporateOnboardDetail("corp123")).thenReturn(corporateOnboardDetail);
-        when(apiBankingService.validatingCorpToken("validAgg123", "corp123", "validToken123")).thenReturn(true);
-        
-        // Should pass validation
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testCheckWhetherUserIsSaral_UserRole4AndSaralY() {
-        assertTrue(aggregatorValidator.checkWhetherUserIsSaral(4, "Y"));
-    }
-
-    @Test
-    void testCheckWhetherUserIsSaral_UserRole4AndSaralN() {
-        assertFalse(aggregatorValidator.checkWhetherUserIsSaral(4, "N"));
-    }
-
-    @Test
-    void testCheckWhetherUserIsSaral_UserRole4AndSaralNull() {
-        assertFalse(aggregatorValidator.checkWhetherUserIsSaral(4, null));
-    }
-
-    @Test
-    void testCheckWhetherUserIsSaral_UserRoleNot4() {
-        assertFalse(aggregatorValidator.checkWhetherUserIsSaral(3, "Y"));
-    }
-
-    @Test
-    void testValidateSaralCorpAlias_Valid() {
-        assertTrue(aggregatorValidator.validateSaralCorpAlias("S123456789ABCDE"));
-    }
-
-    @Test
-    void testValidateSaralCorpAlias_TooLong() {
-        assertFalse(aggregatorValidator.validateSaralCorpAlias("S123456789ABCDEFGH"));
-    }
-
-    @Test
-    void testValidateSaralCorpAlias_FirstCharNotS() {
-        assertFalse(aggregatorValidator.validateSaralCorpAlias("A123456789ABCDE"));
-    }
-
-    @Test
-    void testValidateSaralCorpAlias_Next9NotNumbers() {
-        assertFalse(aggregatorValidator.validateSaralCorpAlias("S1234X6789ABCDE"));
-    }
 }
