@@ -1,21 +1,177 @@
-if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
-          if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
-            debitString.add(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
-          } else {
-            debitString.add(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
-          }
+package com.sbi.microservice.framework.services;
 
-@Test
-    void downloadSampleFile_CompositeBeneficiary_fieldTypeD() {
-        sampleFileDownloadRequest.setFileType(ConfigurationConstants.COMPOSITE_BEN);
-        delimitedConfiguration.setFieldType(ConfigurationConstants.BOTH);
-//        delimitedConfiguration.setOrderNo(0);
-//        delimitedConfiguration.setFieldLength("10");
-        fileConfiguration1.add(delimitedConfiguration);
-        fileConfiguration.setDelimitedConfiguration(fileConfiguration1);
-        Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(Collections.singletonList(fileConfiguration));
-        Mockito.when(sampleFileDownloadDaoimpl.getDelimitedConfiguration(anyString(), anyString(), anyLong(), anyString())).thenReturn(fileConfiguration);
-        FileDownloadResponse response = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
-        assertNotNull(response);
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.model.UserProfile;
+@Component
+public final class CorporateValidator implements ChannelValidator {
+	private final static Logger logger = LoggerFactory.getLogger(CorporateValidator.class);
+	private final APIBankingService apiBankingService;
+    private final UserService userService;
+    private final CorporateService corporateService;
+    public CorporateValidator(APIBankingService apiBankingService,UserService userService,CorporateService corporateService) {
+    	this.apiBankingService=apiBankingService;
+    	this.userService=userService;
+    	this.corporateService=corporateService;
     }
+	@Override
+	public void validateData(Map<String, Object> channelDataMap) {
+		String corporateAlias = (String)channelDataMap.get("corporateAlias");
+		String corpIdFromHeader=(String)channelDataMap.get("corpIdFromHeader");
+		UserProfile userProfile=(UserProfile) channelDataMap.get("userProfile");
+		String aggregatorID = (String)channelDataMap.get("aggregatorID");
+		String corpId=FrameworkConstants.STRING_BLANK;
+		if (null != corporateAlias && !corporateAlias.trim().equals("")
+				&& !corporateAlias.trim().equalsIgnoreCase("null")) {
+			logger.info("corporateAlias is not null or not empty");
+			Pattern patternCorpID = Pattern.compile("^[0-9]*$");
+			logger.info("Pattern to check corporateID -->" + patternCorpID);
+			Matcher matcherCorpID = patternCorpID.matcher(corporateAlias);
+			if (matcherCorpID.matches()) {
+				logger.info("valid corporateID");
+				Map<String, String> corpDetails = apiBankingService.validateCorpID(corporateAlias);
+
+				if (null != corpDetails) {
+					logger.info("corpDetails is not null");
+					logger.info("corpDetails-->" + corpDetails);
+					if (null != corpDetails.get("corpId") && corporateAlias.equals(corpIdFromHeader)) {
+						logger.info("corpId is not null");
+						corpId = (String) corpDetails.get("corpId");
+						logger.info("apicTokenCorpId " + corpIdFromHeader + " and corpId " + corporateAlias
+								+ " from payload are equal");
+						logger.info("corpId-->" + corpId);
+
+						String active = (String) corpDetails.get("active");
+						logger.info("active-->" + active);
+
+						String isSaral = (String) corpDetails.get("isSaral");
+						logger.info("isSaral-->" + isSaral);
+
+						if (null != active && active.trim().equalsIgnoreCase("Y")) {
+							logger.info("corporateAlias is active IN CORP MASTER TABLE");
+
+							logger.info("userRole-->" + userProfile.userRole());
+							if (userProfile.userRole() == 4) {
+
+								logger.info("Given corporateAlias is not direct corporate");
+
+								//API000034
+								
+							} else {
+								logger.info("Given userName is corporate user");
+								if (null != isSaral && isSaral.trim().equalsIgnoreCase("Y")) {
+
+									logger.info(
+											"User role is not 4, but isSaral is Y, Given corporateAlias is not direct corporate");
+
+									//API000034
+
+								} else {
+									logger.info("Given corporateID belongs to NON SARAL corporate");
+									boolean corpStatus = apiBankingService.checkCorpStatus(corporateAlias);
+									logger.info("corpStatus-->" + corpStatus);
+									if (!corpStatus) {
+										logger.info(
+												"invalid corporate ID. Flow aborted. corporate id may not be in active state in cnbccorp_corporate_profile");
+
+										//API000015
+
+									} else {
+										logger.info("corporate id is in active state in cnbccorp_corporate_profile");
+
+										logger.info("corpId -->" + corpId);
+
+										Map<String, String> corporateOnboardDetail = apiBankingService
+												.getCorporateOnboardDetail(corpId);
+										if (null != corporateOnboardDetail) {
+											logger.info("corporateOnboardDetail is not null");
+											logger.info("aggregatorID-->" + corporateOnboardDetail.get("aggregatorID"));
+											if (null != corporateOnboardDetail.get("aggregatorID")) {
+												logger.info("Given corporateAlias is not direct corporate");
+
+												//API000034
+											} else {
+												logger.info("valid direct corporate..");
+
+												if (null != corporateOnboardDetail.get("status")
+														&& ((String) corporateOnboardDetail.get("status")).trim()
+																.equalsIgnoreCase("APPROVED")) {
+
+													logger.info(
+															"Given corporate alias is onboarded..so check corptoken validity");
+
+													if (null != corpId && !corpId.trim().equals("")
+															&& !corpId.trim().equalsIgnoreCase("null")) {
+
+														logger.info("corporate is valid");
+
+													} else {
+														logger.info("Corporate ID doesn't exist for Aggregator ID :"
+																+ aggregatorID + " Flow aborted.");
+														//API000017
+													}
+
+												} else {
+													logger.info("Given corporateAlias is not onboarded");
+
+													//API000039
+												}
+
+											}
+
+										} else {
+											logger.info(
+													"invalid corporate alias :" + corporateAlias + " .Flow aborted.");
+
+											//API000039
+
+										}
+
+									}
+								}
+							}
+
+						} else {
+							logger.info("corporateAlias is inactive");
+
+							//API000033
+						}
+
+					} else {
+						logger.info("invalid corporate alias :" + corporateAlias + " .Flow aborted.");
+						logger.info("apicTokenCorpId " + corpIdFromHeader + " and corpId " + corporateAlias
+								+ " from payload are not equal");
+
+						//API000022
+					}
+
+				} else {
+					logger.info("invalid corporate alias :" + corporateAlias + " .Flow aborted.");
+
+					//API000022
+				}
+			} else {
+				logger.info("INVALID CORPORATE ALIAS");
+
+				//API000022
+
+			}
+
+		} else {
+			logger.info(
+					"Corporate ID is not present in request body eventhough the channel is Corporate. Flow aborted.");
+
+			//API000014
+
+		}
+
+	}
+
+}
