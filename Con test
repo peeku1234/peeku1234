@@ -1,630 +1,335 @@
-package com.sbi.yb.cinb.service.impl;
+package com.sbi.microservice.framework.services;
 
-import com.sbi.yb.cinb.model.DelimitedConfiguration;
-import com.sbi.yb.cinb.model.SampleFileDownloadRequest;
-import com.sbi.yb.cinb.service.SampleFileDownloadService;
-import com.sbi.yb.cinb.constants.ConfigurationConstants;
-import com.sbi.yb.cinb.model.FileConfigMasterEntity;
-import com.sbi.yb.cinb.model.FileDownloadResponse;
-import com.sbi.yb.cinb.model.FixedConfiguration;
-import com.sbi.yb.cinb.repository.SampleFileDownloadDao;
-import com.sbi.yb.constants.LoggingConstants;
-import com.sbi.yb.exception.MicroServiceException;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
-import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
-/**
- * This class handles the business logic of sample file download.
- */
+import org.springframework.stereotype.Component;
 
-@Service
-public class SampleFileDownloadServiceImpl implements SampleFileDownloadService {
-
-  private static final Logger LOGGER = LoggerFactory.getLogger(SampleFileDownloadServiceImpl.class);
-
-  /**
-   * Autowiring SampleFileDownloadDao.
-   */
-  private final SampleFileDownloadDao sampleFileDownloadDao;
-
-  /**
-   * SampleFileDownloadServiceImpl constructor.
-   *
-   * @param sampleFileDownloadDao sampleFileDownloadDao
-   */
-
-  @Autowired
-  public SampleFileDownloadServiceImpl(SampleFileDownloadDao sampleFileDownloadDao) {
-    this.sampleFileDownloadDao = sampleFileDownloadDao;
-  }
-
-  /**
-   * Getting the sample file download as encoded data.
-   *
-   * @param sampleFileDownloadRequest from user
-   * @return the sample file
-   */
-  @Override
-  public FileDownloadResponse downloadSampleFile(SampleFileDownloadRequest sampleFileDownloadRequest) {
-    LOGGER.info("downloadSampleFile :: {}", LoggingConstants.METHODBEGIN);
-    String corporateId;
-    String fileType;
-    corporateId = sampleFileDownloadRequest.getCorporateAlias();
-    fileType = sampleFileDownloadRequest.getFileType();
-    sampleFileDownloadRequest.getUserName();
-    FileConfigMasterEntity response;
-    FileDownloadResponse fileDownloadResponse = new FileDownloadResponse();
-    if (StringUtils.hasText(fileType) && StringUtils.hasText(corporateId)) {
-      List<FileConfigMasterEntity> fileConfigMasterEntity = sampleFileDownloadDao.getFileConfiguration(corporateId, fileType);
-      LOGGER.info("");
-      Long oid = fileConfigMasterEntity.getFirst().getOid();
-      String compConfigType = fileConfigMasterEntity.getFirst().getCompConfigType();
-      if (fileConfigMasterEntity.getFirst().getFormat() == ConfigurationConstants.DELIMITED) {
-        response = sampleFileDownloadDao.getDelimitedConfiguration(corporateId, fileType, oid, compConfigType);
-      } else {
-        response = sampleFileDownloadDao.getFixedConfiguration(corporateId, fileType, oid, compConfigType);
-      }
-      LOGGER.info("FileConfigMasterEntity {}", response);
-      if (Optional.ofNullable(response).isPresent()) {
-        List<String> configurationString;
-        if (Objects.requireNonNull(corporateId).equalsIgnoreCase(fileConfigMasterEntity.getFirst().getId()) && sampleFileDownloadRequest.getFileExtension().equalsIgnoreCase("txt")) {
-          configurationString = getConfigurationString(response, fileType, fileConfigMasterEntity.getFirst().getFieldDelimiter(), fileConfigMasterEntity.getFirst().getFormat());
-        } else {
-          configurationString = getDelimitedDefaultSampleData(fileType, response, fileConfigMasterEntity.getFirst().getFormat());
-        }
-        String fileName = corporateId + "." + sampleFileDownloadRequest.getFileExtension();
-        LOGGER.info("FileName to be downloaded as:: {}", fileName);
-        byte[] byteData = getSampleFileData(configurationString, fileType);
-        String encodeData = Base64.getEncoder().encodeToString(byteData);
-        fileDownloadResponse.setFileContent(encodeData);
-        fileDownloadResponse.setFileName(fileName);
-        fileDownloadResponse.setContentType(String.valueOf(MediaType.TEXT_PLAIN));
-      } else {
-        LOGGER.info("No response from DB :: {}", ConfigurationConstants.YBM003);
-        MicroServiceException.throwException(ConfigurationConstants.YBM003);
-      }
-    } else {
-      LOGGER.info("Invalid corporateId :: {}", ConfigurationConstants.YBM002);
-      MicroServiceException.throwException(ConfigurationConstants.YBM002);
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.security.Hashing;
+import com.sbi.microservice.framework.utils.RequestValidator;
+@Component
+public final class AggregatorValidator implements ChannelValidator {
+	private final static Logger logger = LoggerFactory.getLogger(AggregatorValidator.class);
+	private final APIBankingService apiBankingService;
+    private final UserService userService;
+    private final CorporateService corporateService;
+    public AggregatorValidator(APIBankingService apiBankingService,UserService userService,CorporateService corporateService) {
+    	this.apiBankingService=apiBankingService;
+    	this.userService=userService;
+    	this.corporateService=corporateService;
     }
-    LOGGER.info("downloadSampleFile :: {}", LoggingConstants.METHODEND);
-    return fileDownloadResponse;
-  }
+	@Override
+	public void validateData(Map<String, Object> channelDataMap) {
+		UserProfile userProfile=(UserProfile) channelDataMap.get("userProfile");
+		String corporateAlias = (String)channelDataMap.get("corporateAlias");
+		String aggregatorID = (String)channelDataMap.get("aggregatorID");
+		String corpToken=(String)channelDataMap.get("corpToken");
+		String headerAPICTokenAggId=(String)channelDataMap.get("headerAPICTokenAggId");
+		if(aggregatorID==null) {
+			//API000016
+		}else {
+			if (aggregatorID.length() > 20) {
+				//API000032
+			}else {
+				Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+				Matcher matcher = pattern.matcher(aggregatorID);
+				if (matcher.matches())
+				{
+					if(apiBankingService.whetherAggregatorExist(aggregatorID)) {
+						if(apiBankingService.isAggregatorActive(aggregatorID)) {
+							if(apiBankingService.validateAggregator(aggregatorID)) {
+								if(headerAPICTokenAggId==null || !aggregatorID.equals(headerAPICTokenAggId)) {
+									//API000019
+								}
+							}else {
+								//API000019
+							}
+							
+						}else {
+							//API000031
+						}
+					}else {
+						//API000019
+					}
+				}else {
+					//API000019
+				}
+			}
+		}
+		Map<String, String> corpDetails =  apiBankingService.getCorpDetails(Optional.ofNullable(corporateAlias));
+		if(corpDetails!=null && corpDetails.get("corpId")!=null) {
+			
+			logger.info("corpId is not null");
+			String corpId = (String)corpDetails.get("corpId");
+			logger.info("corpId-->"+corpId);
+		   
+			String active =  (String)corpDetails.get("active");
+			logger.info("active-->"+active);
+		   
+			String isSaral =  (String)corpDetails.get("isSaral");
+			logger.info("isSaral-->"+isSaral);
+			if(null!=active && active.trim().equalsIgnoreCase("Y")) {
+				if(userProfile.userRole()==4) {
+					if(checkWhetherUserIsSaral(userProfile.userRole(),isSaral)) {
+						if(validateSaralCorpAlias(corporateAlias)) {
+							if(userService.whetherUserOnboarded(userProfile.userId(),corpId)) {
+								if(null!=corpId && !corpId.trim().equals("") && !corpId.trim().equalsIgnoreCase("null")) {
+									   boolean aggCorpCountFlg =  apiBankingService.isValidAggregatorAndCorpCount(aggregatorID, corpId) ;
+									   logger.info("aggCorpCountFlg -->"+aggCorpCountFlg);
+									   if(aggCorpCountFlg) {
+										   logger.info("aggregator to corporate id mapping is valid");
+										   logger.info("corpId-->"+corpId);
+										   Map<String, String> corporateOnboardDetail = corporateService.getCorporateOnboardDetail(corpId);
+										   
+										   if(null!=corporateOnboardDetail) {
+											   logger.info("corporateOnboardDetail is not null");
+											   logger.info("corporateOnboardDetail-->"+corporateOnboardDetail);
+											   logger.info("aggregatorID-->"+corporateOnboardDetail.get("aggregatorID"));
+											   if(null!=corporateOnboardDetail.get("aggregatorID")) {
+												   logger.info("Given aggregatorID is a valid saral aggregator");
+												   logger.info("status-->"+corporateOnboardDetail.get("status"));
+												   if(null!=corporateOnboardDetail.get("status") && ((String)corporateOnboardDetail.get("status")).trim().equalsIgnoreCase("APPROVED")) {
+													   logger.info("Given corporate alias is onboarded..so check corptoken validity");
+													   logger.info("Aggregator ID :"+aggregatorID+ " and Corporate ID:"+corpId+" mapping is valid. Checking corp token validity");
+													   logger.info("corpToken -->"+corpToken);
+														if(null!=corpToken && !corpToken.trim().equals("") && !corpToken.trim().equalsIgnoreCase("null")) {	  
+															logger.info("corpToken is not null");
+															Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+															Matcher matcherCorpToken = pattern.matcher(corpToken);
+															if (matcherCorpToken.matches())
+															{
+																logger.info("corpToken pattern matched. VALID");
+																
+																 logger.info("corpToken length-->"+corpToken.length());
+																if (corpToken.length() <= 300) {
+																	if(apiBankingService.validateCorpToken(aggregatorID, corpId, corpToken)) {
+																		
+																	}else {
+																		//API000018
+																	}
+																}else {
+																	//API000029
+																}
+															}else {
+																// pattern does not match
+																logger.error("invalid corpToken");
+																//API000018
+															}
+														}else {
+															//corpToken is empty
+															logger.error("corpToken is mandatory");
+															  
+															//API000028
+														}
+												   }else {
+													   //status is not APPROVED
+													   logger.error("Given corporateAlias is not onboarded");
+														
+														//API000039
+												   }
+											   }else {
+												   //aggregatorID is null
+												   logger.info("Given corporateAlias is not a saral aggregator");
+													
+													//API000041
+											   }
+										   }else {
+											   //corporateOnboardDetail is null
+											   logger.error("corporateOnboardDetail doesnt exist");
+											   //API000039
+										   }
+									   }else {
+										   //aggCorpCountFlg is false
+										   //API000017
+										   logger.error("aggregator to corporate id mapping is NOT valid");
+									   }
+								}else {
+									//corpId is null
+									//API000022
+								}
+							}else {
+								//API000036
+							}
+						}else {
+							//API000022
+						}
+					}else {
+						//API000041
+					}
+				}else {
+					logger.info("Given user is a corporate user");
+					if(null!=isSaral && isSaral.trim().equalsIgnoreCase("Y")) {
+						logger.info("User role is not 4, But isSaral is Y, so Given corporateAlias is not valid");
+						//API000022
+					}else {
+						logger.info("corporate aggregator. validating corpalias for corporate specific conditions");
+						String regex = "^[a-zA-Z]{3}\\d{7}$";//First three characters of CorpAlias should be Alphabets followed by 7 numbers
+						Pattern corpaggpattern = Pattern.compile(regex);
+						Matcher corpaggmatcher = corpaggpattern.matcher(corporateAlias);
+						
+						if(corpaggmatcher.matches()) {
+							logger.info("corporate alias matches corporate aggregator specific conditions");
+							logger.info("Given corporateID belongs to NON SARAL corporate");
+							   boolean corpStatus = apiBankingService.checkCorpStatus(corpId);
+							   logger.info("corpStatus-->"+corpStatus);
+							   if(corpStatus) {
+								   logger.info("need to check whether the corporate user is onboarded");
+								   
+								   boolean aggCorpCountFlg =  apiBankingService.aggregatorAndCorpCount(aggregatorID, corpId) ;
+								   logger.info("aggCorpCountFlg -->"+aggCorpCountFlg);
+								   if(aggCorpCountFlg) {
+									   logger.info("aggregator to corporate id mapping is valid");
+									   logger.info("corpId -->"+corpId);
+										
+									   Map<String, String> corporateOnboardDetail = apiBankingService.getCorporateOnboardDetail(corpId);
+									   if(null!=corporateOnboardDetail) {
+										   logger.info("corporateOnboardDetail is not null");
+										   logger.info("corporateOnboardDetail is not null");
+										   logger.info("aggregatorID-->"+corporateOnboardDetail.get("aggregatorID"));
+										   if(null!=corporateOnboardDetail.get("aggregatorID")) {
+											   logger.info("Given aggregatorID is a valid corporate aggregator");
+											   logger.info("status-->"+corporateOnboardDetail.get("status"));
+											   
+											   if(null!=corporateOnboardDetail.get("status") && ((String)corporateOnboardDetail.get("status")).trim().equalsIgnoreCase("APPROVED")) {
+												   
+												   logger.info("Given corporate alias is onboarded..so check corptoken validity");
+												   if(null!=corpId && !corpId.trim().equals("") && !corpId.trim().equalsIgnoreCase("null")) {
+													   logger.info("Aggregator ID :"+aggregatorID+ " and Corporate ID:"+corpId+" are valid. Checking corp token validity");
+													   if(null!=corpToken && !corpToken.trim().equals("") && !corpToken.trim().equalsIgnoreCase("null")) {	  
+															logger.info("corpToken is not null");
+															Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+															Matcher matcherCorpToken = pattern.matcher(corpToken);
+															if (matcherCorpToken.matches())
+															{
+																logger.info("corpToken pattern matched. VALID");
+																
+																 logger.info("corpToken length-->"+corpToken.length());
+																 logger.info("corpToken pattern matched. VALID");
+																	
+																 logger.info("corpToken length-->"+corpToken.length());
+																if (corpToken.length() <= 300) {
+																	boolean corpTokenValidityFlag = apiBankingService.validatingCorpToken(aggregatorID, corpId, corpToken);
+																	  logger.info("corpTokenValidityFlag-->"+corpTokenValidityFlag);
+																	  if(corpTokenValidityFlag) {
+																		  logger.info("invalid corporate token. Flow aborted.");
+																		  //API000018
+																	  }else {
+																		  
+																	  }
+																}else {
+																	logger.info("corpToken length > 300");
+																	//API000029
+																}
+															}else {
+																logger.info("invalid corpToken");
+																//API000018
+															}
+													   }else {
+														   logger.info("corpToken is mandatory");
+															//API000028";
+													   }
+														  
+												   }else {
+													   logger.info("Corporate ID doesn't exist for Aggregator ID :"+aggregatorID+" Flow aborted.");
+														//API000017
+												   }
+											   }else {
+												   logger.info("Given corporateAlias is not onboarded");
+													//API000039
+											   }
+										   }else {
+											   logger.info("Aggregator and Corporate mapping not valid");
+												//API000017
+										   }
+									   }else {
+										   logger.info("invalid corporate alias :"+corporateAlias+" .Flow aborted.");
+											//API000039
+									   }
+								   }else {
+									   logger.info("aggregator to corporate id mapping is NOT valid");
+										//API000017
+								   }
+							   }else {
+								   logger.info("invalid corporate ID. Flow aborted. corporate id may not be in active state in cnbccorp_corporate_profile");
+								   //API000015
+							   }
+						}else {
+							logger.info("INVALID CORPORATE ALIAS");
+							  
+							 //API000022
+						}
+					}
+				}
+			}else {
+				//API000033
+			}
+		}else {
+			//API000022
+		}
 
-  /**
-   * mapping the sample data with field names.
-   *
-   * @param response       file configuration entity
-   * @param txnType        transaction type
-   * @param fieldDelimiter delimiter
-   * @param format         configuration type(Ex: fixed, delimited)
-   * @return the List of sample data
-   */
-
-  public List<String> getConfigurationString(FileConfigMasterEntity response, String txnType, String fieldDelimiter, int format) {
-    LOGGER.info("getConfigurationString (List response) - begin");
-    Map<String, String> configuration;
-    LOGGER.info("txnType- {}", txnType);
-    configuration = new HashMap<>(ConfigurationConstants.configuration);
-    Set<String> validFileType = Set.of(ConfigurationConstants.ACCOUNT_TXN_BOTH, ConfigurationConstants.OTHER_BANK);
-    Map<String, String> finalConfiguration = configuration;
-    Optional.ofNullable(txnType).map(String::toUpperCase).filter(validFileType::contains).ifPresent(value -> finalConfiguration.put("Credit Branch Code", "BKID0008605"));
-    String paymentIdentifier = Optional.ofNullable(txnType).filter(type -> !type.equalsIgnoreCase("Payment_Identifier")).map(type -> "NEFT").orElse("");
-    configuration.put("Payment_Identifier", paymentIdentifier);
-    List<String> result = new ArrayList<>();
-    LOGGER.info("Field Delimiter :: {}", fieldDelimiter);
-    if (format == ConfigurationConstants.DELIMITED) {
-      List<DelimitedConfiguration> delimitedConfigurationList = response.getDelimitedConfiguration();
-      List<String> debitString = new ArrayList<>();
-      List<String> creditString = new ArrayList<>();
-      List<String> finalDebitString = debitString;
-      if (Stream.of(ConfigurationConstants.ADD_SAME_BANK, ConfigurationConstants.ADD_OTHER_BANK, ConfigurationConstants.DELETE_SAME_BANK,
-              ConfigurationConstants.DELETE_OTHER_BANK).anyMatch(fileType -> fileType.equalsIgnoreCase(txnType))) {
-        getNonCompositeForDelimited(configuration, delimitedConfigurationList, debitString, result, fieldDelimiter);
-      } else if (ConfigurationConstants.COMPOSITE_BEN.equalsIgnoreCase(Objects.requireNonNull(txnType))) {
-        debitString = getResultForCompositeDelimited(delimitedConfigurationList, response, finalDebitString);
-      } else {
-        getDelimitedForOtherTypes(delimitedConfigurationList, configuration, txnType, debitString, creditString, response);
-      }
-      getResultForDelimitedConfiguration(debitString, creditString, fieldDelimiter, result, Objects.requireNonNull(txnType));
-      //format=1
-    } else {
-      FixedConfiguration fixedConfiguration = response.getFixedConfiguration().getLast();
-      List<Map<String, String>> listOfConfiguration;
-      StringBuilder debitString = new StringBuilder();
-      StringBuilder creditString = new StringBuilder();
-      StringBuilder emptyStr = new StringBuilder();
-      if (Stream.of(ConfigurationConstants.ADD_SAME_BANK, ConfigurationConstants.ADD_OTHER_BANK, ConfigurationConstants.DELETE_SAME_BANK,
-              ConfigurationConstants.DELETE_OTHER_BANK).anyMatch(fileType -> fileType.equalsIgnoreCase(txnType))) {
-        getNonCompositeForFixed(fixedConfiguration, configuration, debitString, response);
-        result.add(debitString.toString());
-      } else {
-        debitString.setLength(fixedConfiguration.getEndIndex());
-        creditString.setLength(fixedConfiguration.getEndIndex());
-        emptyStr.append(" ".repeat(Math.max(0, fixedConfiguration.getEndIndex())));
-        debitString.replace(0, fixedConfiguration.getEndIndex(), emptyStr.toString());
-        creditString.replace(0, fixedConfiguration.getEndIndex(), emptyStr.toString());
-        if (Objects.requireNonNull(txnType).equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN)) {
-          listOfConfiguration = getCompositeBen();
-          debitString = getResultForCompositeFixed(listOfConfiguration, response, debitString);
-        } else {
-          getFixedConfigurationValues(response, configuration, debitString, creditString);
-        }
-        result.add(debitString.toString());
-        result.add(creditString.toString());
-      }
-    }
-    LOGGER.info("getConfigurationString(List response) - end");
-    return result;
-  }
-
-  /**
-   * Checking field type & field length delimited configuration for other file types.
-   *
-   * @param delimitedConfigurationList delimitedConfigurationList
-   * @param configuration              configuration
-   * @param txnType                    txnType
-   * @param debitString                debitString
-   * @param creditString               creditString
-   * @param response                   response
-   */
-  public void getDelimitedForOtherTypes(List<DelimitedConfiguration> delimitedConfigurationList, Map<String, String> configuration, String txnType,
-                                        List<String> debitString, List<String> creditString, FileConfigMasterEntity response) {
-    for (int i = 0; i < delimitedConfigurationList.size(); i++) {
-      DelimitedConfiguration delimitedFileConfiguration = response.getDelimitedConfiguration().get(i);
-      getFieldTypeForDelimitedConfiguration(delimitedFileConfiguration, configuration, debitString, creditString, txnType);
-      if (!ConfigurationConstants.DD.equalsIgnoreCase(txnType)) {
-        fieldLengthCheckForDelimitedConfiguration(delimitedFileConfiguration, creditString, debitString);
-      }
-    }
-  }
-
-  /**
-   * Adding field values and checking field length.
-   *
-   * @param delimitedConfigurationList delimitedConfigurationList
-   * @param response                   response
-   * @param debitString                debitString
-   * @return Composite Beneficiary result
-   */
-  public List<String> getResultForCompositeDelimited(List<DelimitedConfiguration> delimitedConfigurationList, FileConfigMasterEntity response,
-                                            List<String> debitString) {
-    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODBEGIN);
-    List<Map<String, String>> configuration = getCompositeBen();
-    List<String> debit = new ArrayList<>();
-    configuration.forEach(configMap -> {
-      for (int i = 0; i < delimitedConfigurationList.size(); i++) {
-        DelimitedConfiguration delimitedFileConfiguration = response.getDelimitedConfiguration().get(i);
-        if (Optional.ofNullable(configMap.get(delimitedFileConfiguration.getFieldName().trim())).isPresent()) {
-          debitString.add(delimitedFileConfiguration.getOrderNo(), configMap.get(delimitedFileConfiguration.getFieldName().trim()));
-        } else {
-          debitString.add(delimitedFileConfiguration.getOrderNo(), "");
-        }
-        if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
-          if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
-            debitString.add(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
-          } else {
-            debitString.add(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
-          }
-        }
-        debit.add(debitString.get(i));
-      }
-    });
-    LOGGER.info("Result :: {}", debit);
-    LOGGER.info("getResultForComposite {}", LoggingConstants.METHODEND);
-    return debit;
-  }
-
-  /**
-   * Adding the field values for each beneficiary type.
-   *
-   * @return List of Map Strings
-   */
-  public List<Map<String, String>> getCompositeBen() {
-    LOGGER.info("getCompositeBen {}", LoggingConstants.METHODBEGIN);
-    List<Map<String, String>> fieldValues = new ArrayList<>();
-    for (int i = 0; i < 4; i++) {
-      Map<String, String> configuration = new HashMap<>();
-      configuration.put("Beneficiary Code", "000010014");
-      configuration.put("Beneficiary Name", "Ankit Electricals Ltd");
-      configuration.put("Address1", "Red Hill Lane");
-      configuration.put("Address2", "Cullen Road");
-      configuration.put("Address3", "Bangalore");
-      configuration.put("LEI Code", "529900T8BM49AURS905");
-      switch (i) {
-        case 0 -> {
-          configuration.put("Beneficiary Type", "Same Bank");
-          configuration.put("Beneficiary Action Type", "Add same bank");
-          configuration.put("Beneficiary Account Number", "63648727489");
-          configuration.put("IFS Code", "SBIN0003137");
-        }
-        case 1 -> {
-          configuration.put("Beneficiary Type", "Same Bank");
-          configuration.put("Beneficiary Action Type", "Delete same bank");
-          configuration.put("Beneficiary Account Number", "63648727489");
-          configuration.put("IFS Code", "SBIN0003137");
-        }
-        case 2 -> {
-          configuration.put("Beneficiary Type", "Other Bank");
-          configuration.put("Beneficiary Action Type", "Add other bank");
-          configuration.put("Beneficiary Account Number", "1600123456");
-          configuration.put("IFS Code", "HDFC0065321");
-        }
-        case 3 -> {
-          configuration.put("Beneficiary Type", "Other bank");
-          configuration.put("Beneficiary Action Type", "Delete other bank");
-          configuration.put("Beneficiary Account Number", "1600123456");
-          configuration.put("IFS Code", "HDFC0065321");
-        }
-        default -> MicroServiceException.throwException(ConfigurationConstants.YBM003);
-      }
-      fieldValues.add(configuration);
-    }
-    LOGGER.info("Field Values :: {}", fieldValues);
-    LOGGER.info("getCompositeBen {}", LoggingConstants.METHODEND);
-    return fieldValues;
-  }
-
-  /**
-   * Printing the file content using ByteArrayOutputStream.
-   *
-   * @param configurationString configurationString
-   * @param fileType            fileType
-   */
-  public byte[] getSampleFileData(List<String> configurationString, String fileType) {
-    byte[] byteData = new byte[0];
-    try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-      if (configurationString != null) {
-        char firstLine = 13;
-        char secondLine = 10;
-        if (Stream.of(ConfigurationConstants.ADD_SAME_BANK, ConfigurationConstants.ADD_OTHER_BANK, ConfigurationConstants.DELETE_SAME_BANK,
-                ConfigurationConstants.DELETE_OTHER_BANK, ConfigurationConstants.IMPS_BEN).anyMatch(txnType -> txnType.equalsIgnoreCase(fileType))) {
-          outputStream.write(configurationString.getFirst().getBytes(StandardCharsets.UTF_8));
-        } else if (fileType.equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN)) {
-          for (String s : configurationString) {
-            outputStream.write(s.getBytes(StandardCharsets.UTF_8));
-            outputStream.write(firstLine);
-            outputStream.write(secondLine);
-          }
-          LOGGER.info("File written :: {}", outputStream);
-        } else {
-          outputStream.write(configurationString.getFirst().getBytes(StandardCharsets.UTF_8));
-          outputStream.write(firstLine);
-          outputStream.write(secondLine);
-          outputStream.write(configurationString.getLast().getBytes(StandardCharsets.UTF_8));
-        }
-      }
-      byteData = outputStream.toByteArray();
-    } catch (IOException ioException) {
-      LOGGER.info("IOException while writing to output-stream");
-      MicroServiceException.throwException("YBM003");
-    }
-    return byteData;
-  }
-
-  /**
-   * getting default filed delimiter based on fileType.
-   *
-   * @param fileType from request
-   * @param response get from DB
-   * @param format   format
-   * @return the data with default fieldDelimiter
-   */
-
-  public List<String> getDelimitedDefaultSampleData(String fileType, FileConfigMasterEntity response, int format) {
-    LOGGER.info("getDelimitedDefaultSampleData {}", LoggingConstants.METHODBEGIN);
-    List<String> configurationString;
-    String fieldDelimiter;
-    if (fileType.equalsIgnoreCase(ConfigurationConstants.IMPS_TXN) || fileType.equalsIgnoreCase(ConfigurationConstants.SAME_BANK) || fileType.equalsIgnoreCase(ConfigurationConstants.OTHER_BANK) || fileType.equalsIgnoreCase(ConfigurationConstants.ACCOUNT_TXN_BOTH)) {
-      fieldDelimiter = "|";
-      configurationString = getConfigurationString(response, fileType, fieldDelimiter, format);
-    } else if (fileType.equalsIgnoreCase(ConfigurationConstants.DD)) {
-      fieldDelimiter = "*";
-      configurationString = getConfigurationString(response, fileType, fieldDelimiter, format);
-    } else {
-      fieldDelimiter = "#";
-      configurationString = getConfigurationString(response, fileType, fieldDelimiter, format);
-    }
-    LOGGER.info("getDelimitedDefaultSampleData {}", LoggingConstants.METHODEND);
-    return configurationString;
-  }
-
-  /**
-   * Getting nonComposite values.
-   *
-   * @param configuration              configuration
-   * @param delimitedConfigurationList delimitedConfigurationList
-   * @param debitString                debitString
-   * @param result                     result
-   * @param fieldDelimiter             fieldDelimiter
-   */
-  public void getNonCompositeForDelimited(Map<String, String> configuration,
-                                          List<DelimitedConfiguration> delimitedConfigurationList, List<String> debitString, List<String> result, String fieldDelimiter) {
-    LOGGER.info("getNonCompositeForDelimited {}", LoggingConstants.METHODBEGIN);
-    for (DelimitedConfiguration delimitedConfigurationObj : delimitedConfigurationList) {
-      debitString.add(delimitedConfigurationObj.getOrderNo(), configuration.get(delimitedConfigurationObj.getFieldName().trim()));
-      LOGGER.info("field Name 3P & IBTP>>> {}", delimitedConfigurationObj.getFieldName());
-      LOGGER.info("field order 3P & IBTP>>> {}", delimitedConfigurationObj.getOrderNo());
-    }
-    result.add(debitString.stream().collect(Collectors.joining(fieldDelimiter, "", "")));
-    LOGGER.info("getNonCompositeForDelimited {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * Getting fieldType for DelimitedConfiguration.
-   *
-   * @param delimitedFileConfiguration delimitedFileConfiguration
-   * @param configuration              configuration
-   * @param debitString                debitString
-   * @param creditString               creditString
-   */
-  public void getFieldTypeForDelimitedConfiguration(DelimitedConfiguration delimitedFileConfiguration, Map<String, String> configuration, List<String> debitString, List<String> creditString, String fileType) {
-    LOGGER.info("getFieldTypeForDelimitedConfiguration :: {}", LoggingConstants.METHODBEGIN);
-    String fieldName = delimitedFileConfiguration.getFieldName().trim().contains("outref") && StringUtils.hasText(delimitedFileConfiguration.getFieldAlias()) ? "outref" : delimitedFileConfiguration.getFieldName();
-    if (fileType.equalsIgnoreCase(ConfigurationConstants.DD) && delimitedFileConfiguration.getFieldName().equalsIgnoreCase("Credit Account No")) {
-      configuration.put("Credit Account No", "Ankit Electricals Ltd");
-    }
-    switch (delimitedFileConfiguration.getFieldType()) {
-      case ConfigurationConstants.BOTH -> {
-        if (debitString.size() < delimitedFileConfiguration.getOrderNo()) {
-          debitString.add("");
-        }
-        if (creditString.size() < delimitedFileConfiguration.getOrderNo()) {
-          creditString.add("");
-        }
-        debitString.add(delimitedFileConfiguration.getOrderNo(), configuration.get(fieldName));
-        creditString.add(delimitedFileConfiguration.getOrderNo(), configuration.get(fieldName));
-      }
-      case ConfigurationConstants.DEBIT -> {
-        if (debitString.size() < delimitedFileConfiguration.getOrderNo()) {
-          debitString.add("");
-        }
-        debitString.add(delimitedFileConfiguration.getOrderNo(), configuration.get(fieldName));
-      }
-      case ConfigurationConstants.CREDIT -> {
-        if (creditString.size() < delimitedFileConfiguration.getOrderNo()) {
-          creditString.add("");
-        }
-        creditString.add(delimitedFileConfiguration.getOrderNo(), configuration.get(fieldName));
-      }
-      default -> MicroServiceException.throwException(ConfigurationConstants.YBM003);
-    }
-    LOGGER.info("getFieldTypeForDelimitedConfiguration :: {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * to check fieldLength of delimitedConfiguration.
-   *
-   * @param delimitedFileConfiguration delimitedFileConfiguration
-   * @param creditString               creditString
-   * @param debitString                debitString
-   */
-  public void fieldLengthCheckForDelimitedConfiguration(DelimitedConfiguration delimitedFileConfiguration,
-                                                        List<String> creditString, List<String> debitString) {
-    LOGGER.info("fieldLengthCheckForDelimitedConfiguration {}", LoggingConstants.METHODBEGIN);
-    if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.DEBIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
-      if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > debitString.get(delimitedFileConfiguration.getOrderNo()).length()) {
-        debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, debitString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
-      } else {
-        debitString.set(delimitedFileConfiguration.getOrderNo(), debitString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
-      }
-    }
-    if (delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.CREDIT) || delimitedFileConfiguration.getFieldType().equalsIgnoreCase(ConfigurationConstants.BOTH)) {
-      if (Integer.parseInt(delimitedFileConfiguration.getFieldLength()) > creditString.get(delimitedFileConfiguration.getOrderNo()).length()) {
-        creditString.set(delimitedFileConfiguration.getOrderNo(), creditString.get(delimitedFileConfiguration.getOrderNo()).substring(0, creditString.get(delimitedFileConfiguration.getOrderNo()).length() - 1));
-      } else {
-        creditString.set(delimitedFileConfiguration.getOrderNo(), creditString.get(delimitedFileConfiguration.getOrderNo()).substring(0, Integer.parseInt(delimitedFileConfiguration.getFieldLength())));
-      }
-    }
-    LOGGER.info("fieldLengthCheckForDelimitedConfiguration {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * Calling final result method.
-   *
-   * @param debitString    debitString
-   * @param creditString   creditString
-   * @param fieldDelimiter fieldDelimiter
-   * @param result         result
-   */
-  public void getResultForDelimitedConfiguration(List<String> debitString, List<String> creditString, String fieldDelimiter,
-                                                 List<String> result, String fileType) {
-    LOGGER.info("getResultForDelimitedConfiguration {}", LoggingConstants.METHODBEGIN);
-    if (fileType.equalsIgnoreCase(ConfigurationConstants.COMPOSITE_BEN)) {
-      for (int i = 0; i < debitString.size() / 10; i++) {
-        List<String> debit = debitString.subList(i * 10, (i + 1) * 10);
-        result.add(debit.stream().map(debitStr -> debitStr == null ? "" : debitStr)
-                .collect(Collectors.joining(fieldDelimiter, "", "")));
-      }
-    } else {
-      result.add(debitString.stream().map(debitStr -> debitStr == null ? "" : debitStr)
-              .collect(Collectors.joining(fieldDelimiter, "", "")));
-      result.add(creditString.stream().map(creditStr -> creditStr == null ? "" : creditStr)
-              .collect(Collectors.joining(fieldDelimiter, "", "")));
-    }
-    LOGGER.info("getResultForDelimitedConfiguration {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * setting fieldName.
-   *
-   * @param fixedConfiguration fixedConfiguration data
-   */
-
-  public void getFieldNameForFixed(FixedConfiguration fixedConfiguration) {
-    LOGGER.info("getFieldNameForFixed {}", LoggingConstants.METHODBEGIN);
-    if (fixedConfiguration.getFieldName().equalsIgnoreCase("Description") || fixedConfiguration.getFieldName().equalsIgnoreCase("Beneficiary Name")) {
-      LOGGER.info("Description or...");
-      fixedConfiguration.setFieldName("Beneficiary Name");
-    }
-    if (fixedConfiguration.getFieldName().equalsIgnoreCase("Debit Account No") || fixedConfiguration.getFieldName().equalsIgnoreCase("Account Number")) {
-      LOGGER.info("Account ord no.or...");
-      fixedConfiguration.setFieldName("Beneficiary Account Number");
-    }
-    if (fixedConfiguration.getFieldName().equalsIgnoreCase("Debit Branch Code")) {
-      LOGGER.info("Branch code no..or..");
-      fixedConfiguration.setFieldName("Beneficiary Branch Code");
-    }
-    if (fixedConfiguration.getFieldName().equalsIgnoreCase("outref7")) {
-      fixedConfiguration.setFieldName("Beneficiary Code");
-    }
-    if (fixedConfiguration.getFieldName().equalsIgnoreCase("DEBIT DATE") || fixedConfiguration.getFieldName().equalsIgnoreCase("Date")) {
-      fixedConfiguration.setFieldName("Date");
-    }
-    if (fixedConfiguration.getFieldName().equalsIgnoreCase("EmailId")
-            || fixedConfiguration.getFieldName().equalsIgnoreCase("Email Id")) {
-      fixedConfiguration.setFieldName("EmailId");
-    }
-    if (fixedConfiguration.getFieldName().contains("outref") && !fixedConfiguration.getFieldAlias().isEmpty()) {
-      fixedConfiguration.setFieldName("outref");
-    }
-    LOGGER.info("getFieldNameForFixed {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * Getting FixedConfigurationFieldType.
-   *
-   * @param fixedFileConfiguration fixedFileConfiguration
-   * @param configuration          configuration
-   * @param debitString            debitString
-   * @param creditString           creditString
-   * @param startIndex             startIndex
-   * @param fieldValue             fieldValue
-   */
-  public void getFixedConfigurationFieldType(FixedConfiguration fixedFileConfiguration, Map<String, String> configuration, StringBuilder debitString,
-                                             StringBuilder creditString, int startIndex, String fieldValue) {
-    LOGGER.info("getFixedConfigurationFieldType {}", LoggingConstants.METHODBEGIN);
-    switch (fixedFileConfiguration.getFieldType()) {
-      case ConfigurationConstants.BOTH -> {
-        if (fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Account Number")) {
-          String debitValue = (configuration.get(fixedFileConfiguration.getFieldName().trim()) + ConfigurationConstants.DEBIT);
-          String creditValue = (configuration.get(fixedFileConfiguration.getFieldName().trim()) + ConfigurationConstants.CREDIT);
-          debitString.replace(startIndex, startIndex + fieldValue.length(), debitValue);
-          creditString.replace(startIndex, startIndex + fieldValue.length(), creditValue);
-        } else {
-          LOGGER.info("Field Name of Fixed configuration: {} : {}", fixedFileConfiguration.getFieldName().trim(), configuration.get(fixedFileConfiguration.getFieldName().trim()));
-          debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
-          creditString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
-        }
-      }
-      case ConfigurationConstants.CREDIT -> creditString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
-      case ConfigurationConstants.DEBIT -> debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
-      case null, default -> MicroServiceException.throwException(ConfigurationConstants.YBM003);
-    }
-    LOGGER.info("getFixedConfigurationFieldType {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * Getting nonCompositeFixed values.
-   *
-   * @param fixedConfiguration fixedConfiguration
-   * @param configuration      configuration
-   * @param debitString        debitString
-   * @param response           response
-   */
-  public void getNonCompositeForFixed(FixedConfiguration fixedConfiguration, Map<String, String> configuration,
-                                      StringBuilder debitString, FileConfigMasterEntity response) {
-    LOGGER.info("getNonCompositeForFixed {}", LoggingConstants.METHODBEGIN);
-    String emptyStr = " ".repeat(Math.max(0, fixedConfiguration.getEndIndex()));
-    debitString.replace(0, fixedConfiguration.getEndIndex(), emptyStr);
-    for (int i = 0; i < response.getFixedConfiguration().size(); i++) {
-      String fieldValue = "Other";
-      LOGGER.info("field Name : {}", fixedConfiguration.getFieldName().trim());
-      if (Optional.ofNullable(configuration.get(fixedConfiguration.getFieldName().trim())).isPresent()) {
-        fieldValue = configuration.get(fixedConfiguration.getFieldName().trim());
-      }
-      LOGGER.info("fieldValue:: {}", fieldValue);
-      if (fixedConfiguration.getEndIndex() - fixedConfiguration.getStartIndex() < fieldValue.length()) {
-        fieldValue = fieldValue.substring(0, fixedConfiguration.getEndIndex() - fixedConfiguration.getStartIndex() + 1);
-      }
-      int startIndex = fixedConfiguration.getStartIndex();
-      debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
-      String fieldName = fixedConfiguration.getFieldName();
-      LOGGER.info("fieldName.. {}", fieldName);
-      getFieldNameForFixed(fixedConfiguration);
-    }
-    LOGGER.info("getNonCompositeForFixed {}", LoggingConstants.METHODEND);
-  }
-
-  /**
-   * Getting FixedConfigurationDetails.
-   *
-   * @param listOfConfiguration listOfConfiguration
-   * @param response            response
-   * @param debitString         debitString
-   * @return debitString
-   */
-  public StringBuilder getResultForCompositeFixed(List<Map<String, String>> listOfConfiguration, FileConfigMasterEntity response,
-                                                    StringBuilder debitString) {
-    StringBuilder debit = new StringBuilder();
-    listOfConfiguration.forEach(configMap -> {
-      for (int i = 0; i < response.getFixedConfiguration().size(); i++) {
-        String fieldValue = "Other";
-        FixedConfiguration fixedFileConfiguration = response.getFixedConfiguration().get(i);
-        if (Optional.ofNullable(configMap.get(fixedFileConfiguration.getFieldName().trim())).isPresent()) {
-          fieldValue = configMap.get(fixedFileConfiguration.getFieldName().trim());
-        }
-        if (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() < fieldValue.length()) {
-          fieldValue = fieldValue.substring(0, fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() + 1);
-        }
-        int startIndex = fixedFileConfiguration.getStartIndex();
-        debitString.replace(startIndex, startIndex + fieldValue.length(), fieldValue);
-      }
-      debit.append(debitString).append("\n");
-    });
-    return debit;
-  }
-
-  /**
-   * getFixedConfigurationValues.
-   *
-   * @param response      response
-   * @param configuration configuration
-   * @param debitString   debitString
-   * @param creditString  creditString
-   */
-  public void getFixedConfigurationValues(FileConfigMasterEntity response, Map<String, String> configuration, StringBuilder debitString, StringBuilder creditString) {
-    LOGGER.info("getFixedConfigurationValues {}", LoggingConstants.METHODBEGIN);
-    for (int i = 0; i < response.getFixedConfiguration().size(); i++) {
-      String fieldValue = "Other";
-      FixedConfiguration fixedFileConfiguration = response.getFixedConfiguration().get(i);
-      LOGGER.info("Start Index : {} : {}", fixedFileConfiguration.getStartIndex(), fixedFileConfiguration.getFieldType());
-      LOGGER.info("Field Name : {} : {}", fixedFileConfiguration.getFieldName().trim(), configuration.get(fixedFileConfiguration.getFieldName().trim()));
-      if (Optional.ofNullable(configuration.get(fixedFileConfiguration.getFieldName().trim())).isPresent()) {
-        fieldValue = configuration.get(fixedFileConfiguration.getFieldName().trim());
-        LOGGER.info("field : {}", fixedFileConfiguration.getFieldName());
-        if (fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Date") || fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Debit Date") || fixedFileConfiguration.getFieldName().trim().equalsIgnoreCase("Credit Date")) {
-          LOGGER.info("diff : {}", (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex()));
-          if (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() == 7) {
-            fieldValue = "23/03/25";
-          }
-        }
-      }
-      if (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() < fieldValue.length()) {
-        fieldValue = fieldValue.substring(0, fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex() + 1);
-      }
-      getFieldNameForFixed(fixedFileConfiguration);
-      int startIndex = fixedFileConfiguration.getStartIndex();
-      getFixedConfigurationFieldType(fixedFileConfiguration, configuration, debitString, creditString, startIndex, fieldValue);
-    }
-    LOGGER.info("getFixedConfigurationValues {}", LoggingConstants.METHODEND);
-  }
-
+	}
+	public boolean checkWhetherUserIsSaral(int userRole,String isSaral) {
+		  logger.info("checkWhetherUserIsSaral method begins");
+		  boolean whetherUserIsSaral = false;
+		  
+		  logger.info("userRole-->"+userRole);
+		  logger.info("userRole-->"+isSaral);
+		  if(userRole==4) {
+			  
+			  if(null!=isSaral) {
+				   if(isSaral.trim().equalsIgnoreCase("Y")) {
+					   whetherUserIsSaral = true;
+				   }else {
+					   whetherUserIsSaral = false;
+				   }
+				   
+			  }else {
+				  whetherUserIsSaral = false;
+			  }
+		   }else {
+				  whetherUserIsSaral = false;
+		   }
+		  logger.info("whetherUserIsSaral-->"+whetherUserIsSaral);
+		  logger.info("checkWhetherUserIsSaral method ends"); 
+		  return whetherUserIsSaral;
+	  }
+	
+	public boolean validateSaralCorpAlias(String corporateAlias) {
+		  logger.info("validateSaralCorpAlias method begins.."+corporateAlias);
+		  
+		  //corporateAlias= "S123456789ABCDE";
+		  logger.info("corporateAlias changed to .."+corporateAlias);
+		  boolean saralCorpAliasValidateFlg=true;
+		  
+		// Check if the string length is 17
+	        if (corporateAlias.length() > 17) {
+	        	logger.info("Invalid input length!");
+	            return false;
+	        }
+	       
+	        // Check if the first character is 'S'
+	        if (corporateAlias.charAt(0) != 'S') {
+	        	logger.info("First character is not 'S'!");
+	            return false;
+	        }
+	       
+	        // Check if the next 9 characters are numbers
+	        for (int i = 1; i <= 9; i++) {
+	            if (!Character.isDigit(corporateAlias.charAt(i))) {
+	            	logger.info("Next 9 characters are not numbers!");
+	                return false;
+	            }
+	        }
+	       
+	        //System.out.println("First character is 'S' and next 9 characters are numbers.");
+		  
+		  logger.info("saralCorpAliasValidateFlg-->"+saralCorpAliasValidateFlg);
+		  logger.info("validateSaralCorpAlias method ends");
+		  return saralCorpAliasValidateFlg;
+	  }
 }
