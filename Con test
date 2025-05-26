@@ -1,295 +1,193 @@
 package com.sbi.microservice.framework.services;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.AccessException;
-import com.sbi.microservice.framework.model.*;
-import com.sbi.microservice.framework.repository.ServiceDAO;
-import com.sbi.microservice.framework.services.access.AuthenticationProvider;
-import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.stereotype.Service;
 
-@ExtendWith(MockitoExtension.class)
-class AccessVerifierTest {
+import com.sbi.microservice.framework.repository.APIBankingDAO;
+import com.sbi.microservice.framework.repository.APIBankingDAOImpl;
 
-    @Mock
-    private AuthenticationProviderFactory authenticationProviderFactory;
+@Service
+public class APIBankingService {
+	private final static Logger logger = LoggerFactory.getLogger(APIBankingService.class);
+	private final APIBankingDAO apiBankingDAOImpl;
+	
+	public APIBankingService(APIBankingDAO apiBankingDAOImpl) {
+		this.apiBankingDAOImpl=apiBankingDAOImpl;
+	}
 
-    @Mock
-    private ServiceDAO serviceDAO;
+	
 
-    @Mock
-    private CacheManager cacheManager;
+	public boolean whetherAggregatorExist(String aggregatorId) {
+		logger.info("[APIBankingService][whetherAggregatorExist()][Start]");
+		 boolean aggregatorFlg = false;
+		 try {
+			 aggregatorFlg = apiBankingDAOImpl.whetherAggregatorExist(aggregatorId);
+        } catch (DataAccessException  e) {
+		   logger.info("Error in fetching records for whetherAggregatorExist :: " + e);
+        } catch (Exception e) {
+		   logger.info("Error in fetching records for whetherAggregatorExist :: " + e);
+        } 
+		logger.info("aggregatorFlg-->"+aggregatorFlg);
+		logger.info("[APIBankingService][whetherAggregatorExist()][ends]");
+		return aggregatorFlg;
+	}
 
-    @Mock
-    private FrameworkUtils frameworkUtils;
+	public boolean isAggregatorActive(String aggregatorId) {
+		logger.info("[APIBankingService][validateAggregatorWhetherActive()][Start]");
+  		boolean aggregatorFlag = false;
+   	    try {
+   	    	aggregatorFlag = apiBankingDAOImpl.validateAggregatorWhetherActive(aggregatorId);
+   	    } catch (DataAccessException  e) {
+   	    	logger.info("[APIBankingService][validateAggregatorWhetherActive()][DataAccessException] :: " + e);
+   	    }  catch (Exception e) {
+   	    	logger.info("[APIBankingService][validateAggregatorWhetherActive()][Exception] :: " + e);
+   	    } 
+   	    logger.info("[APIBankingService][validateAggregatorWhetherActive()][ends]");
+   	    return aggregatorFlag;
+	}
 
-    @Mock
-    private HttpServletRequest request;
+	public boolean validateAggregator(String aggregatorId) {
+		logger.info("[APIBankingService][validateAggregator()][Start]");
+  		boolean aggregatorFlag = false;
+   	    try {
+   	    	aggregatorFlag = apiBankingDAOImpl.validateAggregator(aggregatorId);
+   	    } catch (DataAccessException e) {
+   	    	logger.info("[APIBankingService][validateAggregator()][DataAccessException] :: " + e);
+   	    } catch (Exception e) {
+   	    	logger.info("[APIBankingService][validateAggregator()][Exception] :: " + e);
+   	    } 
+   	    logger.info("[APIBankingService][validateAggregator()][ends]");
+   	    return aggregatorFlag;
+   	  }
 
-    @Mock
-    private HttpServletResponse response;
+	public Map<String, String> getCorpDetails(Optional<String> corporateAlias) {
+		logger.info("[APIBankingService][validateCorpAlias()][Start]");
+		Map<String, String> corpDetails = null;
+  		try {
+  			corpDetails = apiBankingDAOImpl.getCorpDetails(corporateAlias.get());
+  			if(corpDetails!=null) {
+  				
+  			}
+  	   	} catch (DataAccessException e) {
+  	   	   logger.info("[APIBankingService][validateCorpAlias()][DataAccessException] :: " + e);
+  	   	} catch (Exception e) {
+   	   	   logger.info("[APIBankingService][validateCorpAlias()][Exception] :: " + e);
+   	   	} 
+  		logger.info("corpDetails-->"+corpDetails);
+  		logger.info("[APIBankingService][validateCorpAlias()][ends]");
+  		return corpDetails;
+	}
+	
+	public boolean validateCorpToken(String aggregatorId, String corpId, String corpToken) {
+  		logger.info("[APIBankingService][validatingCorpToken()][Start]");
+  		boolean corpTokenValidityFlag = false;
+   	    try {
+   	    	corpTokenValidityFlag = apiBankingDAOImpl.validateCorpToken(aggregatorId,corpId,corpToken);
+   	    } catch (DataAccessException e) {
+   	    	logger.info("[APIBankingService][validatingCorpToken()][DataAccessException] :: " + e);
+   	    } catch (Exception e) {
+   	    	logger.info("[APIBankingService][validatingCorpToken()][Exception] :: " + e);
+   	    } 
+   	    logger.info("[APIBankingService][validatingCorpToken()][ends]");
+   	    return corpTokenValidityFlag;
+  	}
 
-    @Mock
-    private AuthenticationProvider authProvider;
+	public boolean isValidAggregatorAndCorpCount(String aggregatorID, String corporateID) {
+		logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method begins ::");
+	    boolean isValidAggCorpCountFlg = false;
+	    try {
+	    	isValidAggCorpCountFlg = apiBankingDAOImpl.isValidAggregatorAndCorpCount(aggregatorID, corporateID);
+        } catch (DataAccessException  e) {
+	      logger.info("Error in fetching records for aggregatorAndCorpCount :: " + e);
+	    } 
+	     logger.info("isValidAggCorpCountFlg-->"+isValidAggCorpCountFlg);
+	    logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method ends ::");
+	    return isValidAggCorpCountFlg;
+	}
+	
+	public Boolean checkCorpStatus(String corpId) {
+  		logger.info("[APIBankingService][checkCorpStatus()][Start]");
+  		boolean corpStatus = false;
+   	    try {
+   	    	corpStatus = apiBankingDAOImpl.checkCorpStatus(corpId);
+   	    } catch (DataAccessException e) {
+   	    	logger.info("[APIBankingService][checkCorpStatus()][DataAccessException] :: " + e);
+   	    } catch (Exception e) {
+   	    	logger.info("[APIBankingService][checkCorpStatus()][Exception] :: " + e);
+   	    } 
+   	    logger.info("[APIBankingService][checkCorpStatus()][ends]");
+   	    return corpStatus;
+  		 
+  	 }
+	
+	public boolean aggregatorAndCorpCount(String aggregatorID, String corporateID) {
+	   logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method begins ::");
+	    boolean aggCorpCountFlg = false;
+	    try {
+	    	aggCorpCountFlg = apiBankingDAOImpl.aggregatorAndCorpCount(aggregatorID, corporateID);
+        } catch (DataAccessException  e) {
+	      logger.info("Error in fetching records for aggregatorAndCorpCount :: " + e);
+	    } 
+	     logger.info("aggCorpCountFlg-->"+aggCorpCountFlg);
+	    logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method ends ::");
+	    return aggCorpCountFlg;
+	  }
+	
+	public Map<String, String> getCorporateOnboardDetail(String corpID)
+  	{
+		logger.info("[APIBankingService][getCorporateOnboardDetail()][Start]");
+		 Map<String, String> corporateOnboardDetail = null;
+  		try {
+  			corporateOnboardDetail = apiBankingDAOImpl.getCorporateOnboardDetail(corpID);
+  	   	} catch (DataAccessException e) {
+  	   	   logger.info("[APIBankingService][getCorporateOnboardDetail()][Exception] :: " + e);
+  	   	} catch (Exception e) {
+   	   	   logger.info("[APIBankingService][getCorporateOnboardDetail()][Exception] :: " + e);
+   	   	} 
+  		logger.info("corpDetails-->"+corporateOnboardDetail);
+  		logger.info("[APIBankingService][getCorporateOnboardDetail()][ends]");
+  		return corporateOnboardDetail;
+	}
+	
+	public boolean validatingCorpToken(String aggregatorId, String corpId, String corpToken) {
+  		logger.info("[APIBankingService][validatingCorpToken()][Start]");
+  		boolean corpTokenValidityFlag = false;
+   	    try {
+   	    	corpTokenValidityFlag = apiBankingDAOImpl.validateCorpToken(aggregatorId,corpId,corpToken);
+   	    } catch (DataAccessException e) {
+   	    	logger.info("[APIBankingService][validatingCorpToken()][DataAccessException] :: " + e);
+   	    } catch (Exception e) {
+   	    	logger.info("[APIBankingService][validatingCorpToken()][Exception] :: " + e);
+   	    } 
+   	    logger.info("[APIBankingService][validatingCorpToken()][ends]");
+   	    return corpTokenValidityFlag;
+  	}
 
-    @InjectMocks
-    private AccessVerifier accessVerifier;
 
-    private static final String TEST_SERVICE_NAME = "testService";
-    private static final String TEST_CHANNEL_ID = "testChannel";
-    private static final String TEST_TOKEN = "testToken";
-    private static final String TEST_REQUEST_URI = "/api/" + TEST_SERVICE_NAME + "/action";
 
-    @BeforeEach
-    void setUp() {
-        when(request.getRequestURI()).thenReturn(TEST_REQUEST_URI);
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-    }
+	public Map<String, String> validateCorpID(String corpID)
+  	{
+		logger.info("[APIBankingService][validateCorpID()][Start]");
+		Map<String,String> corpDetails = null;
+  		try {
+  			corpDetails = apiBankingDAOImpl.validateCorpID(corpID);
+  	   	 } catch (DataAccessException  e) {
+  	   	   logger.info("[ValidationsFilterDefImpl][validateCorpID()][DataAccessException] :: " + e);
+  	   	 } catch (Exception e) {
+  	   	   logger.info("[ValidationsFilterDefImpl][validateCorpID()][Exception] :: " + e);
+  	   	    } 
+  		logger.info("corpDetails-->"+corpDetails);
+  		logger.info("[APIBankingService][validateCorpID()][ends]");
+  		return corpDetails;
+	}
+	
+	
+	
+	
 
-    @Test
-    void checkServiceAccess_OpenService_ShouldGrantAccess() throws AccessException {
-        // Arrange
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(TEST_CHANNEL_ID);
-        when(request.getMethod()).thenReturn("GET");
-        
-        Service openService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_OPEN, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(openService);
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.SERVICE_TYPE_OPEN, result.get().serviceType());
-    }
-
-    @Test
-    void checkServiceAccess_SecuredServiceWithUnauthorizedChannel_ShouldDenyAccess() throws AccessException {
-        // Arrange
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(TEST_CHANNEL_ID);
-        when(request.getMethod()).thenReturn("GET");
-        
-        Service securedService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Collections.emptyList());
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED, result.get().accessDescription());
-    }
-
-    @Test
-    void checkServiceAccess_SecuredServiceWithAuthorizedChannelButUnauthenticatedUser_ShouldDenyAccess() throws AccessException {
-        // Arrange
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(TEST_CHANNEL_ID);
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn(TEST_TOKEN);
-        when(request.getMethod()).thenReturn("GET");
-        
-        Service securedService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        
-        Channel authorizedChannel = new Channel(TEST_CHANNEL_ID, "Test Channel");
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Arrays.asList(authorizedChannel));
-        
-        when(authenticationProviderFactory.getProvider(TEST_CHANNEL_ID)).thenReturn(authProvider);
-        when(authProvider.authenticate(request)).thenReturn(new Authentication(FrameworkConstants.REQUESTOR_WEB, null, null, null, false));
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED, result.get().accessDescription());
-    }
-
-    @Test
-    void checkServiceAccess_SecuredServiceWithAuthorizedChannelAndAuthenticatedUser_ShouldGrantAccess() throws AccessException {
-        // Arrange
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(TEST_CHANNEL_ID);
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn(TEST_TOKEN);
-        when(request.getMethod()).thenReturn("GET");
-        
-        Service securedService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        
-        Channel authorizedChannel = new Channel(TEST_CHANNEL_ID, "Test Channel");
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Arrays.asList(authorizedChannel));
-        
-        when(authenticationProviderFactory.getProvider(TEST_CHANNEL_ID)).thenReturn(authProvider);
-        
-        UserProfile userProfile = new UserProfile("123", "testUser", 1, "corpId", 0, "userId");
-        CorporateProfile corporateProfile = new CorporateProfile("corpId", "Test Corp");
-        Authentication authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile, corporateProfile, true);
-        when(authProvider.authenticate(request)).thenReturn(authentication);
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
-    }
-
-    @Test
-    void checkServiceAccess_UnrecognizedChannel_ShouldDenyAccess() throws AccessException {
-        // Arrange
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("invalidChannel");
-        when(request.getMethod()).thenReturn("GET");
-        
-        Service securedService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        
-        Channel authorizedChannel = new Channel(TEST_CHANNEL_ID, "Test Channel");
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Arrays.asList(authorizedChannel));
-        
-        when(authenticationProviderFactory.getProvider("invalidChannel")).thenThrow(new IllegalArgumentException());
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL, result.get().accessDescription());
-    }
-
-    @Test
-    void checkServiceAccess_UnsupportedHttpMethod_ShouldDenyAccess() throws AccessException {
-        // Arrange
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(TEST_CHANNEL_ID);
-        when(request.getMethod()).thenReturn("DELETE");
-        
-        Service securedService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED, result.get().accessDescription());
-    }
-
-    @Test
-    void checkServiceAccess_ServiceNotFound_ShouldReturnEmptyOptional() throws AccessException {
-        // Arrange
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn("nonExistingService");
-        when(cacheManager.getService("nonExistingService")).thenReturn(null);
-
-        // Act
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        // Assert
-        assertFalse(result.isPresent());
-    }
-
-    @Test
-    void isSecuredService_OpenService_ShouldReturnFalse() {
-        // Arrange
-        Service openService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_OPEN, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(openService);
-
-        // Act
-        boolean result = accessVerifier.isSecuredService(TEST_SERVICE_NAME);
-
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void isSecuredService_SecuredService_ShouldReturnTrue() {
-        // Arrange
-        Service securedService = new Service(TEST_SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, null);
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-
-        // Act
-        boolean result = accessVerifier.isSecuredService(TEST_SERVICE_NAME);
-
-        // Assert
-        assertTrue(result);
-    }
-
-    @Test
-    void isSecuredService_ServiceNotFound_ShouldReturnFalse() {
-        // Arrange
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(null);
-
-        // Act
-        boolean result = accessVerifier.isSecuredService(TEST_SERVICE_NAME);
-
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void isChannelAuthorized_AuthorizedChannel_ShouldReturnTrue() {
-        // Arrange
-        Channel channel1 = new Channel("channel1", "Channel 1");
-        Channel channel2 = new Channel(TEST_CHANNEL_ID, "Test Channel");
-        List<Channel> channels = Arrays.asList(channel1, channel2);
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        // Act
-        boolean result = accessVerifier.isChannelAuthorized(TEST_SERVICE_NAME, TEST_CHANNEL_ID);
-
-        // Assert
-        assertTrue(result);
-    }
-
-    @Test
-    void isChannelAuthorized_UnauthorizedChannel_ShouldReturnFalse() {
-        // Arrange
-        Channel channel1 = new Channel("channel1", "Channel 1");
-        Channel channel2 = new Channel("channel2", "Channel 2");
-        List<Channel> channels = Arrays.asList(channel1, channel2);
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        // Act
-        boolean result = accessVerifier.isChannelAuthorized(TEST_SERVICE_NAME, TEST_CHANNEL_ID);
-
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void isChannelAuthorized_EmptyChannelList_ShouldReturnFalse() {
-        // Arrange
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Collections.emptyList());
-
-        // Act
-        boolean result = accessVerifier.isChannelAuthorized(TEST_SERVICE_NAME, TEST_CHANNEL_ID);
-
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void isUserAuthorized_ShouldReturnFalse() {
-        // Currently this method always returns false as per implementation
-        assertFalse(accessVerifier.isUserAuthorized(1));
-    }
 }
