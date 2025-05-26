@@ -1,49 +1,181 @@
-package com.sbi.yb.cinb.service.impl;
+package com.sbi.microservice.framework.services;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.when;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
-import com.sbi.yb.cinb.constants.ConfigurationConstants;
-import com.sbi.yb.cinb.model.ActualFileDownloadRequest;
-import com.sbi.yb.cinb.model.FileMasterEntity;
-import com.sbi.yb.exception.MicroServiceException;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.event.AuditEvent;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.CommonResponseWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
 
-@ExtendWith(MockitoExtension.class)
-class ActualFileDownloadServiceImplTest {
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.json.simple.JSONObject;
+import com.sbi.microservice.framework.model.PlainResponse;
+import com.sbi.microservice.framework.repository.AuditDAO;
+import com.sbi.microservices.framework.stream.AuditEventProducer;
 
-    @Mock
-    private ActualFileDownloadDao actualFileDownloadDao;
+import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
 
-    @InjectMocks
-    private ActualFileDownloadServiceImpl service;
+@Service
+public class AuditService {
+	private final static Logger logger = LoggerFactory.getLogger(AuditService.class);
+	private final AuditDAO auditDAOImpl;
+	private final AuditEventProducer auditEventProducer;
 
-    @Test
-    void downloadActualFile_WhenIOExceptionOccurs_ThrowsMicroServiceException() {
-        // Setup request
-        ActualFileDownloadRequest request = new ActualFileDownloadRequest();
-        request.setFileReferenceNo("123");
-        request.setFileExtension("txt");
+	public AuditService(AuditDAO auditDAOImpl,AuditEventProducer auditEventProducer) {
+		this.auditDAOImpl = auditDAOImpl;
+		this.auditEventProducer = auditEventProducer;
+	}
 
-        // Mock DAO response
-        FileMasterEntity mockEntity = new FileMasterEntity();
-        mockEntity.setSno("123");
-        mockEntity.setFileType(ConfigurationConstants.COMPOSITE_BEN);
-        when(actualFileDownloadDao.getFileDetails(request)).thenReturn(mockEntity);
+	@Async
+	public void audit(String activity, String details) {
+		// Persist audit record to DB or logging system
+	}
 
-        // Inject invalid file path to force IOException
-        ReflectionTestUtils.setField(service, "compositeFilePath", "/invalid/path/");
+	public void checkDuplicateRequest(Optional<String> aPIReqRefNo) {
+		logger.info("[AuditService][checkDuplicateRequest()][Start]");
+		boolean whetherRequestNotExistInAuditTrail = false;
+		try {
+			whetherRequestNotExistInAuditTrail = auditDAOImpl.checkDuplicateRequest(aPIReqRefNo.get());
+		} catch (DataAccessException e) {
+			logger.info(
+					"[AuditService][checkDuplicateRequest()][DataAccessException] :: "
+							+ e);
+		} catch (Exception e) {
+			logger.info("[AuditService][checkDuplicateRequest()][Exception] :: " + e);
+		}
+		logger.info("[AuditService][checkDuplicateRequest()][ends]");
+		if (!whetherRequestNotExistInAuditTrail) {
+			// API000009
+			throw new ValidationException("API000009","A request already exist with aPIReqRefNo : ".concat(aPIReqRefNo.get()));
+		}
 
-        // Execute and verify exception
-        MicroServiceException exception = assertThrows(MicroServiceException.class,
-            () -> service.downloadActualFile(request));
+	}
 
-        assertEquals("YBMFC008", exception.getErrorCode());
-        assertEquals("Error while downloading actual file", exception.getErrorMessage());
-    }
+	public void doAuditRequest(HttpServletRequest req, String serviceID, String channelID, String endPointName,
+			String corporateID, Optional<String> userName, String aggregatorID, String engineID, String ipAddress,
+			Optional<String> aPIReqRefNo, String serviceCategory, int userRole, Optional<String> cipherKey, String payloadInReqBody, String serviceResRefNo) {
+		
+		String corporateType=FrameworkConstants.STRING_BLANK;
+		logger.info("[AuditService][doAuditRequest()][Start]");
+		try {
+			AuditEvent auditEvent = new AuditEvent(aPIReqRefNo.get(),serviceID,endPointName,serviceCategory,channelID,userName.get(),corporateID,aggregatorID,String.valueOf(userRole),corporateType,cipherKey.get(),payloadInReqBody,serviceResRefNo,"","","","","insert");
+			auditEventProducer.sendAudit(auditEvent);
+		} catch (DataAccessException e) {
+			logger.info("[AuditService][doAuditRequest()][DataAccessException] :: " + e.getMessage());
+		} catch (Exception e) {
+			logger.info("[AuditService][doAuditRequest()][Exception] :: " + e.getMessage());
+		}
+		logger.info("[AuditService][doAuditRequest()][End]");
+
+	}
+
+/*	public void updateResRefNo(Optional<String> aPIReqRefNo, String aPIResRefNo, String finalData, Optional<String> errorMessage,
+			String finalStatusCode, String finalStatus, ServletResponse response, String encEncodedRespPayload,
+			String plainResponse) {
+		PlainResponse apiResponse = new PlainResponse(aPIReqRefNo.get(), aPIResRefNo, plainResponse, errorMessage.get(),
+				finalStatusCode, finalStatus);
+		ObjectMapper mapper = new ObjectMapper();
+		boolean updateResultAuditTrail = false;
+		boolean insertResultResponse = false;
+
+		try {
+
+			updateResultAuditTrail = auditDAOImpl.updateResRefNoAuditTrail(aPIReqRefNo.get(), aPIResRefNo, finalStatus);
+			logger.info("updateResultAuditTrail-->" + updateResultAuditTrail);
+
+			Map<String, String> apiDetailsMap=new HashMap<>();
+			
+			apiDetailsMap.put("aPIReqRefNo", aPIReqRefNo.get());
+			apiDetailsMap.put("aPIResRefNo", aPIResRefNo);
+			apiDetailsMap.put("resString", finalData);
+
+			
+
+			insertResultResponse = auditDAOImpl.insertAPIResRefDetails(apiDetailsMap);
+			logger.info("insertResultResponse-->" + insertResultResponse);
+
+			String finalResp = mapper.writeValueAsString(apiResponse);
+			logger.info("final response-->" + finalResp);
+
+			response.setContentType("application/json");
+			response.setCharacterEncoding("UTF-8");
+			response.getWriter().write(finalResp);
+		} catch (IOException e) {
+			logger.info("Exception occurred in updateResRefNo ::: " + e);
+		} catch (Exception e) {
+			logger.info("Exception occurred in updateResRefNo ::: " + e);
+		}
+
+	}*/
+
+	public void generateResponseAndUpdateResRefNo(Optional<String> aPIReqRefNo, String aPIResRefNo, String resString, Optional<String> message, String statusCode, String status,
+												  ServletResponse response, String encEncodedRespPayload, String responseKey) {
+		CommonResponseWrapper commonResponseWrapper = new CommonResponseWrapper(aPIReqRefNo.get(), aPIResRefNo, encEncodedRespPayload, message.get(), statusCode, status, responseKey);
+		ObjectMapper mapper = new ObjectMapper();
+		boolean updateResultAuditTrail ;
+		boolean insertResultResponse ;
+		try {
+			updateResultAuditTrail = auditDAOImpl.updateResRefNoAuditTrail(aPIReqRefNo.get(), aPIResRefNo, status);
+			logger.info("updateResultAuditTrail--> {}", updateResultAuditTrail);
+			Map<String, String> apiDetailsMap=new HashMap<>();
+			apiDetailsMap.put("aPIReqRefNo", aPIReqRefNo.get());
+			apiDetailsMap.put("aPIResRefNo", aPIResRefNo);
+			apiDetailsMap.put("resString", resString);
+
+			//Todo Encrypted data to added in new table with key
+			insertResultResponse = auditDAOImpl.insertAPIResRefDetails(apiDetailsMap);
+			logger.info("insertResultResponse--> {}", insertResultResponse);
+
+			String finalResp = mapper.writeValueAsString(commonResponseWrapper);
+
+			response.setContentType("application/json");
+			response.setCharacterEncoding("UTF-8");
+			response.getWriter().write(finalResp);
+		} catch (IOException e) {
+			logger.info("Exception occurred in generateResponseAndUpdateResRefNo ::: {}", e);
+		} catch (Exception e) {
+			logger.info("Exception occurred in generateResponseAndUpdateResRefNo ::: {}", e);
+		}
+
+	}
+
+
+	public void updateAuditResponse(Optional<String> aPIReqRefNo, String aPIResRefNo, String response, String status) {
+		boolean updateResultAuditTrail ;
+		boolean insertResultResponse ;
+		logger.info("updateAuditAndResponse ");
+				updateResultAuditTrail = auditDAOImpl.updateResRefNoAuditTrail(aPIReqRefNo.orElse(null), aPIResRefNo, status);
+			logger.info("updateResultAuditTrail--> {}", updateResultAuditTrail);
+			Map<String, String> apiDetailsMap=new HashMap<>();
+			apiDetailsMap.put("aPIReqRefNo", aPIReqRefNo.orElse(null));
+			apiDetailsMap.put("aPIResRefNo", aPIResRefNo);
+			apiDetailsMap.put("resString", response);
+		//Todo Encrypted data to added in new table with key
+		insertResultResponse = auditDAOImpl.insertAPIResRefDetails(apiDetailsMap);
+			logger.info("insertResultResponse--> {}", insertResultResponse);
+
+	}
+
+	public void doAuditResponse(Optional<String> aPIReqRefNo, String encEncodedRespPayload, String responseKey,
+			String serviceResRefNo, String status, String errorCode) {
+		logger.info("[AuditService][doAuditResponse()][Start]");
+		try {
+			AuditEvent auditEvent = new AuditEvent(aPIReqRefNo.get(),null,null,null,null,null,null,null,null,null,null,null,null,responseKey,encEncodedRespPayload,status,errorCode,"update");
+			auditEventProducer.sendAudit(auditEvent);
+		} catch (Exception e) {
+			logger.info("[AuditService][doAuditResponse()][Exception] :: " + e.getMessage());
+		}
+		logger.info("[AuditService][doAuditResponse()][End]");
+		
+	}
 }
