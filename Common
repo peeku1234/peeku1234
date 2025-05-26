@@ -293,3 +293,283 @@ class CorporateValidatorTest {
         verify(logger).info("corporate is valid");
     }
 }
+
+
+
+
+
+package com.sbi.microservice.framework.services;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+
+import com.sbi.microservice.framework.event.AuditEvent;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.CommonResponseWrapper;
+import com.sbi.microservice.framework.repository.AuditDAO;
+import com.sbi.microservices.framework.stream.AuditEventProducer;
+import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.springframework.dao.DataAccessException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+@ExtendWith(MockitoExtension.class)
+class AuditServiceTest {
+
+    @Mock
+    private AuditDAO auditDAOImpl;
+
+    @Mock
+    private AuditEventProducer auditEventProducer;
+
+    @Mock
+    private HttpServletRequest httpServletRequest;
+
+    @Mock
+    private ServletResponse servletResponse;
+
+    @Mock
+    private PrintWriter printWriter;
+
+    @Mock
+    private Logger logger;
+
+    @InjectMocks
+    private AuditService auditService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @BeforeEach
+    void setUp() throws IOException {
+        when(servletResponse.getWriter()).thenReturn(printWriter);
+    }
+
+    @Test
+    void testAudit() {
+        // This is an async method with no implementation, just verify it doesn't throw exceptions
+        assertDoesNotThrow(() -> auditService.audit("test-activity", "test-details"));
+    }
+
+    @Test
+    void testCheckDuplicateRequest_RequestNotExist() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        when(auditDAOImpl.checkDuplicateRequest("REQ123")).thenReturn(true);
+
+        assertDoesNotThrow(() -> auditService.checkDuplicateRequest(apiReqRefNo));
+        verify(auditDAOImpl).checkDuplicateRequest("REQ123");
+    }
+
+    @Test
+    void testCheckDuplicateRequest_RequestExists() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        when(auditDAOImpl.checkDuplicateRequest("REQ123")).thenReturn(false);
+
+        ValidationException exception = assertThrows(ValidationException.class, 
+            () -> auditService.checkDuplicateRequest(apiReqRefNo));
+        
+        assertEquals("API000009", exception.getErrorCode());
+        assertEquals("A request already exist with aPIReqRefNo : REQ123", exception.getMessage());
+    }
+
+    @Test
+    void testCheckDuplicateRequest_DataAccessException() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        when(auditDAOImpl.checkDuplicateRequest("REQ123")).thenThrow(new DataAccessException("DB Error") {});
+
+        assertDoesNotThrow(() -> auditService.checkDuplicateRequest(apiReqRefNo));
+        verify(logger).info(contains("[AuditService][checkDuplicateRequest()][DataAccessException]"));
+    }
+
+    @Test
+    void testCheckDuplicateRequest_GeneralException() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        when(auditDAOImpl.checkDuplicateRequest("REQ123")).thenThrow(new RuntimeException("General Error"));
+
+        assertDoesNotThrow(() -> auditService.checkDuplicateRequest(apiReqRefNo));
+        verify(logger).info(contains("[AuditService][checkDuplicateRequest()][Exception]"));
+    }
+
+    @Test
+    void testDoAuditRequest_Success() {
+        Optional<String> userName = Optional.of("testUser");
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        Optional<String> cipherKey = Optional.of("key123");
+
+        assertDoesNotThrow(() -> auditService.doAuditRequest(
+            httpServletRequest, "SERVICE1", "CHANNEL1", "endpoint", 
+            "CORP123", userName, "AGG123", "ENG1", "127.0.0.1", 
+            apiReqRefNo, "CAT1", 1, cipherKey, "payload", "RES123"));
+
+        verify(auditEventProducer).sendAudit(any(AuditEvent.class));
+    }
+
+    @Test
+    void testDoAuditRequest_DataAccessException() {
+        Optional<String> userName = Optional.of("testUser");
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        Optional<String> cipherKey = Optional.of("key123");
+
+        doThrow(new DataAccessException("DB Error") {}).when(auditEventProducer).sendAudit(any(AuditEvent.class));
+
+        assertDoesNotThrow(() -> auditService.doAuditRequest(
+            httpServletRequest, "SERVICE1", "CHANNEL1", "endpoint", 
+            "CORP123", userName, "AGG123", "ENG1", "127.0.0.1", 
+            apiReqRefNo, "CAT1", 1, cipherKey, "payload", "RES123"));
+
+        verify(logger).info(contains("[AuditService][doAuditRequest()][DataAccessException]"));
+    }
+
+    @Test
+    void testDoAuditRequest_GeneralException() {
+        Optional<String> userName = Optional.of("testUser");
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        Optional<String> cipherKey = Optional.of("key123");
+
+        doThrow(new RuntimeException("General Error")).when(auditEventProducer).sendAudit(any(AuditEvent.class));
+
+        assertDoesNotThrow(() -> auditService.doAuditRequest(
+            httpServletRequest, "SERVICE1", "CHANNEL1", "endpoint", 
+            "CORP123", userName, "AGG123", "ENG1", "127.0.0.1", 
+            apiReqRefNo, "CAT1", 1, cipherKey, "payload", "RES123"));
+
+        verify(logger).info(contains("[AuditService][doAuditRequest()][Exception]"));
+    }
+
+    @Test
+    void testGenerateResponseAndUpdateResRefNo_Success() throws IOException {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        Optional<String> message = Optional.of("Success");
+        String apiResRefNo = "RES123";
+        String resString = "response data";
+        String statusCode = "200";
+        String status = "SUCCESS";
+        String encEncodedRespPayload = "encrypted";
+        String responseKey = "key123";
+
+        when(auditDAOImpl.updateResRefNoAuditTrail("REQ123", "RES123", "SUCCESS")).thenReturn(true);
+        when(auditDAOImpl.insertAPIResRefDetails(anyMap())).thenReturn(true);
+
+        assertDoesNotThrow(() -> auditService.generateResponseAndUpdateResRefNo(
+            apiReqRefNo, apiResRefNo, resString, message, statusCode, status,
+            servletResponse, encEncodedRespPayload, responseKey));
+
+        verify(servletResponse).setContentType("application/json");
+        verify(servletResponse).setCharacterEncoding("UTF-8");
+        verify(printWriter).write(anyString());
+    }
+
+    @Test
+    void testGenerateResponseAndUpdateResRefNo_IOException() throws IOException {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        Optional<String> message = Optional.of("Success");
+        String apiResRefNo = "RES123";
+        String resString = "response data";
+        String statusCode = "200";
+        String status = "SUCCESS";
+        String encEncodedRespPayload = "encrypted";
+        String responseKey = "key123";
+
+        when(servletResponse.getWriter()).thenThrow(new IOException("IO Error"));
+
+        assertDoesNotThrow(() -> auditService.generateResponseAndUpdateResRefNo(
+            apiReqRefNo, apiResRefNo, resString, message, statusCode, status,
+            servletResponse, encEncodedRespPayload, responseKey));
+
+        verify(logger).info(contains("Exception occurred in generateResponseAndUpdateResRefNo"));
+    }
+
+    @Test
+    void testGenerateResponseAndUpdateResRefNo_GeneralException() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        Optional<String> message = Optional.of("Success");
+        String apiResRefNo = "RES123";
+        String resString = "response data";
+        String statusCode = "200";
+        String status = "SUCCESS";
+        String encEncodedRespPayload = "encrypted";
+        String responseKey = "key123";
+
+        when(auditDAOImpl.updateResRefNoAuditTrail("REQ123", "RES123", "SUCCESS")).thenThrow(new RuntimeException("DB Error"));
+
+        assertDoesNotThrow(() -> auditService.generateResponseAndUpdateResRefNo(
+            apiReqRefNo, apiResRefNo, resString, message, statusCode, status,
+            servletResponse, encEncodedRespPayload, responseKey));
+
+        verify(logger).info(contains("Exception occurred in generateResponseAndUpdateResRefNo"));
+    }
+
+    @Test
+    void testUpdateAuditResponse_Success() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        String apiResRefNo = "RES123";
+        String response = "response data";
+        String status = "SUCCESS";
+
+        when(auditDAOImpl.updateResRefNoAuditTrail("REQ123", "RES123", "SUCCESS")).thenReturn(true);
+        when(auditDAOImpl.insertAPIResRefDetails(anyMap())).thenReturn(true);
+
+        assertDoesNotThrow(() -> auditService.updateAuditResponse(apiReqRefNo, apiResRefNo, response, status));
+
+        verify(auditDAOImpl).updateResRefNoAuditTrail("REQ123", "RES123", "SUCCESS");
+        verify(auditDAOImpl).insertAPIResRefDetails(anyMap());
+    }
+
+    @Test
+    void testUpdateAuditResponse_NullApiReqRefNo() {
+        Optional<String> apiReqRefNo = Optional.empty();
+        String apiResRefNo = "RES123";
+        String response = "response data";
+        String status = "SUCCESS";
+
+        assertDoesNotThrow(() -> auditService.updateAuditResponse(apiReqRefNo, apiResRefNo, response, status));
+
+        verify(auditDAOImpl).updateResRefNoAuditTrail(null, "RES123", "SUCCESS");
+    }
+
+    @Test
+    void testDoAuditResponse_Success() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        String encEncodedRespPayload = "encrypted";
+        String responseKey = "key123";
+        String serviceResRefNo = "RES123";
+        String status = "SUCCESS";
+        String errorCode = "0";
+
+        assertDoesNotThrow(() -> auditService.doAuditResponse(
+            apiReqRefNo, encEncodedRespPayload, responseKey, serviceResRefNo, status, errorCode));
+
+        verify(auditEventProducer).sendAudit(any(AuditEvent.class));
+    }
+
+    @Test
+    void testDoAuditResponse_Exception() {
+        Optional<String> apiReqRefNo = Optional.of("REQ123");
+        String encEncodedRespPayload = "encrypted";
+        String responseKey = "key123";
+        String serviceResRefNo = "RES123";
+        String status = "SUCCESS";
+        String errorCode = "0";
+
+        doThrow(new RuntimeException("Error")).when(auditEventProducer).sendAudit(any(AuditEvent.class));
+
+        assertDoesNotThrow(() -> auditService.doAuditResponse(
+            apiReqRefNo, encEncodedRespPayload, responseKey, serviceResRefNo, status, errorCode));
+
+        verify(logger).info(contains("[AuditService][doAuditResponse()][Exception]"));
+    }
+}
+.
