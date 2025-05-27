@@ -1,177 +1,143 @@
 package com.sbi.microservice.framework.services;
 
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-
+import com.sbi.microservice.framework.cache.CacheManager;
 import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.exception.AccessException;
+import com.sbi.microservice.framework.model.Access;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.Channel;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.Service;
 import com.sbi.microservice.framework.model.UserProfile;
-@Component
-public final class CorporateValidator implements ChannelValidator {
-	private final static Logger logger = LoggerFactory.getLogger(CorporateValidator.class);
-	private final APIBankingService apiBankingService;
-    private final UserService userService;
-    private final CorporateService corporateService;
-    public CorporateValidator(APIBankingService apiBankingService,UserService userService,CorporateService corporateService) {
-    	this.apiBankingService=apiBankingService;
-    	this.userService=userService;
-    	this.corporateService=corporateService;
-    }
-	@Override
-	public void validateData(Map<String, Object> channelDataMap) {
-		String corporateAlias = (String)channelDataMap.get("corporateAlias");
-		String corpIdFromHeader=(String)channelDataMap.get("corpIdFromHeader");
-		UserProfile userProfile=(UserProfile) channelDataMap.get("userProfile");
-		String aggregatorID = (String)channelDataMap.get("aggregatorID");
-		String corpId=FrameworkConstants.STRING_BLANK;
-		if (null != corporateAlias && !corporateAlias.trim().equals("")
-				&& !corporateAlias.trim().equalsIgnoreCase("null")) {
-			logger.info("corporateAlias is not null or not empty");
-			Pattern patternCorpID = Pattern.compile("^[0-9]*$");
-			logger.info("Pattern to check corporateID -->" + patternCorpID);
-			Matcher matcherCorpID = patternCorpID.matcher(corporateAlias);
-			if (matcherCorpID.matches()) {
-				logger.info("valid corporateID");
-				Map<String, String> corpDetails = apiBankingService.validateCorpID(corporateAlias);
+import com.sbi.microservice.framework.repository.ServiceDAO;
+import com.sbi.microservice.framework.services.access.AuthenticationProvider;
+import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
 
-				if (null != corpDetails) {
-					logger.info("corpDetails is not null");
-					logger.info("corpDetails-->" + corpDetails);
-					if (null != corpDetails.get("corpId") && corporateAlias.equals(corpIdFromHeader)) {
-						logger.info("corpId is not null");
-						corpId = (String) corpDetails.get("corpId");
-						logger.info("apicTokenCorpId " + corpIdFromHeader + " and corpId " + corporateAlias
-								+ " from payload are equal");
-						logger.info("corpId-->" + corpId);
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
-						String active = (String) corpDetails.get("active");
-						logger.info("active-->" + active);
+@org.springframework.stereotype.Service
+public class AccessVerifier {
 
-						String isSaral = (String) corpDetails.get("isSaral");
-						logger.info("isSaral-->" + isSaral);
+	
+	private final AuthenticationProviderFactory authenticationProviderFactory;
+	private final ServiceDAO serviceDAO;
+	private final CacheManager cacheManager;
+	private final FrameworkUtils frameworkUtils;
+	
+	public AccessVerifier(AuthenticationProviderFactory authenticationProviderFactory,ServiceDAO serviceDAO,CacheManager cacheManager,FrameworkUtils frameworkUtils) {
+		this.authenticationProviderFactory=authenticationProviderFactory;
+		this.serviceDAO=serviceDAO;
+		this.cacheManager=cacheManager;
+		this.frameworkUtils=frameworkUtils;
+	}
 
-						if (null != active && active.trim().equalsIgnoreCase("Y")) {
-							logger.info("corporateAlias is active IN CORP MASTER TABLE");
+	public Optional<Access> checkServiceAccess(HttpServletRequest request,HttpServletResponse response) throws AccessException{
 
-							logger.info("userRole-->" + userProfile.userRole());
-							if (userProfile.userRole() == 4) {
+		String channelId = request.getHeader(FrameworkConstants.CHANNELID);
+		String token = request.getHeader(FrameworkConstants.USER_TOKEN);// user token
+		String requestURI = request.getRequestURI();
+		Optional<String> OptionalServiceName = Optional.of(frameworkUtils.extractServiceName(requestURI));
 
-								logger.info("Given corporateAlias is not direct corporate");
+		String accessStatus = FrameworkConstants.ACCESS_DENIED;
+		String accessDescription = FrameworkConstants.STRING_BLANK;
+		String entityType = channelId;
+		String entityValue = frameworkUtils.getEntityValue(entityType);
+		
+		String method = request.getMethod().toUpperCase();
+		
+		if (OptionalServiceName.isPresent()) {
+			String serviceName=OptionalServiceName.get();
+			boolean isSecuredService=isSecuredService(serviceName);
+			String serviceType = (isSecuredService ? FrameworkConstants.SERVICE_TYPE_SECURED : FrameworkConstants.SERVICE_TYPE_OPEN);
+			
+				
+			
+			if ("DELETE".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method) || "DEBUG".equalsIgnoreCase(method)) {
+	        	accessDescription = FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED;
+	            return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
+	        }
+			/**
+			 * Check if access to the requested service requires verification
+			 */
+			if (isSecuredService) {
+				/**
+				 * Check if the channel has access to the requested service
+				 */
+				if (isChannelAuthorized(serviceName, channelId)) {
+					try {
+						AuthenticationProvider authProvider = authenticationProviderFactory.getProvider(channelId);
+						//Authentication authentication = authProvider.authenticate(request);
 
-								//API000034
-								
-							} else {
-								logger.info("Given userName is corporate user");
-								if (null != isSaral && isSaral.trim().equalsIgnoreCase("Y")) {
-
-									logger.info(
-											"User role is not 4, but isSaral is Y, Given corporateAlias is not direct corporate");
-
-									//API000034
-
-								} else {
-									logger.info("Given corporateID belongs to NON SARAL corporate");
-									boolean corpStatus = apiBankingService.checkCorpStatus(corporateAlias);
-									logger.info("corpStatus-->" + corpStatus);
-									if (!corpStatus) {
-										logger.info(
-												"invalid corporate ID. Flow aborted. corporate id may not be in active state in cnbccorp_corporate_profile");
-
-										//API000015
-
-									} else {
-										logger.info("corporate id is in active state in cnbccorp_corporate_profile");
-
-										logger.info("corpId -->" + corpId);
-
-										Map<String, String> corporateOnboardDetail = apiBankingService
-												.getCorporateOnboardDetail(corpId);
-										if (null != corporateOnboardDetail) {
-											logger.info("corporateOnboardDetail is not null");
-											logger.info("aggregatorID-->" + corporateOnboardDetail.get("aggregatorID"));
-											if (null != corporateOnboardDetail.get("aggregatorID")) {
-												logger.info("Given corporateAlias is not direct corporate");
-
-												//API000034
-											} else {
-												logger.info("valid direct corporate..");
-
-												if (null != corporateOnboardDetail.get("status")
-														&& ((String) corporateOnboardDetail.get("status")).trim()
-																.equalsIgnoreCase("APPROVED")) {
-
-													logger.info(
-															"Given corporate alias is onboarded..so check corptoken validity");
-
-													if (null != corpId && !corpId.trim().equals("")
-															&& !corpId.trim().equalsIgnoreCase("null")) {
-
-														logger.info("corporate is valid");
-
-													} else {
-														logger.info("Corporate ID doesn't exist for Aggregator ID :"
-																+ aggregatorID + " Flow aborted.");
-														//API000017
-													}
-
-												} else {
-													logger.info("Given corporateAlias is not onboarded");
-
-													//API000039
-												}
-
-											}
-
-										} else {
-											logger.info(
-													"invalid corporate alias :" + corporateAlias + " .Flow aborted.");
-
-											//API000039
-
-										}
-
-									}
-								}
+						UserProfile userProfile= new UserProfile("-945861992","YBM2Upload",21,"250257",Integer.valueOf(0),"00437");
+						CorporateProfile corporateProfile= new CorporateProfile("250257","CNIB2YB 2 Test Corporate");
+						Authentication authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile, corporateProfile, true);
+						if (authentication.authenticated()) {
+							/**
+							 * Check if the user has access to the requested service
+							 */
+							if (!isUserAuthorized(authentication.userProfile().userRole())) {
+								accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHORIZED;
 							}
-
+							accessStatus = FrameworkConstants.ACCESS_GRANTED;
 						} else {
-							logger.info("corporateAlias is inactive");
-
-							//API000033
+							accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED;
 						}
 
-					} else {
-						logger.info("invalid corporate alias :" + corporateAlias + " .Flow aborted.");
-						logger.info("apicTokenCorpId " + corpIdFromHeader + " and corpId " + corporateAlias
-								+ " from payload are not equal");
-
-						//API000022
+					} catch (IllegalArgumentException e) {
+						accessDescription = FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL;
 					}
-
 				} else {
-					logger.info("invalid corporate alias :" + corporateAlias + " .Flow aborted.");
-
-					//API000022
+					/**
+					 * Access to the requested service is denied to the channel
+					 */
+					accessDescription = FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED;
 				}
 			} else {
-				logger.info("INVALID CORPORATE ALIAS");
-
-				//API000022
-
+				/**
+				 * Requested service does not require any verification, access to be allowed
+				 */
+				accessStatus = FrameworkConstants.ACCESS_GRANTED;
 			}
 
-		} else {
-			logger.info(
-					"Corporate ID is not present in request body eventhough the channel is Corporate. Flow aborted.");
-
-			//API000014
-
+			return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
+		}else {
+			//TODO - Throw exception
+			return null;
 		}
+	}
 
+	private boolean isUserAuthorized(int userRole) {
+		// TODO - User Rationalization to be enabled
+		return false;
+	}
+
+	boolean isSecuredService(String serviceName) {
+		Optional<Service> optionalService=Optional.ofNullable(cacheManager.getService(serviceName));
+		if(optionalService.isPresent()) {
+			return (optionalService.get().serviceType().equalsIgnoreCase(FrameworkConstants.SERVICE_TYPE_OPEN))?false:true;
+		}
+		return false;
+	}
+
+	boolean isChannelAuthorized(String serviceName, String channelId) {
+		
+		AtomicBoolean hasAccess=new AtomicBoolean(false);
+		Optional<List<Channel>> serviceChannelList=Optional.ofNullable(cacheManager.getServiceChannelList(serviceName));
+		
+		if(serviceChannelList.isPresent()) {
+			serviceChannelList.get().forEach(channel->{
+				if(channel.channelId().equalsIgnoreCase(channelId)) {
+					hasAccess.set(true); 
+					}
+			});
+				
+		}
+		return hasAccess.get();
 	}
 
 }
