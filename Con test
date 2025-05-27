@@ -1,193 +1,83 @@
 package com.sbi.microservice.framework.services;
 
 import java.util.Map;
-import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import com.sbi.microservice.framework.exception.ValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessException;
-import org.springframework.stereotype.Service;
+import org.springframework.stereotype.Component;
 
-import com.sbi.microservice.framework.repository.APIBankingDAO;
-import com.sbi.microservice.framework.repository.APIBankingDAOImpl;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.model.UserProfile;
 
-@Service
-public class APIBankingService {
-	private final static Logger logger = LoggerFactory.getLogger(APIBankingService.class);
-	private final APIBankingDAO apiBankingDAOImpl;
-	
-	public APIBankingService(APIBankingDAO apiBankingDAOImpl) {
-		this.apiBankingDAOImpl=apiBankingDAOImpl;
+@Component
+public final class WebMobileValidator implements ChannelValidator {
+	private final static Logger logger = LoggerFactory.getLogger(WebMobileValidator.class);
+	@Override
+	public void validateData(Map<String, Object> channelDataMap) {
+		String corporateAlias = (String)channelDataMap.get("corporateAlias");
+		String corpIdFromHeader=(String)channelDataMap.get("corpIdFromHeader");
+		UserProfile userProfile=(UserProfile) channelDataMap.get("userProfile");
+		String aggregatorID = (String)channelDataMap.get("aggregatorID");
+		String channelIdFromHeader =(String)channelDataMap.get("channelId");
+		String corpId=FrameworkConstants.STRING_BLANK;
+		int userRole=userProfile.userRole();
+		String userCorporateID=userProfile.corporateId();
+		int smallFlag=(int) channelDataMap.get("smallFlag");
+		  
+		  logger.info("channelIdFromHeader -->"+channelIdFromHeader);
+		  logger.info("Request is from Web or mobile..");
+		  logger.info("userRole -->"+userRole);
+		  logger.info("corporateAlias -->"+corporateAlias);
+		  logger.info("smallFlag -->"+smallFlag);
+		  
+		  if(userRole!=4 && smallFlag!=2) {
+			  logger.info("ONLY CORPORATE CUSTOMERS"); 
+			  
+			  if(null!=corporateAlias && !corporateAlias.trim().equals("") && !corporateAlias.trim().equalsIgnoreCase("null")) {
+				  logger.info("corporateAlias is not null or not empty");
+				  Pattern patternCorpID = Pattern.compile("^[0-9]*$");
+				  logger.info("Pattern to check corporateID -->"+patternCorpID);
+					Matcher matcherCorpID = patternCorpID.matcher(corporateAlias);
+					if (matcherCorpID.matches())
+					{
+						logger.info("valid corporateID");
+						logger.info("corporateAlias -->"+corporateAlias);
+						logger.info("userCorporateID -->"+userCorporateID);
+						
+						if(corporateAlias.trim().equalsIgnoreCase(userCorporateID)) {
+							logger.info("user belongs to the corporate entered");
+							
+						}else {
+							logger.info("userName to corporateAlias mapping not valid");
+							throw new ValidationException("API000042","User doesn't belong to the corporate in request");
+							  //API000042
+							  
+						}
+			  
+					}else {
+						  logger.info("INVALID CORPORATE ALIAS");
+						throw new ValidationException("API000022","Corporate alias is not valid");
+
+						//API000022
+						  
+					 }	
+			  }
+			  else {
+				  logger.info("Corporate ID is not present in request body. Flow aborted.");
+				  throw new ValidationException("API000014","Corporate id is not available in request");
+
+				  //API000014
+				  
+				  
+				}
+		  }else {
+			  logger.info("ONLY SARAL CUSTOMERS"); 
+		  }
+	  
+
 	}
-
-	
-
-	public boolean whetherAggregatorExist(String aggregatorId) {
-		logger.info("[APIBankingService][whetherAggregatorExist()][Start]");
-		 boolean aggregatorFlg = false;
-		 try {
-			 aggregatorFlg = apiBankingDAOImpl.whetherAggregatorExist(aggregatorId);
-        } catch (DataAccessException  e) {
-		   logger.info("Error in fetching records for whetherAggregatorExist :: " + e);
-        } catch (Exception e) {
-		   logger.info("Error in fetching records for whetherAggregatorExist :: " + e);
-        } 
-		logger.info("aggregatorFlg-->"+aggregatorFlg);
-		logger.info("[APIBankingService][whetherAggregatorExist()][ends]");
-		return aggregatorFlg;
-	}
-
-	public boolean isAggregatorActive(String aggregatorId) {
-		logger.info("[APIBankingService][validateAggregatorWhetherActive()][Start]");
-  		boolean aggregatorFlag = false;
-   	    try {
-   	    	aggregatorFlag = apiBankingDAOImpl.validateAggregatorWhetherActive(aggregatorId);
-   	    } catch (DataAccessException  e) {
-   	    	logger.info("[APIBankingService][validateAggregatorWhetherActive()][DataAccessException] :: " + e);
-   	    }  catch (Exception e) {
-   	    	logger.info("[APIBankingService][validateAggregatorWhetherActive()][Exception] :: " + e);
-   	    } 
-   	    logger.info("[APIBankingService][validateAggregatorWhetherActive()][ends]");
-   	    return aggregatorFlag;
-	}
-
-	public boolean validateAggregator(String aggregatorId) {
-		logger.info("[APIBankingService][validateAggregator()][Start]");
-  		boolean aggregatorFlag = false;
-   	    try {
-   	    	aggregatorFlag = apiBankingDAOImpl.validateAggregator(aggregatorId);
-   	    } catch (DataAccessException e) {
-   	    	logger.info("[APIBankingService][validateAggregator()][DataAccessException] :: " + e);
-   	    } catch (Exception e) {
-   	    	logger.info("[APIBankingService][validateAggregator()][Exception] :: " + e);
-   	    } 
-   	    logger.info("[APIBankingService][validateAggregator()][ends]");
-   	    return aggregatorFlag;
-   	  }
-
-	public Map<String, String> getCorpDetails(Optional<String> corporateAlias) {
-		logger.info("[APIBankingService][validateCorpAlias()][Start]");
-		Map<String, String> corpDetails = null;
-  		try {
-  			corpDetails = apiBankingDAOImpl.getCorpDetails(corporateAlias.get());
-  			if(corpDetails!=null) {
-  				
-  			}
-  	   	} catch (DataAccessException e) {
-  	   	   logger.info("[APIBankingService][validateCorpAlias()][DataAccessException] :: " + e);
-  	   	} catch (Exception e) {
-   	   	   logger.info("[APIBankingService][validateCorpAlias()][Exception] :: " + e);
-   	   	} 
-  		logger.info("corpDetails-->"+corpDetails);
-  		logger.info("[APIBankingService][validateCorpAlias()][ends]");
-  		return corpDetails;
-	}
-	
-	public boolean validateCorpToken(String aggregatorId, String corpId, String corpToken) {
-  		logger.info("[APIBankingService][validatingCorpToken()][Start]");
-  		boolean corpTokenValidityFlag = false;
-   	    try {
-   	    	corpTokenValidityFlag = apiBankingDAOImpl.validateCorpToken(aggregatorId,corpId,corpToken);
-   	    } catch (DataAccessException e) {
-   	    	logger.info("[APIBankingService][validatingCorpToken()][DataAccessException] :: " + e);
-   	    } catch (Exception e) {
-   	    	logger.info("[APIBankingService][validatingCorpToken()][Exception] :: " + e);
-   	    } 
-   	    logger.info("[APIBankingService][validatingCorpToken()][ends]");
-   	    return corpTokenValidityFlag;
-  	}
-
-	public boolean isValidAggregatorAndCorpCount(String aggregatorID, String corporateID) {
-		logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method begins ::");
-	    boolean isValidAggCorpCountFlg = false;
-	    try {
-	    	isValidAggCorpCountFlg = apiBankingDAOImpl.isValidAggregatorAndCorpCount(aggregatorID, corporateID);
-        } catch (DataAccessException  e) {
-	      logger.info("Error in fetching records for aggregatorAndCorpCount :: " + e);
-	    } 
-	     logger.info("isValidAggCorpCountFlg-->"+isValidAggCorpCountFlg);
-	    logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method ends ::");
-	    return isValidAggCorpCountFlg;
-	}
-	
-	public Boolean checkCorpStatus(String corpId) {
-  		logger.info("[APIBankingService][checkCorpStatus()][Start]");
-  		boolean corpStatus = false;
-   	    try {
-   	    	corpStatus = apiBankingDAOImpl.checkCorpStatus(corpId);
-   	    } catch (DataAccessException e) {
-   	    	logger.info("[APIBankingService][checkCorpStatus()][DataAccessException] :: " + e);
-   	    } catch (Exception e) {
-   	    	logger.info("[APIBankingService][checkCorpStatus()][Exception] :: " + e);
-   	    } 
-   	    logger.info("[APIBankingService][checkCorpStatus()][ends]");
-   	    return corpStatus;
-  		 
-  	 }
-	
-	public boolean aggregatorAndCorpCount(String aggregatorID, String corporateID) {
-	   logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method begins ::");
-	    boolean aggCorpCountFlg = false;
-	    try {
-	    	aggCorpCountFlg = apiBankingDAOImpl.aggregatorAndCorpCount(aggregatorID, corporateID);
-        } catch (DataAccessException  e) {
-	      logger.info("Error in fetching records for aggregatorAndCorpCount :: " + e);
-	    } 
-	     logger.info("aggCorpCountFlg-->"+aggCorpCountFlg);
-	    logger.info("aggregatorAndCorpCount(String aggregatorID, String corporateID) method ends ::");
-	    return aggCorpCountFlg;
-	  }
-	
-	public Map<String, String> getCorporateOnboardDetail(String corpID)
-  	{
-		logger.info("[APIBankingService][getCorporateOnboardDetail()][Start]");
-		 Map<String, String> corporateOnboardDetail = null;
-  		try {
-  			corporateOnboardDetail = apiBankingDAOImpl.getCorporateOnboardDetail(corpID);
-  	   	} catch (DataAccessException e) {
-  	   	   logger.info("[APIBankingService][getCorporateOnboardDetail()][Exception] :: " + e);
-  	   	} catch (Exception e) {
-   	   	   logger.info("[APIBankingService][getCorporateOnboardDetail()][Exception] :: " + e);
-   	   	} 
-  		logger.info("corpDetails-->"+corporateOnboardDetail);
-  		logger.info("[APIBankingService][getCorporateOnboardDetail()][ends]");
-  		return corporateOnboardDetail;
-	}
-	
-	public boolean validatingCorpToken(String aggregatorId, String corpId, String corpToken) {
-  		logger.info("[APIBankingService][validatingCorpToken()][Start]");
-  		boolean corpTokenValidityFlag = false;
-   	    try {
-   	    	corpTokenValidityFlag = apiBankingDAOImpl.validateCorpToken(aggregatorId,corpId,corpToken);
-   	    } catch (DataAccessException e) {
-   	    	logger.info("[APIBankingService][validatingCorpToken()][DataAccessException] :: " + e);
-   	    } catch (Exception e) {
-   	    	logger.info("[APIBankingService][validatingCorpToken()][Exception] :: " + e);
-   	    } 
-   	    logger.info("[APIBankingService][validatingCorpToken()][ends]");
-   	    return corpTokenValidityFlag;
-  	}
-
-
-
-	public Map<String, String> validateCorpID(String corpID)
-  	{
-		logger.info("[APIBankingService][validateCorpID()][Start]");
-		Map<String,String> corpDetails = null;
-  		try {
-  			corpDetails = apiBankingDAOImpl.validateCorpID(corpID);
-  	   	 } catch (DataAccessException  e) {
-  	   	   logger.info("[ValidationsFilterDefImpl][validateCorpID()][DataAccessException] :: " + e);
-  	   	 } catch (Exception e) {
-  	   	   logger.info("[ValidationsFilterDefImpl][validateCorpID()][Exception] :: " + e);
-  	   	    } 
-  		logger.info("corpDetails-->"+corpDetails);
-  		logger.info("[APIBankingService][validateCorpID()][ends]");
-  		return corpDetails;
-	}
-	
-	
-	
-	
 
 }
