@@ -1,89 +1,173 @@
-@Test
-void testAuthenticate_WhenCacheManagerThrowsException() {
-    // Arrange
-    when(cacheManager.getSession("")).thenThrow(new RuntimeException("Cache failure"));
-    
-    // Act & Assert
-    assertThrows(RuntimeException.class, () -> {
-        webAuthenticationProvider.authenticate(request);
-    });
-    
-    verify(cacheManager).getSession("");
-    verifyNoInteractions(authenticationDAO, corporateDAO);
+package com.sbi.microservice.framework.services;
+
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.exception.AccessException;
+import com.sbi.microservice.framework.model.*;
+import com.sbi.microservice.framework.repository.ServiceDAO;
+import com.sbi.microservice.framework.services.access.AuthenticationProvider;
+import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.*;
+
+import java.util.*;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class AccessVerifierTest {
+
+    @InjectMocks
+    private AccessVerifier accessVerifier;
+
+    @Mock
+    private AuthenticationProviderFactory authenticationProviderFactory;
+
+    @Mock
+    private ServiceDAO serviceDAO;
+
+    @Mock
+    private CacheManager cacheManager;
+
+    @Mock
+    private FrameworkUtils frameworkUtils;
+
+    @Mock
+    private HttpServletRequest request;
+
+    @Mock
+    private HttpServletResponse response;
+
+    @Mock
+    private AuthenticationProvider authenticationProvider;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        accessVerifier = new AccessVerifier(authenticationProviderFactory, serviceDAO, cacheManager, frameworkUtils);
+    }
+
+    @Test
+    void testCheckServiceAccess_openService_shouldGrantAccess() throws AccessException {
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("WEB");
+        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn("token123");
+        when(request.getRequestURI()).thenReturn("/api/test");
+        when(request.getMethod()).thenReturn("GET");
+
+        when(frameworkUtils.extractServiceName("/api/test")).thenReturn("testService");
+        when(frameworkUtils.getEntityValue("WEB")).thenReturn("WEB");
+
+        Service service = new Service("testService", "description", FrameworkConstants.SERVICE_TYPE_OPEN);
+        when(cacheManager.getService("testService")).thenReturn(service);
+
+        Optional<List<Channel>> optionalChannels = Optional.of(List.of(new Channel("WEB")));
+        when(cacheManager.getServiceChannelList("testService")).thenReturn(optionalChannels);
+
+        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
+
+        assertTrue(access.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_GRANTED, access.get().accessStatus());
+        assertEquals(FrameworkConstants.SERVICE_TYPE_OPEN, access.get().serviceType());
+    }
+
+    @Test
+    void testCheckServiceAccess_securedService_channelNotAuthorized() throws AccessException {
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("MOBILE");
+        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn("token123");
+        when(request.getRequestURI()).thenReturn("/api/secure");
+        when(request.getMethod()).thenReturn("POST");
+
+        when(frameworkUtils.extractServiceName("/api/secure")).thenReturn("secureService");
+        when(frameworkUtils.getEntityValue("MOBILE")).thenReturn("MOBILE");
+
+        Service service = new Service("secureService", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
+        when(cacheManager.getService("secureService")).thenReturn(service);
+
+        when(cacheManager.getServiceChannelList("secureService")).thenReturn(Optional.of(List.of(new Channel("WEB"))));
+
+        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
+
+        assertTrue(access.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_DENIED, access.get().accessStatus());
+        assertEquals(FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED, access.get().accessDescription());
+    }
+
+    @Test
+    void testCheckServiceAccess_securedService_channelAuthorized_userAuthenticated_notAuthorized() throws AccessException {
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("WEB");
+        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn("token123");
+        when(request.getRequestURI()).thenReturn("/api/secure");
+        when(request.getMethod()).thenReturn("POST");
+
+        when(frameworkUtils.extractServiceName("/api/secure")).thenReturn("secureService");
+        when(frameworkUtils.getEntityValue("WEB")).thenReturn("WEB");
+
+        Service service = new Service("secureService", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
+        when(cacheManager.getService("secureService")).thenReturn(service);
+        when(cacheManager.getServiceChannelList("secureService")).thenReturn(Optional.of(List.of(new Channel("WEB"))));
+
+        when(authenticationProviderFactory.getProvider("WEB")).thenReturn(authenticationProvider);
+
+        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
+
+        assertTrue(access.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_GRANTED, access.get().accessStatus());
+    }
+
+    @Test
+    void testCheckServiceAccess_withIllegalMethod_shouldDenyAccess() throws AccessException {
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("WEB");
+        when(request.getRequestURI()).thenReturn("/api/secure");
+        when(request.getMethod()).thenReturn("DELETE");
+
+        when(frameworkUtils.extractServiceName("/api/secure")).thenReturn("secureService");
+        when(frameworkUtils.getEntityValue("WEB")).thenReturn("WEB");
+
+        Service service = new Service("secureService", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
+        when(cacheManager.getService("secureService")).thenReturn(service);
+
+        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
+
+        assertTrue(access.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED, access.get().accessDescription());
+    }
+
+    @Test
+    void testIsSecuredService_returnsTrueIfSecured() {
+        Service service = new Service("name", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
+        when(cacheManager.getService("svc")).thenReturn(service);
+
+        assertTrue(accessVerifier.isSecuredService("svc"));
+    }
+
+    @Test
+    void testIsSecuredService_returnsFalseIfOpen() {
+        Service service = new Service("name", "desc", FrameworkConstants.SERVICE_TYPE_OPEN);
+        when(cacheManager.getService("svc")).thenReturn(service);
+
+        assertFalse(accessVerifier.isSecuredService("svc"));
+    }
+
+    @Test
+    void testIsChannelAuthorized_true() {
+        Channel channel = new Channel("WEB");
+        when(cacheManager.getServiceChannelList("svc")).thenReturn(Optional.of(List.of(channel)));
+
+        assertTrue(accessVerifier.isChannelAuthorized("svc", "WEB"));
+    }
+
+    @Test
+    void testIsChannelAuthorized_false() {
+        Channel channel = new Channel("MOBILE");
+        when(cacheManager.getServiceChannelList("svc")).thenReturn(Optional.of(List.of(channel)));
+
+        assertFalse(accessVerifier.isChannelAuthorized("svc", "WEB"));
+    }
 }
 
-@Test
-void testAuthenticate_WhenAuthenticationDAOThrowsException() {
-    // Arrange
-    when(cacheManager.getSession("")).thenReturn(null);
-    when(authenticationDAO.getUserDetails(null, null))
-        .thenThrow(new RuntimeException("Database error"));
-    
-    // Act & Assert
-    assertThrows(RuntimeException.class, () -> {
-        webAuthenticationProvider.authenticate(request);
-    });
-    
-    verify(cacheManager).getSession("");
-    verify(authenticationDAO).getUserDetails(null, null);
-    verifyNoInteractions(corporateDAO);
-}
 
-@Test
-void testAuthenticate_WhenCorporateDAOThrowsException() {
-    // Arrange
-    UserProfile mockUserProfile = new UserProfile("corpUser", UserRole.CORPORATE.getValue(), "corp123");
-    when(cacheManager.getSession("")).thenReturn(null);
-    when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
-    when(corporateDAO.getCorporateProfile("corp123"))
-        .thenThrow(new RuntimeException("Corporate service unavailable"));
-    
-    // Act & Assert
-    assertThrows(RuntimeException.class, () -> {
-        webAuthenticationProvider.authenticate(request);
-    });
-    
-    verify(cacheManager).getSession("");
-    verify(authenticationDAO).getUserDetails(null, null);
-    verify(corporateDAO).getCorporateProfile("corp123");
-}
 
-@Test
-void testAuthenticate_WhenCacheSetSessionFails() {
-    // Arrange
-    UserProfile mockUserProfile = new UserProfile("testUser", UserRole.SARAL.getValue(), "corp123");
-    when(cacheManager.getSession("")).thenReturn(null);
-    when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
-    doThrow(new RuntimeException("Cache write failed")).when(cacheManager).setSession(any());
-    
-    // Act & Assert
-    assertThrows(RuntimeException.class, () -> {
-        webAuthenticationProvider.authenticate(request);
-    });
-    
-    verify(cacheManager).getSession("");
-    verify(authenticationDAO).getUserDetails(null, null);
-    verify(cacheManager).setSession(any());
-    verifyNoInteractions(corporateDAO);
-}
-
-@Test
-void testAuthenticate_WhenInvalidUserRole() {
-    // Arrange
-    UserProfile invalidUserProfile = new UserProfile("testUser", "INVALID_ROLE", "corp123");
-    when(cacheManager.getSession("")).thenReturn(null);
-    when(authenticationDAO.getUserDetails(null, null)).thenReturn(invalidUserProfile);
-    
-    // Act
-    Authentication result = webAuthenticationProvider.authenticate(request);
-    
-    // Assert
-    assertNotNull(result);
-    assertFalse(result.authenticated());
-    assertEquals(invalidUserProfile, result.userProfile());
-    
-    verify(cacheManager).getSession("");
-    verify(authenticationDAO).getUserDetails(null, null);
-    verify(cacheManager).setSession(result);
-    verifyNoInteractions(corporateDAO);
-}
