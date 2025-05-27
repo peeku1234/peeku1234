@@ -311,3 +311,183 @@ class WebMobileValidatorTest {
         verify(logger).info("corporateAlias is not null or not empty");
     }
 }
+
+
+
+
+
+
+package com.sbi.microservice.framework.services.access;
+
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.constant.UserRole;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.repository.CorporateDAO;
+import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
+import jakarta.servlet.http.HttpServletRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class WebAuthenticationProviderTest {
+
+    @Mock
+    private CacheManager cacheManager;
+    
+    @Mock
+    private AuthenticationDAO authenticationDAO;
+    
+    @Mock
+    private CorporateDAO corporateDAO;
+    
+    @Mock
+    private HttpServletRequest request;
+    
+    private WebAuthenticationProvider webAuthenticationProvider;
+    
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        webAuthenticationProvider = new WebAuthenticationProvider(cacheManager, authenticationDAO, corporateDAO);
+    }
+    
+    @Test
+    void testAuthenticate_WithValidSessionInCache() {
+        // Arrange
+        UserProfile mockUserProfile = new UserProfile("testUser", UserRole.SARAL.getValue(), "corp123");
+        Authentication cachedAuth = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, mockUserProfile, null, true);
+        
+        when(cacheManager.getSession("")).thenReturn(cachedAuth);
+        
+        // Act
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(cachedAuth, result);
+        verify(cacheManager, times(1)).getSession("");
+        verifyNoMoreInteractions(authenticationDAO, corporateDAO);
+    }
+    
+    @Test
+    void testAuthenticate_WithNoSessionInCache_UserFound() {
+        // Arrange
+        UserProfile mockUserProfile = new UserProfile("testUser", UserRole.SARAL.getValue(), "corp123");
+        when(cacheManager.getSession("")).thenReturn(null);
+        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
+        
+        // Act
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
+        assertEquals(mockUserProfile, result.userProfile());
+        assertNull(result.corporateProfile());
+        assertTrue(result.authenticated());
+        
+        verify(cacheManager).getSession("");
+        verify(authenticationDAO).getUserDetails(null, null);
+        verify(cacheManager).setSession(result);
+        verifyNoInteractions(corporateDAO);
+    }
+    
+    @Test
+    void testAuthenticate_WithNoSessionInCache_CorporateUser() {
+        // Arrange
+        UserProfile mockUserProfile = new UserProfile("corpUser", UserRole.CORPORATE.getValue(), "corp123");
+        CorporateProfile mockCorporateProfile = new CorporateProfile("corp123", "Test Corp");
+        
+        when(cacheManager.getSession("")).thenReturn(null);
+        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
+        when(corporateDAO.getCorporateProfile("corp123")).thenReturn(mockCorporateProfile);
+        
+        // Act
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
+        assertEquals(mockUserProfile, result.userProfile());
+        assertEquals(mockCorporateProfile, result.corporateProfile());
+        assertTrue(result.authenticated());
+        
+        verify(cacheManager).getSession("");
+        verify(authenticationDAO).getUserDetails(null, null);
+        verify(corporateDAO).getCorporateProfile("corp123");
+        verify(cacheManager).setSession(result);
+    }
+    
+    @Test
+    void testAuthenticate_WithNoSessionInCache_UserNotFound() {
+        // Arrange
+        when(cacheManager.getSession("")).thenReturn(null);
+        when(authenticationDAO.getUserDetails(null, null)).thenReturn(null);
+        
+        // Act
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        // Assert
+        assertNull(result);
+        
+        verify(cacheManager).getSession("");
+        verify(authenticationDAO).getUserDetails(null, null);
+        verifyNoMoreInteractions(corporateDAO, cacheManager);
+    }
+    
+    @Test
+    void testAuthenticate_WithInvalidSessionInCache() {
+        // Arrange
+        UserProfile invalidUserProfile = new UserProfile("", UserRole.SARAL.getValue(), "corp123");
+        Authentication invalidAuth = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, invalidUserProfile, null, true);
+        
+        UserProfile mockUserProfile = new UserProfile("validUser", UserRole.SARAL.getValue(), "corp123");
+        
+        when(cacheManager.getSession("")).thenReturn(invalidAuth);
+        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
+        
+        // Act
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(mockUserProfile, result.userProfile());
+        
+        verify(cacheManager).getSession("");
+        verify(authenticationDAO).getUserDetails(null, null);
+        verify(cacheManager).setSession(result);
+        verifyNoInteractions(corporateDAO);
+    }
+    
+    @Test
+    void testAuthenticate_CorporateProfileNotFound() {
+        // Arrange
+        UserProfile mockUserProfile = new UserProfile("corpUser", UserRole.CORPORATE.getValue(), "corp123");
+        
+        when(cacheManager.getSession("")).thenReturn(null);
+        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
+        when(corporateDAO.getCorporateProfile("corp123")).thenReturn(null);
+        
+        // Act
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
+        assertEquals(mockUserProfile, result.userProfile());
+        assertNull(result.corporateProfile());
+        assertTrue(result.authenticated());
+        
+        verify(cacheManager).getSession("");
+        verify(authenticationDAO).getUserDetails(null, null);
+        verify(corporateDAO).getCorporateProfile("corp123");
+        verify(cacheManager).setSession(result);
+    }
+}
