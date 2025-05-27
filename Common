@@ -1,493 +1,89 @@
-package com.sbi.microservice.framework.services;
-
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.UserProfile;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
-import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.slf4j.Logger;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class WebMobileValidatorTest {
-
-    @InjectMocks
-    private WebMobileValidator validator;
-
-    @Mock
-    private Logger logger;
-
-    private Map<String, Object> channelDataMap;
-    private UserProfile userProfile;
-
-    @BeforeEach
-    void setUp() {
-        channelDataMap = new HashMap<>();
-        userProfile = mock(UserProfile.class);
-        channelDataMap.put("userProfile", userProfile);
-        channelDataMap.put("channelId", "WEB");
-    }
-
-    @Nested
-    @DisplayName("For Corporate Users (userRole != 4 AND smallFlag != 2)")
-    class CorporateUserTests {
-        @BeforeEach
-        void setupCorporateUser() {
-            when(userProfile.userRole()).thenReturn(3); // Corporate user
-            channelDataMap.put("smallFlag", 1); // Not saral
-        }
-
-        @Test
-        @DisplayName("Should validate successfully with matching numeric corporate alias")
-        void validCorporateAlias() {
-            channelDataMap.put("corporateAlias", "12345");
-            when(userProfile.corporateId()).thenReturn("12345");
-
-            assertDoesNotThrow(() -> validator.validateData(channelDataMap));
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"ABC123", "123 456", "123-456", "123.456"})
-        @DisplayName("Should throw ValidationException for invalid corporate alias format")
-        void invalidCorporateAliasFormat(String corporateAlias) {
-            channelDataMap.put("corporateAlias", corporateAlias);
-
-            ValidationException exception = assertThrows(ValidationException.class,
-                () -> validator.validateData(channelDataMap));
-            
-            assertEquals("API000022", exception.getErrorCode());
-            assertEquals("Corporate alias is not valid", exception.getErrorMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when corporate alias doesn't match user's corporate ID")
-        void mismatchedCorporateAlias() {
-            channelDataMap.put("corporateAlias", "12345");
-            when(userProfile.corporateId()).thenReturn("67890");
-
-            ValidationException exception = assertThrows(ValidationException.class,
-                () -> validator.validateData(channelDataMap));
-            
-            assertEquals("API000042", exception.getErrorCode());
-            assertEquals("User doesn't belong to the corporate in request", exception.getErrorMessage());
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @ValueSource(strings = {" ", "null"})
-        @DisplayName("Should throw ValidationException for missing/empty/null corporate alias")
-        void missingOrEmptyCorporateAlias(String corporateAlias) {
-            channelDataMap.put("corporateAlias", corporateAlias);
-
-            ValidationException exception = assertThrows(ValidationException.class,
-                () -> validator.validateData(channelDataMap));
-            
-            assertEquals("API000014", exception.getErrorCode());
-            assertEquals("Corporate id is not available in request", exception.getErrorMessage());
-        }
-    }
-
-    @Nested
-    @DisplayName("For Saral Users (userRole == 4 OR smallFlag == 2)")
-    class SaralUserTests {
-        @ParameterizedTest
-        @CsvSource({
-            "4, 1", // userRole 4 (saral), smallFlag 1
-            "3, 2", // userRole 3, smallFlag 2 (saral)
-            "4, 2"  // both conditions
-        })
-        @DisplayName("Should bypass validation for saral users regardless of corporate alias")
-        void shouldBypassValidationForSaralUsers(int userRole, int smallFlag) {
-            channelDataMap.put("corporateAlias", "anyValue");
-            channelDataMap.put("smallFlag", smallFlag);
-            when(userProfile.userRole()).thenReturn(userRole);
-
-            assertDoesNotThrow(() -> validator.validateData(channelDataMap));
-        }
-    }
-
-    @Test
-    @DisplayName("Should log appropriate messages during validation")
-    void shouldLogAppropriateMessages() {
-        channelDataMap.put("corporateAlias", "12345");
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(3);
-        when(userProfile.corporateId()).thenReturn("12345");
-
-        validator.validateData(channelDataMap);
-
-        verify(logger).info("channelIdFromHeader -->WEB");
-        verify(logger).info("Request is from Web or mobile..");
-        verify(logger).info("userRole -->3");
-        verify(logger).info("corporateAlias -->12345");
-        verify(logger).info("smallFlag -->1");
-        verify(logger).info("ONLY CORPORATE CUSTOMERS");
-        verify(logger).info("corporateAlias is not null or not empty");
-        verify(logger).info("valid corporateID");
-        verify(logger).info("user belongs to the corporate entered");
-    }
-
-    @Test
-    @DisplayName("Should throw NullPointerException when userProfile is null")
-    void shouldThrowExceptionWhenUserProfileIsNull() {
-        channelDataMap.put("userProfile", null);
-        channelDataMap.put("smallFlag", 1);
-
-        assertThrows(NullPointerException.class, () -> validator.validateData(channelDataMap));
-    }
+@Test
+void testAuthenticate_WhenCacheManagerThrowsException() {
+    // Arrange
+    when(cacheManager.getSession("")).thenThrow(new RuntimeException("Cache failure"));
+    
+    // Act & Assert
+    assertThrows(RuntimeException.class, () -> {
+        webAuthenticationProvider.authenticate(request);
+    });
+    
+    verify(cacheManager).getSession("");
+    verifyNoInteractions(authenticationDAO, corporateDAO);
 }
 
-
-
-
-
-
-package com.sbi.microservice.framework.services;
-
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.UserProfile;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.slf4j.Logger;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class WebMobileValidatorTest {
-
-    @InjectMocks
-    private WebMobileValidator validator;
-
-    @Mock
-    private Logger logger;
-
-    private Map<String, Object> channelDataMap;
-    private UserProfile userProfile;
-
-    @BeforeEach
-    void setUp() {
-        channelDataMap = new HashMap<>();
-        userProfile = mock(UserProfile.class);
-        channelDataMap.put("userProfile", userProfile);
-    }
-
-    @Test
-    void validateData_shouldPassForCorporateUserWithValidCorporateAlias() {
-        // Arrange
-        channelDataMap.put("corporateAlias", "12345");
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(3); // Not 4 (non-saral)
-        when(userProfile.corporateId()).thenReturn("12345");
-
-        // Act & Assert
-        assertDoesNotThrow(() -> validator.validateData(channelDataMap));
-    }
-
-    @Test
-    void validateData_shouldThrowExceptionWhenCorporateUserWithInvalidCorporateAliasFormat() {
-        // Arrange
-        channelDataMap.put("corporateAlias", "ABC123");
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(3);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, 
-            () -> validator.validateData(channelDataMap));
-        assertEquals("API000022", exception.getErrorCode());
-        assertEquals("Corporate alias is not valid", exception.getErrorMessage());
-    }
-
-    @Test
-    void validateData_shouldThrowExceptionWhenCorporateUserWithMismatchedCorporateAlias() {
-        // Arrange
-        channelDataMap.put("corporateAlias", "12345");
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(3);
-        when(userProfile.corporateId()).thenReturn("67890");
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, 
-            () -> validator.validateData(channelDataMap));
-        assertEquals("API000042", exception.getErrorCode());
-        assertEquals("User doesn't belong to the corporate in request", exception.getErrorMessage());
-    }
-
-    @Test
-    void validateData_shouldThrowExceptionWhenCorporateUserWithMissingCorporateAlias() {
-        // Arrange
-        channelDataMap.put("corporateAlias", "");
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(3);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, 
-            () -> validator.validateData(channelDataMap));
-        assertEquals("API000014", exception.getErrorCode());
-        assertEquals("Corporate id is not available in request", exception.getErrorMessage());
-    }
-
-    @Test
-    void validateData_shouldPassForSaralUserRegardlessOfCorporateAlias() {
-        // Arrange - Test case 1: userRole is 4 (saral)
-        channelDataMap.put("corporateAlias", "anyValue");
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(4);
-
-        // Act & Assert
-        assertDoesNotThrow(() -> validator.validateData(channelDataMap));
-
-        // Arrange - Test case 2: smallFlag is 2 (saral)
-        channelDataMap.put("smallFlag", 2);
-        when(userProfile.userRole()).thenReturn(3); // Not saral role but smallFlag=2
-
-        // Act & Assert
-        assertDoesNotThrow(() -> validator.validateData(channelDataMap));
-    }
-
-    @Test
-    void validateData_shouldHandleNullCorporateAliasGracefully() {
-        // Arrange
-        channelDataMap.put("corporateAlias", null);
-        channelDataMap.put("smallFlag", 1);
-        when(userProfile.userRole()).thenReturn(3);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, 
-            () -> validator.validateData(channelDataMap));
-        assertEquals("API000014", exception.getErrorCode());
-    }
-
-    @Test
-    void validateData_shouldHandleNullUserProfileGracefully() {
-        // Arrange
-        channelDataMap.put("userProfile", null);
-        channelDataMap.put("smallFlag", 1);
-
-        // Act & Assert
-        assertThrows(NullPointerException.class, () -> validator.validateData(channelDataMap));
-    }
-
-    @Test
-    void validateData_shouldLogAppropriateMessages() {
-        // Arrange
-        channelDataMap.put("corporateAlias", "12345");
-        channelDataMap.put("smallFlag", 1);
-        channelDataMap.put("channelId", "WEB");
-        when(userProfile.userRole()).thenReturn(3);
-        when(userProfile.corporateId()).thenReturn("12345");
-
-        // Act
-        validator.validateData(channelDataMap);
-
-        // Assert - Verify that appropriate log messages were generated
-        verify(logger, atLeastOnce()).info("Request is from Web or mobile..");
-        verify(logger).info("channelIdFromHeader -->WEB");
-        verify(logger).info("userRole -->3");
-        verify(logger).info("corporateAlias -->12345");
-        verify(logger).info("smallFlag -->1");
-        verify(logger).info("ONLY CORPORATE CUSTOMERS");
-        verify(logger).info("corporateAlias is not null or not empty");
-    }
+@Test
+void testAuthenticate_WhenAuthenticationDAOThrowsException() {
+    // Arrange
+    when(cacheManager.getSession("")).thenReturn(null);
+    when(authenticationDAO.getUserDetails(null, null))
+        .thenThrow(new RuntimeException("Database error"));
+    
+    // Act & Assert
+    assertThrows(RuntimeException.class, () -> {
+        webAuthenticationProvider.authenticate(request);
+    });
+    
+    verify(cacheManager).getSession("");
+    verify(authenticationDAO).getUserDetails(null, null);
+    verifyNoInteractions(corporateDAO);
 }
 
+@Test
+void testAuthenticate_WhenCorporateDAOThrowsException() {
+    // Arrange
+    UserProfile mockUserProfile = new UserProfile("corpUser", UserRole.CORPORATE.getValue(), "corp123");
+    when(cacheManager.getSession("")).thenReturn(null);
+    when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
+    when(corporateDAO.getCorporateProfile("corp123"))
+        .thenThrow(new RuntimeException("Corporate service unavailable"));
+    
+    // Act & Assert
+    assertThrows(RuntimeException.class, () -> {
+        webAuthenticationProvider.authenticate(request);
+    });
+    
+    verify(cacheManager).getSession("");
+    verify(authenticationDAO).getUserDetails(null, null);
+    verify(corporateDAO).getCorporateProfile("corp123");
+}
 
+@Test
+void testAuthenticate_WhenCacheSetSessionFails() {
+    // Arrange
+    UserProfile mockUserProfile = new UserProfile("testUser", UserRole.SARAL.getValue(), "corp123");
+    when(cacheManager.getSession("")).thenReturn(null);
+    when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
+    doThrow(new RuntimeException("Cache write failed")).when(cacheManager).setSession(any());
+    
+    // Act & Assert
+    assertThrows(RuntimeException.class, () -> {
+        webAuthenticationProvider.authenticate(request);
+    });
+    
+    verify(cacheManager).getSession("");
+    verify(authenticationDAO).getUserDetails(null, null);
+    verify(cacheManager).setSession(any());
+    verifyNoInteractions(corporateDAO);
+}
 
-
-
-
-package com.sbi.microservice.framework.services.access;
-
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.constant.UserRole;
-import com.sbi.microservice.framework.model.Authentication;
-import com.sbi.microservice.framework.model.CorporateProfile;
-import com.sbi.microservice.framework.model.UserProfile;
-import com.sbi.microservice.framework.repository.CorporateDAO;
-import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
-import jakarta.servlet.http.HttpServletRequest;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-class WebAuthenticationProviderTest {
-
-    @Mock
-    private CacheManager cacheManager;
+@Test
+void testAuthenticate_WhenInvalidUserRole() {
+    // Arrange
+    UserProfile invalidUserProfile = new UserProfile("testUser", "INVALID_ROLE", "corp123");
+    when(cacheManager.getSession("")).thenReturn(null);
+    when(authenticationDAO.getUserDetails(null, null)).thenReturn(invalidUserProfile);
     
-    @Mock
-    private AuthenticationDAO authenticationDAO;
+    // Act
+    Authentication result = webAuthenticationProvider.authenticate(request);
     
-    @Mock
-    private CorporateDAO corporateDAO;
+    // Assert
+    assertNotNull(result);
+    assertFalse(result.authenticated());
+    assertEquals(invalidUserProfile, result.userProfile());
     
-    @Mock
-    private HttpServletRequest request;
-    
-    private WebAuthenticationProvider webAuthenticationProvider;
-    
-    @BeforeEach
-    void setUp() {
-        MockitoAnnotations.openMocks(this);
-        webAuthenticationProvider = new WebAuthenticationProvider(cacheManager, authenticationDAO, corporateDAO);
-    }
-    
-    @Test
-    void testAuthenticate_WithValidSessionInCache() {
-        // Arrange
-        UserProfile mockUserProfile = new UserProfile("testUser", UserRole.SARAL.getValue(), "corp123");
-        Authentication cachedAuth = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, mockUserProfile, null, true);
-        
-        when(cacheManager.getSession("")).thenReturn(cachedAuth);
-        
-        // Act
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(cachedAuth, result);
-        verify(cacheManager, times(1)).getSession("");
-        verifyNoMoreInteractions(authenticationDAO, corporateDAO);
-    }
-    
-    @Test
-    void testAuthenticate_WithNoSessionInCache_UserFound() {
-        // Arrange
-        UserProfile mockUserProfile = new UserProfile("testUser", UserRole.SARAL.getValue(), "corp123");
-        when(cacheManager.getSession("")).thenReturn(null);
-        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
-        
-        // Act
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
-        assertEquals(mockUserProfile, result.userProfile());
-        assertNull(result.corporateProfile());
-        assertTrue(result.authenticated());
-        
-        verify(cacheManager).getSession("");
-        verify(authenticationDAO).getUserDetails(null, null);
-        verify(cacheManager).setSession(result);
-        verifyNoInteractions(corporateDAO);
-    }
-    
-    @Test
-    void testAuthenticate_WithNoSessionInCache_CorporateUser() {
-        // Arrange
-        UserProfile mockUserProfile = new UserProfile("corpUser", UserRole.CORPORATE.getValue(), "corp123");
-        CorporateProfile mockCorporateProfile = new CorporateProfile("corp123", "Test Corp");
-        
-        when(cacheManager.getSession("")).thenReturn(null);
-        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
-        when(corporateDAO.getCorporateProfile("corp123")).thenReturn(mockCorporateProfile);
-        
-        // Act
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
-        assertEquals(mockUserProfile, result.userProfile());
-        assertEquals(mockCorporateProfile, result.corporateProfile());
-        assertTrue(result.authenticated());
-        
-        verify(cacheManager).getSession("");
-        verify(authenticationDAO).getUserDetails(null, null);
-        verify(corporateDAO).getCorporateProfile("corp123");
-        verify(cacheManager).setSession(result);
-    }
-    
-    @Test
-    void testAuthenticate_WithNoSessionInCache_UserNotFound() {
-        // Arrange
-        when(cacheManager.getSession("")).thenReturn(null);
-        when(authenticationDAO.getUserDetails(null, null)).thenReturn(null);
-        
-        // Act
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        // Assert
-        assertNull(result);
-        
-        verify(cacheManager).getSession("");
-        verify(authenticationDAO).getUserDetails(null, null);
-        verifyNoMoreInteractions(corporateDAO, cacheManager);
-    }
-    
-    @Test
-    void testAuthenticate_WithInvalidSessionInCache() {
-        // Arrange
-        UserProfile invalidUserProfile = new UserProfile("", UserRole.SARAL.getValue(), "corp123");
-        Authentication invalidAuth = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, invalidUserProfile, null, true);
-        
-        UserProfile mockUserProfile = new UserProfile("validUser", UserRole.SARAL.getValue(), "corp123");
-        
-        when(cacheManager.getSession("")).thenReturn(invalidAuth);
-        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
-        
-        // Act
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(mockUserProfile, result.userProfile());
-        
-        verify(cacheManager).getSession("");
-        verify(authenticationDAO).getUserDetails(null, null);
-        verify(cacheManager).setSession(result);
-        verifyNoInteractions(corporateDAO);
-    }
-    
-    @Test
-    void testAuthenticate_CorporateProfileNotFound() {
-        // Arrange
-        UserProfile mockUserProfile = new UserProfile("corpUser", UserRole.CORPORATE.getValue(), "corp123");
-        
-        when(cacheManager.getSession("")).thenReturn(null);
-        when(authenticationDAO.getUserDetails(null, null)).thenReturn(mockUserProfile);
-        when(corporateDAO.getCorporateProfile("corp123")).thenReturn(null);
-        
-        // Act
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
-        assertEquals(mockUserProfile, result.userProfile());
-        assertNull(result.corporateProfile());
-        assertTrue(result.authenticated());
-        
-        verify(cacheManager).getSession("");
-        verify(authenticationDAO).getUserDetails(null, null);
-        verify(corporateDAO).getCorporateProfile("corp123");
-        verify(cacheManager).setSession(result);
-    }
+    verify(cacheManager).getSession("");
+    verify(authenticationDAO).getUserDetails(null, null);
+    verify(cacheManager).setSession(result);
+    verifyNoInteractions(corporateDAO);
 }
