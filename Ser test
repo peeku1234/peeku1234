@@ -1,49 +1,335 @@
-package com.sbi.microservice.framework.services.access;
+package com.sbi.microservice.framework.services;
 
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.constant.UserRole;
-import com.sbi.microservice.framework.model.Authentication;
-import com.sbi.microservice.framework.model.CorporateProfile;
-import com.sbi.microservice.framework.model.UserProfile;
-import com.sbi.microservice.framework.repository.CorporateDAO;
-import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
-import jakarta.servlet.http.HttpServletRequest;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.security.Hashing;
+import com.sbi.microservice.framework.utils.RequestValidator;
 @Component
-public final class WebAuthenticationProvider implements AuthenticationProvider {
-	private final CacheManager cacheManager;
-	private final AuthenticationDAO authenticationDAO;
-	private final CorporateDAO corporateDAO;
-
-	public WebAuthenticationProvider(CacheManager cacheManager, AuthenticationDAO authenticationDAO, CorporateDAO corporateDAO){
-		this.cacheManager = cacheManager;
-		this.authenticationDAO = authenticationDAO;
-		this.corporateDAO = corporateDAO;
-	}
-
+public final class AggregatorValidator implements ChannelValidator {
+	private final static Logger logger = LoggerFactory.getLogger(AggregatorValidator.class);
+	private final APIBankingService apiBankingService;
+    private final UserService userService;
+    private final CorporateService corporateService;
+    public AggregatorValidator(APIBankingService apiBankingService,UserService userService,CorporateService corporateService) {
+    	this.apiBankingService=apiBankingService;
+    	this.userService=userService;
+    	this.corporateService=corporateService;
+    }
 	@Override
-	public Authentication authenticate(HttpServletRequest request) {
-		Authentication authentication=cacheManager.getSession("");
-		if(authentication==null || authentication.userProfile() ==null || !"".equals(authentication.userProfile().userName())) {
-			UserProfile userProfile=authenticationDAO.getUserDetails(null, null);
-			if(userProfile==null) {
-				return null;
+	public void validateData(Map<String, Object> channelDataMap) {
+		UserProfile userProfile=(UserProfile) channelDataMap.get("userProfile");
+		String corporateAlias = (String)channelDataMap.get("corporateAlias");
+		String aggregatorID = (String)channelDataMap.get("aggregatorID");
+		String corpToken=(String)channelDataMap.get("corpToken");
+		String headerAPICTokenAggId=(String)channelDataMap.get("headerAPICTokenAggId");
+		if(aggregatorID==null) {
+			//API000016
+		}else {
+			if (aggregatorID.length() > 20) {
+				//API000032
 			}else {
-				CorporateProfile corporateProfile=null;
-				
-				if(userProfile.userRole()!=UserRole.SARAL.getValue()) {
-					corporateProfile=corporateDAO.getCorporateProfile(userProfile.corporateId());
+				Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+				Matcher matcher = pattern.matcher(aggregatorID);
+				if (matcher.matches())
+				{
+					if(apiBankingService.whetherAggregatorExist(aggregatorID)) {
+						if(apiBankingService.isAggregatorActive(aggregatorID)) {
+							if(apiBankingService.validateAggregator(aggregatorID)) {
+								if(headerAPICTokenAggId==null || !aggregatorID.equals(headerAPICTokenAggId)) {
+									//API000019
+								}
+							}else {
+								//API000019
+							}
+							
+						}else {
+							//API000031
+						}
+					}else {
+						//API000019
+					}
+				}else {
+					//API000019
 				}
-				
-				authentication=new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile, corporateProfile, true);
-				cacheManager.setSession(authentication);
 			}
 		}
-		return authentication;
-		
-		
-		
-	}
+		Map<String, String> corpDetails =  apiBankingService.getCorpDetails(Optional.ofNullable(corporateAlias));
+		if(corpDetails!=null && corpDetails.get("corpId")!=null) {
+			
+			logger.info("corpId is not null");
+			String corpId = (String)corpDetails.get("corpId");
+			logger.info("corpId-->"+corpId);
+		   
+			String active =  (String)corpDetails.get("active");
+			logger.info("active-->"+active);
+		   
+			String isSaral =  (String)corpDetails.get("isSaral");
+			logger.info("isSaral-->"+isSaral);
+			if(null!=active && active.trim().equalsIgnoreCase("Y")) {
+				if(userProfile.userRole()==4) {
+					if(checkWhetherUserIsSaral(userProfile.userRole(),isSaral)) {
+						if(validateSaralCorpAlias(corporateAlias)) {
+							if(userService.whetherUserOnboarded(userProfile.userId(),corpId)) {
+								if(null!=corpId && !corpId.trim().equals("") && !corpId.trim().equalsIgnoreCase("null")) {
+									   boolean aggCorpCountFlg =  apiBankingService.isValidAggregatorAndCorpCount(aggregatorID, corpId) ;
+									   logger.info("aggCorpCountFlg -->"+aggCorpCountFlg);
+									   if(aggCorpCountFlg) {
+										   logger.info("aggregator to corporate id mapping is valid");
+										   logger.info("corpId-->"+corpId);
+										   Map<String, String> corporateOnboardDetail = corporateService.getCorporateOnboardDetail(corpId);
+										   
+										   if(null!=corporateOnboardDetail) {
+											   logger.info("corporateOnboardDetail is not null");
+											   logger.info("corporateOnboardDetail-->"+corporateOnboardDetail);
+											   logger.info("aggregatorID-->"+corporateOnboardDetail.get("aggregatorID"));
+											   if(null!=corporateOnboardDetail.get("aggregatorID")) {
+												   logger.info("Given aggregatorID is a valid saral aggregator");
+												   logger.info("status-->"+corporateOnboardDetail.get("status"));
+												   if(null!=corporateOnboardDetail.get("status") && ((String)corporateOnboardDetail.get("status")).trim().equalsIgnoreCase("APPROVED")) {
+													   logger.info("Given corporate alias is onboarded..so check corptoken validity");
+													   logger.info("Aggregator ID :"+aggregatorID+ " and Corporate ID:"+corpId+" mapping is valid. Checking corp token validity");
+													   logger.info("corpToken -->"+corpToken);
+														if(null!=corpToken && !corpToken.trim().equals("") && !corpToken.trim().equalsIgnoreCase("null")) {	  
+															logger.info("corpToken is not null");
+															Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+															Matcher matcherCorpToken = pattern.matcher(corpToken);
+															if (matcherCorpToken.matches())
+															{
+																logger.info("corpToken pattern matched. VALID");
+																
+																 logger.info("corpToken length-->"+corpToken.length());
+																if (corpToken.length() <= 300) {
+																	if(apiBankingService.validateCorpToken(aggregatorID, corpId, corpToken)) {
+																		
+																	}else {
+																		//API000018
+																	}
+																}else {
+																	//API000029
+																}
+															}else {
+																// pattern does not match
+																logger.error("invalid corpToken");
+																//API000018
+															}
+														}else {
+															//corpToken is empty
+															logger.error("corpToken is mandatory");
+															  
+															//API000028
+														}
+												   }else {
+													   //status is not APPROVED
+													   logger.error("Given corporateAlias is not onboarded");
+														
+														//API000039
+												   }
+											   }else {
+												   //aggregatorID is null
+												   logger.info("Given corporateAlias is not a saral aggregator");
+													
+													//API000041
+											   }
+										   }else {
+											   //corporateOnboardDetail is null
+											   logger.error("corporateOnboardDetail doesnt exist");
+											   //API000039
+										   }
+									   }else {
+										   //aggCorpCountFlg is false
+										   //API000017
+										   logger.error("aggregator to corporate id mapping is NOT valid");
+									   }
+								}else {
+									//corpId is null
+									//API000022
+								}
+							}else {
+								//API000036
+							}
+						}else {
+							//API000022
+						}
+					}else {
+						//API000041
+					}
+				}else {
+					logger.info("Given user is a corporate user");
+					if(null!=isSaral && isSaral.trim().equalsIgnoreCase("Y")) {
+						logger.info("User role is not 4, But isSaral is Y, so Given corporateAlias is not valid");
+						//API000022
+					}else {
+						logger.info("corporate aggregator. validating corpalias for corporate specific conditions");
+						String regex = "^[a-zA-Z]{3}\\d{7}$";//First three characters of CorpAlias should be Alphabets followed by 7 numbers
+						Pattern corpaggpattern = Pattern.compile(regex);
+						Matcher corpaggmatcher = corpaggpattern.matcher(corporateAlias);
+						
+						if(corpaggmatcher.matches()) {
+							logger.info("corporate alias matches corporate aggregator specific conditions");
+							logger.info("Given corporateID belongs to NON SARAL corporate");
+							   boolean corpStatus = apiBankingService.checkCorpStatus(corpId);
+							   logger.info("corpStatus-->"+corpStatus);
+							   if(corpStatus) {
+								   logger.info("need to check whether the corporate user is onboarded");
+								   
+								   boolean aggCorpCountFlg =  apiBankingService.aggregatorAndCorpCount(aggregatorID, corpId) ;
+								   logger.info("aggCorpCountFlg -->"+aggCorpCountFlg);
+								   if(aggCorpCountFlg) {
+									   logger.info("aggregator to corporate id mapping is valid");
+									   logger.info("corpId -->"+corpId);
+										
+									   Map<String, String> corporateOnboardDetail = apiBankingService.getCorporateOnboardDetail(corpId);
+									   if(null!=corporateOnboardDetail) {
+										   logger.info("corporateOnboardDetail is not null");
+										   logger.info("corporateOnboardDetail is not null");
+										   logger.info("aggregatorID-->"+corporateOnboardDetail.get("aggregatorID"));
+										   if(null!=corporateOnboardDetail.get("aggregatorID")) {
+											   logger.info("Given aggregatorID is a valid corporate aggregator");
+											   logger.info("status-->"+corporateOnboardDetail.get("status"));
+											   
+											   if(null!=corporateOnboardDetail.get("status") && ((String)corporateOnboardDetail.get("status")).trim().equalsIgnoreCase("APPROVED")) {
+												   
+												   logger.info("Given corporate alias is onboarded..so check corptoken validity");
+												   if(null!=corpId && !corpId.trim().equals("") && !corpId.trim().equalsIgnoreCase("null")) {
+													   logger.info("Aggregator ID :"+aggregatorID+ " and Corporate ID:"+corpId+" are valid. Checking corp token validity");
+													   if(null!=corpToken && !corpToken.trim().equals("") && !corpToken.trim().equalsIgnoreCase("null")) {	  
+															logger.info("corpToken is not null");
+															Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+															Matcher matcherCorpToken = pattern.matcher(corpToken);
+															if (matcherCorpToken.matches())
+															{
+																logger.info("corpToken pattern matched. VALID");
+																
+																 logger.info("corpToken length-->"+corpToken.length());
+																 logger.info("corpToken pattern matched. VALID");
+																	
+																 logger.info("corpToken length-->"+corpToken.length());
+																if (corpToken.length() <= 300) {
+																	boolean corpTokenValidityFlag = apiBankingService.validatingCorpToken(aggregatorID, corpId, corpToken);
+																	  logger.info("corpTokenValidityFlag-->"+corpTokenValidityFlag);
+																	  if(corpTokenValidityFlag) {
+																		  logger.info("invalid corporate token. Flow aborted.");
+																		  //API000018
+																	  }else {
+																		  
+																	  }
+																}else {
+																	logger.info("corpToken length > 300");
+																	//API000029
+																}
+															}else {
+																logger.info("invalid corpToken");
+																//API000018
+															}
+													   }else {
+														   logger.info("corpToken is mandatory");
+															//API000028";
+													   }
+														  
+												   }else {
+													   logger.info("Corporate ID doesn't exist for Aggregator ID :"+aggregatorID+" Flow aborted.");
+														//API000017
+												   }
+											   }else {
+												   logger.info("Given corporateAlias is not onboarded");
+													//API000039
+											   }
+										   }else {
+											   logger.info("Aggregator and Corporate mapping not valid");
+												//API000017
+										   }
+									   }else {
+										   logger.info("invalid corporate alias :"+corporateAlias+" .Flow aborted.");
+											//API000039
+									   }
+								   }else {
+									   logger.info("aggregator to corporate id mapping is NOT valid");
+										//API000017
+								   }
+							   }else {
+								   logger.info("invalid corporate ID. Flow aborted. corporate id may not be in active state in cnbccorp_corporate_profile");
+								   //API000015
+							   }
+						}else {
+							logger.info("INVALID CORPORATE ALIAS");
+							  
+							 //API000022
+						}
+					}
+				}
+			}else {
+				//API000033
+			}
+		}else {
+			//API000022
+		}
 
+	}
+	public boolean checkWhetherUserIsSaral(int userRole,String isSaral) {
+		  logger.info("checkWhetherUserIsSaral method begins");
+		  boolean whetherUserIsSaral = false;
+		  
+		  logger.info("userRole-->"+userRole);
+		  logger.info("userRole-->"+isSaral);
+		  if(userRole==4) {
+			  
+			  if(null!=isSaral) {
+				   if(isSaral.trim().equalsIgnoreCase("Y")) {
+					   whetherUserIsSaral = true;
+				   }else {
+					   whetherUserIsSaral = false;
+				   }
+				   
+			  }else {
+				  whetherUserIsSaral = false;
+			  }
+		   }else {
+				  whetherUserIsSaral = false;
+		   }
+		  logger.info("whetherUserIsSaral-->"+whetherUserIsSaral);
+		  logger.info("checkWhetherUserIsSaral method ends"); 
+		  return whetherUserIsSaral;
+	  }
+	
+	public boolean validateSaralCorpAlias(String corporateAlias) {
+		  logger.info("validateSaralCorpAlias method begins.."+corporateAlias);
+		  
+		  //corporateAlias= "S123456789ABCDE";
+		  logger.info("corporateAlias changed to .."+corporateAlias);
+		  boolean saralCorpAliasValidateFlg=true;
+		  
+		// Check if the string length is 17
+	        if (corporateAlias.length() > 17) {
+	        	logger.info("Invalid input length!");
+	            return false;
+	        }
+	       
+	        // Check if the first character is 'S'
+	        if (corporateAlias.charAt(0) != 'S') {
+	        	logger.info("First character is not 'S'!");
+	            return false;
+	        }
+	       
+	        // Check if the next 9 characters are numbers
+	        for (int i = 1; i <= 9; i++) {
+	            if (!Character.isDigit(corporateAlias.charAt(i))) {
+	            	logger.info("Next 9 characters are not numbers!");
+	                return false;
+	            }
+	        }
+	       
+	        //System.out.println("First character is 'S' and next 9 characters are numbers.");
+		  
+		  logger.info("saralCorpAliasValidateFlg-->"+saralCorpAliasValidateFlg);
+		  logger.info("validateSaralCorpAlias method ends");
+		  return saralCorpAliasValidateFlg;
+	  }
 }
