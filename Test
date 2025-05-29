@@ -1,143 +1,198 @@
-package com.sbi.microservice.framework.services;
+package com.sbi.yb.controller;
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.AccessException;
-import com.sbi.microservice.framework.model.Access;
-import com.sbi.microservice.framework.model.Authentication;
-import com.sbi.microservice.framework.model.Channel;
-import com.sbi.microservice.framework.model.CorporateProfile;
-import com.sbi.microservice.framework.model.Service;
-import com.sbi.microservice.framework.model.UserProfile;
-import com.sbi.microservice.framework.repository.ServiceDAO;
-import com.sbi.microservice.framework.services.access.AuthenticationProvider;
-import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.SBIApplicationResponse;
 import com.sbi.microservice.framework.utils.FrameworkUtils;
-
+import com.sbi.yb.constants.ServiceConstants;
+import com.sbi.yb.constants.StatusConstants;
+import com.sbi.yb.model.*;
+import com.sbi.yb.service.FileConfigurationService;
+import com.sbi.yb.service.ViewFileConfigurationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
-@org.springframework.stereotype.Service
-public class AccessVerifier {
+import java.util.*;
 
-	
-	private final AuthenticationProviderFactory authenticationProviderFactory;
-	private final ServiceDAO serviceDAO;
-	private final CacheManager cacheManager;
-	private final FrameworkUtils frameworkUtils;
-	
-	public AccessVerifier(AuthenticationProviderFactory authenticationProviderFactory,ServiceDAO serviceDAO,CacheManager cacheManager,FrameworkUtils frameworkUtils) {
-		this.authenticationProviderFactory=authenticationProviderFactory;
-		this.serviceDAO=serviceDAO;
-		this.cacheManager=cacheManager;
-		this.frameworkUtils=frameworkUtils;
-	}
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 
-	public Optional<Access> checkServiceAccess(HttpServletRequest request,HttpServletResponse response) throws AccessException{
+@ExtendWith(MockitoExtension.class)
+class FileConfigurationControllerTest {
 
-		String channelId = request.getHeader(FrameworkConstants.CHANNELID);
-		String token = request.getHeader(FrameworkConstants.USER_TOKEN);// user token
-		String requestURI = request.getRequestURI();
-		Optional<String> OptionalServiceName = Optional.of(frameworkUtils.extractServiceName(requestURI));
+    @InjectMocks
+    private FileConfigurationController fileConfigurationController;
 
-		String accessStatus = FrameworkConstants.ACCESS_DENIED;
-		String accessDescription = FrameworkConstants.STRING_BLANK;
-		String entityType = channelId;
-		String entityValue = frameworkUtils.getEntityValue(entityType);
-		
-		String method = request.getMethod().toUpperCase();
-		
-		if (OptionalServiceName.isPresent()) {
-			String serviceName=OptionalServiceName.get();
-			boolean isSecuredService=isSecuredService(serviceName);
-			String serviceType = (isSecuredService ? FrameworkConstants.SERVICE_TYPE_SECURED : FrameworkConstants.SERVICE_TYPE_OPEN);
-			
-				
-			
-			if ("DELETE".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method) || "DEBUG".equalsIgnoreCase(method)) {
-	        	accessDescription = FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED;
-	            return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
-	        }
-			/**
-			 * Check if access to the requested service requires verification
-			 */
-			if (isSecuredService) {
-				/**
-				 * Check if the channel has access to the requested service
-				 */
-				if (isChannelAuthorized(serviceName, channelId)) {
-					try {
-						AuthenticationProvider authProvider = authenticationProviderFactory.getProvider(channelId);
-						//Authentication authentication = authProvider.authenticate(request);
+    @Mock
+    private FileConfigurationService fileConfigurationService;
 
-						UserProfile userProfile= new UserProfile("-945861992","YBM2Upload",21,"250257",Integer.valueOf(0),"00437");
-						CorporateProfile corporateProfile= new CorporateProfile("250257","CNIB2YB 2 Test Corporate");
-						Authentication authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile, corporateProfile, true);
-						if (authentication.authenticated()) {
-							/**
-							 * Check if the user has access to the requested service
-							 */
-							if (!isUserAuthorized(authentication.userProfile().userRole())) {
-								accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHORIZED;
-							}
-							accessStatus = FrameworkConstants.ACCESS_GRANTED;
-						} else {
-							accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED;
-						}
+    @Mock
+    private ViewFileConfigurationService viewFileConfigurationService;
 
-					} catch (IllegalArgumentException e) {
-						accessDescription = FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL;
-					}
-				} else {
-					/**
-					 * Access to the requested service is denied to the channel
-					 */
-					accessDescription = FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED;
-				}
-			} else {
-				/**
-				 * Requested service does not require any verification, access to be allowed
-				 */
-				accessStatus = FrameworkConstants.ACCESS_GRANTED;
-			}
+    @Mock
+    private FrameworkUtils frameworkUtils;
 
-			return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
-		}else {
-			//TODO - Throw exception
-			return null;
-		}
-	}
+    @Mock
+    private HttpServletRequest httpServletRequest;
 
-	private boolean isUserAuthorized(int userRole) {
-		// TODO - User Rationalization to be enabled
-		return false;
-	}
+    @Mock
+    private HttpServletResponse httpServletResponse;
 
-	boolean isSecuredService(String serviceName) {
-		Optional<Service> optionalService=Optional.ofNullable(cacheManager.getService(serviceName));
-		if(optionalService.isPresent()) {
-			return (optionalService.get().serviceType().equalsIgnoreCase(FrameworkConstants.SERVICE_TYPE_OPEN))?false:true;
-		}
-		return false;
-	}
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-	boolean isChannelAuthorized(String serviceName, String channelId) {
-		
-		AtomicBoolean hasAccess=new AtomicBoolean(false);
-		Optional<List<Channel>> serviceChannelList=Optional.ofNullable(cacheManager.getServiceChannelList(serviceName));
-		
-		if(serviceChannelList.isPresent()) {
-			serviceChannelList.get().forEach(channel->{
-				if(channel.channelId().equalsIgnoreCase(channelId)) {
-					hasAccess.set(true); 
-					}
-			});
-				
-		}
-		return hasAccess.get();
-	}
+    SaveFileConfigurationRequest saveFileConfigurationRequest = new SaveFileConfigurationRequest();
 
+    List<DelimitedConfiguration> delimitedConfigurations = new ArrayList<>(Arrays.asList(
+            new DelimitedConfiguration("Account Number", "17", 1, "AlphaNumeric", true, "B", null, null),
+            new DelimitedConfiguration("Branch Code", "12", 2, "AlphaNumeric", true, "B", null, null),
+            new DelimitedConfiguration("Date", "10", 3, "AlphaNumeric", true, "B", null, null),
+            new DelimitedConfiguration("Debit Amount", "23", 4, "Numeric", true, "D", null, null),
+            new DelimitedConfiguration("Credit Amount", "23", 5, "Numeric", true, "C", null, null),
+            new DelimitedConfiguration("Reference Number", "15", 6, "AlphaNumeric", true, "B", null, null),
+            new DelimitedConfiguration("Description", "240", 7, "AlphaNumeric", true, "B", null, null),
+            new DelimitedConfiguration("Payment Identifier", "4", 8, "AlphaNumeric", true, "B", null, null)
+    ));
+
+    @BeforeEach
+    void setUp() {
+        saveFileConfigurationRequest.setCorporateAlias("250256");
+        saveFileConfigurationRequest.setFileType("COMPOSITE_BEN");
+        saveFileConfigurationRequest.setFormat(0);
+        saveFileConfigurationRequest.setFieldDelimiter("#");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"COMPOSITE_BEN", "IMPS_BEN", "IMPS_TXN", "CT|CR|CN|CZ", "CD"})
+    void testSaveFileConfiguration(String fileType) throws Exception {
+        SaveFileConfigurationRequest mockRequest = new SaveFileConfigurationRequest();
+        mockRequest.setFileType(fileType);
+        mockRequest.setFormat(0);
+        mockRequest.setFieldDelimiter("|");
+        mockRequest.setCorporateAlias("1234");
+        mockRequest.setDelimitedConfigurations(delimitedConfigurations);
+        mockRequest.setFixedConfigurations(Collections.emptyList());
+        
+        SaveFileConfigurationResponse saveFileConfigurationResponse = new SaveFileConfigurationResponse("File configuration saved successfully");
+        SBIApplicationResponse mockAppResponse = new SBIApplicationResponse();
+        mockAppResponse.setData(saveFileConfigurationResponse);
+        
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, SaveFileConfigurationRequest.class))
+                .thenReturn(mockRequest);
+        Mockito.when(frameworkUtils.getAttribute(httpServletRequest, "channelIdFromHeader"))
+                .thenReturn(Optional.of("web"));
+        Mockito.when(fileConfigurationService.validateAndSaveFileConfiguration(any(SaveFileConfigurationRequest.class), anyString()))
+                .thenReturn(saveFileConfigurationResponse);
+        Mockito.when(frameworkUtils.buildSuccessResponse(any(), anyString()))
+                .thenReturn(mockAppResponse);
+        
+        ResponseEntity<SBIApplicationResponse> responseEntity = fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse);
+        
+        assertNotNull(responseEntity);
+        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
+        assertNotNull(responseEntity.getBody());
+    }
+
+    @Test
+    void testSaveFileConfiguration_invalidFileType() throws Exception {
+        SaveFileConfigurationRequest mockRequest = new SaveFileConfigurationRequest();
+        mockRequest.setFileType("INVALID_TYPE");
+        mockRequest.setFormat(0);
+        mockRequest.setFieldDelimiter("|");
+        mockRequest.setDelimitedConfigurations(delimitedConfigurations);
+        mockRequest.setFixedConfigurations(Collections.emptyList());
+        
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, SaveFileConfigurationRequest.class))
+                .thenReturn(mockRequest);
+        
+        ValidationException exception = assertThrows(ValidationException.class, () -> 
+            fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse));
+        
+        assertEquals(StatusConstants.YBMFC008, exception.getErrorCode());
+    }
+
+    @Test
+    void testGetConfiguration() throws Exception {
+        GetConfigurationRequest mockRequest = new GetConfigurationRequest();
+        GetConfigurationResponse mockResponse = new GetConfigurationResponse();
+        mockRequest.setFileType("IMPS_TXN");
+        
+        SBIApplicationResponse mockAppResponse = new SBIApplicationResponse();
+        mockAppResponse.setData(mockResponse);
+        
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, GetConfigurationRequest.class))
+                .thenReturn(mockRequest);
+        Mockito.when(viewFileConfigurationService.getConfiguration(any(GetConfigurationRequest.class)))
+                .thenReturn(mockResponse);
+        Mockito.when(frameworkUtils.buildSuccessResponse(any(), anyString()))
+                .thenReturn(mockAppResponse);
+        
+        ResponseEntity<SBIApplicationResponse> response = fileConfigurationController.getConfiguration(httpServletRequest, httpServletResponse);
+        
+        assertNotNull(response);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+    }
+
+    @Test
+    void testCheckConfigurationAvailability() throws Exception {
+        CheckConfigurationRequest mockRequest = new CheckConfigurationRequest();
+        CheckConfigurationResponse mockResponse = new CheckConfigurationResponse(new HashMap<>());
+        mockRequest.setCorporateAlias("250250");
+        mockRequest.setFileType(List.of());
+        
+        SBIApplicationResponse mockAppResponse = new SBIApplicationResponse();
+        mockAppResponse.setData(mockResponse);
+        
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, CheckConfigurationRequest.class))
+                .thenReturn(mockRequest);
+        Mockito.when(fileConfigurationService.getConfigurationStatus(any(CheckConfigurationRequest.class)))
+                .thenReturn(mockResponse);
+        Mockito.when(frameworkUtils.buildSuccessResponse(any(), anyString()))
+                .thenReturn(mockAppResponse);
+        
+        ResponseEntity<SBIApplicationResponse> response = fileConfigurationController.checkConfigurationAvailability(httpServletRequest, httpServletResponse);
+        
+        assertNotNull(response);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+    }
+
+    @Test
+    void testCheckConfigurationAvailabilityWithException() throws Exception {
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, CheckConfigurationRequest.class))
+                .thenThrow(new RuntimeException("Test exception"));
+        
+        assertThrows(RuntimeException.class, () -> 
+            fileConfigurationController.checkConfigurationAvailability(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testGetConfigurationWithException() throws Exception {
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, GetConfigurationRequest.class))
+                .thenThrow(new RuntimeException("Test exception"));
+        
+        assertThrows(RuntimeException.class, () -> 
+            fileConfigurationController.getConfiguration(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testSaveFileConfigurationWithException() throws Exception {
+        Mockito.when(frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, SaveFileConfigurationRequest.class))
+                .thenThrow(new RuntimeException("Test exception"));
+        
+        assertThrows(RuntimeException.class, () -> 
+            fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse));
+    }
 }
