@@ -1,190 +1,48 @@
-package com.sbi.yb.repository.impl;
+ public List<String> getResultForIMPSTXNFixed(List<Map<String, String>> listOfConfiguration, FileConfigMasterEntity response,
+                                               StringBuilder debitString, StringBuilder creditString) {
+    List<String> result = new ArrayList<>();
+    listOfConfiguration.forEach(configMap -> {
+      String fieldValue = "Other";
+      for (FixedConfiguration fixedFileConfiguration : response.getFixedConfiguration()) {
+        if(creditString.toString().startsWith("A") && (fixedFileConfiguration.getFieldName().equalsIgnoreCase("Beneficiary MMID") ||
+                fixedFileConfiguration.getFieldName().equalsIgnoreCase("Beneficiary Mobile No"))) {
+          configMap.put("Beneficiary MMID", "       ");
+          configMap.put("Beneficiary Mobile No", "          ");
+        }
 
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.constants.ConfigurationConstants;
-import com.sbi.yb.model.DelimitedConfiguration;
-import com.sbi.yb.model.FileConfigMasterEntity;
-import com.sbi.yb.model.FixedConfiguration;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.*;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.BeanPropertyRowMapper;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+        if (Optional.ofNullable(configMap.get(fixedFileConfiguration.getFieldName().trim())).isPresent()) {
+          fieldValue = configMap.get(fixedFileConfiguration.getFieldName().trim());
+        }
+        if ((fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex()) < fieldValue.length()) {
+          fieldValue = fieldValue.substring(0, (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex()) + 1);
+        }
+        int startIndex = fixedFileConfiguration.getStartIndex();
+        getFixedConfigurationFieldType(fixedFileConfiguration, configMap, debitString, creditString, startIndex, fieldValue);
+      }
+      result.add(debitString.toString());
+      result.add(creditString.toString());
+      result.add("");
+    });
+    return result;
+  }
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+  @Test
+  void getResultForIMPSTXNFixed() {
+    fixedConfigurations.add(new FixedConfiguration("Beneficiary MMID", 1, 4, "C", null));
+    fileConfiguration.setFormat(1);
+    fileConfiguration.setFixedConfiguration(fixedConfigurations);
+    sampleFileDownloadRequest.setFileType("IMPS_TXN");
+    fixedConfiguration.setFieldName("Beneficiary Name");
+    fileConfigurations.add(new FileConfigMasterEntity(5966359893L, null, "A", 1, "250250", null, null));
+    Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
+    Mockito.when(sampleFileDownloadDaoimpl.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
+            .thenReturn(fileConfiguration);
+    FileDownloadResponse downloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
+    Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
+    Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFixedConfiguration(anyString(), anyString(), anyLong(),
+            anyString());
+    assertEquals(5966359893L, fileConfiguration.getOid());
+    assertNotNull(downloadResponse);
 
-@ExtendWith(MockitoExtension.class)
-class SampleFileDownloadDaoImplTest {
-
-    @InjectMocks
-    private SampleFileDownloadDaoImpl sampleFileDownloadDaoimpl;
-    
-    @Mock
-    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-
-    @ParameterizedTest
-    @ValueSource(strings = {"CR|CN|CZ", "CT", "DIBTP", "B", "CT|CR|CN|CZ", 
-                           ConfigurationConstants.OTHER_BANK, 
-                           ConfigurationConstants.SAME_BANK, 
-                           ConfigurationConstants.ACCOUNT_TXN_BOTH})
-    void getFileConfiguration(String fileType) {
-        List<FileConfigMasterEntity> fileConfigMasterEntity = new ArrayList<>();
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class)))
-            .thenReturn(fileConfigMasterEntity);
-        
-        List<FileConfigMasterEntity> result = sampleFileDownloadDaoimpl.getFileConfiguration("250250", fileType);
-        
-        assertNotNull(result);
-        verify(namedParameterJdbcTemplate, times(1)).query(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
-    }
-
-    @Test
-    void getFileConfiguration_Exception() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class)))
-            .thenThrow(new DataAccessException("exception") {});
-            
-        assertThrows(TechnicalException.class, () -> 
-            sampleFileDownloadDaoimpl.getFileConfiguration("250250", "IMPS_TXN"));
-            
-        verify(namedParameterJdbcTemplate, times(1)).query(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
-    }
-
-    @Test
-    void getDelimitedConfiguration_WithOid() {
-        String corporateId = "250250";
-        String fileType = ConfigurationConstants.DD;
-        Long oid = 5966359893L;
-        
-        List<DelimitedConfiguration> expectedConfig = new ArrayList<>();
-        expectedConfig.add(new DelimitedConfiguration());
-        
-        when(namedParameterJdbcTemplate.query(eq(QueryConstants.SELECT_DELIMITED_FILE_CONFIGURATION_OID), 
-            any(MapSqlParameterSource.class), any(RowMapper.class)))
-            .thenReturn(expectedConfig);
-            
-        FileConfigMasterEntity result = sampleFileDownloadDaoimpl.getDelimitedConfiguration(corporateId, fileType, oid, null);
-        
-        assertNotNull(result);
-        assertEquals(expectedConfig, result.getDelimitedConfiguration());
-        verify(namedParameterJdbcTemplate).query(eq(QueryConstants.SELECT_DELIMITED_FILE_CONFIGURATION_OID), 
-            any(MapSqlParameterSource.class), any(RowMapper.class));
-    }
-
-    @Test
-    void getDelimitedConfiguration_WithCompConfigType() {
-        String corporateId = "250250";
-        String fileType = "CD";
-        String compConfigType = "TEST_CONFIG";
-        
-        List<DelimitedConfiguration> expectedConfig = new ArrayList<>();
-        expectedConfig.add(new DelimitedConfiguration());
-        
-        when(namedParameterJdbcTemplate.query(eq(QueryConstants.SELECT_DELIMITED_FILE_CONFIGURATION), 
-            any(MapSqlParameterSource.class), any(RowMapper.class)))
-            .thenReturn(expectedConfig);
-            
-        FileConfigMasterEntity result = sampleFileDownloadDaoimpl.getDelimitedConfiguration(corporateId, fileType, null, compConfigType);
-        
-        assertNotNull(result);
-        assertEquals(expectedConfig, result.getDelimitedConfiguration());
-        verify(namedParameterJdbcTemplate).query(eq(QueryConstants.SELECT_DELIMITED_FILE_CONFIGURATION), 
-            any(MapSqlParameterSource.class), any(RowMapper.class));
-    }
-
-    @Test
-    void getFixedConfiguration_WithOid() {
-        String corporateId = "250250";
-        String fileType = ConfigurationConstants.ADD_SAME_BANK;
-        Long oid = 5966359893L;
-        
-        List<FixedConfiguration> expectedConfig = new ArrayList<>();
-        expectedConfig.add(new FixedConfiguration());
-        
-        when(namedParameterJdbcTemplate.query(eq(QueryConstants.SELECT_FIXED_FILE_CONFIGURATION_OID), 
-            any(MapSqlParameterSource.class), any(RowMapper.class)))
-            .thenReturn(expectedConfig);
-            
-        FileConfigMasterEntity result = sampleFileDownloadDaoimpl.getFixedConfiguration(corporateId, fileType, oid, null);
-        
-        assertNotNull(result);
-        assertEquals(expectedConfig, result.getFixedConfiguration());
-        verify(namedParameterJdbcTemplate).query(eq(QueryConstants.SELECT_FIXED_FILE_CONFIGURATION_OID), 
-            any(MapSqlParameterSource.class), any(RowMapper.class));
-    }
-
-    @Test
-    void getFixedConfiguration_WithCompConfigType() {
-        String corporateId = "250250";
-        String fileType = "CD";
-        String compConfigType = "TEST_CONFIG";
-        
-        List<FixedConfiguration> expectedConfig = new ArrayList<>();
-        expectedConfig.add(new FixedConfiguration());
-        
-        when(namedParameterJdbcTemplate.query(eq(QueryConstants.SELECT_FIXED_FILE_CONFIGURATION), 
-            any(MapSqlParameterSource.class), any(RowMapper.class)))
-            .thenReturn(expectedConfig);
-            
-        FileConfigMasterEntity result = sampleFileDownloadDaoimpl.getFixedConfiguration(corporateId, fileType, null, compConfigType);
-        
-        assertNotNull(result);
-        assertEquals(expectedConfig, result.getFixedConfiguration());
-        verify(namedParameterJdbcTemplate).query(eq(QueryConstants.SELECT_FIXED_FILE_CONFIGURATION), 
-            any(MapSqlParameterSource.class), any(RowMapper.class));
-    }
-
-    @Test
-    void delimitedFileConfigurationMapperTest() throws SQLException {
-        ResultSet rs = mock(ResultSet.class);
-        when(rs.getString(ConfigurationConstants.FLD_NAME_DELIMITED)).thenReturn("FIELD_NAME");
-        when(rs.getString("ALIAS_NAME")).thenReturn("ALIAS");
-        when(rs.getInt(ConfigurationConstants.ORDER_NO)).thenReturn(1);
-        when(rs.getString("TXN_CODE")).thenReturn("CODE");
-        when(rs.getString("FIELD_LENGTH")).thenReturn("100");
-        
-        SampleFileDownloadDaoImpl.DelimitedFileConfigurationMapper mapper = 
-            new SampleFileDownloadDaoImpl.DelimitedFileConfigurationMapper();
-        DelimitedConfiguration result = mapper.mapRow(rs, 1);
-        
-        assertNotNull(result);
-        assertEquals("FIELD_NAME", result.getFieldName());
-        assertEquals("ALIAS", result.getFieldAlias());
-        assertEquals(1, result.getOrderNo());
-        assertEquals("CODE", result.getFieldType());
-        assertEquals("100", result.getFieldLength());
-    }
-
-    @Test
-    void fixedFileConfigurationMapperTest() throws SQLException {
-        ResultSet rs = mock(ResultSet.class);
-        when(rs.getString("FLD_NAME")).thenReturn("FIELD_NAME");
-        when(rs.getInt("START_INDEX")).thenReturn(1);
-        when(rs.getInt("END_INDEX")).thenReturn(10);
-        when(rs.getString("ALIAS_NAME")).thenReturn("ALIAS");
-        when(rs.getString("TXN_CODE")).thenReturn("CODE");
-        
-        SampleFileDownloadDaoImpl.FixedFileConfigurationMapper mapper = 
-            new SampleFileDownloadDaoImpl.FixedFileConfigurationMapper();
-        FixedConfiguration result = mapper.mapRow(rs, 1);
-        
-        assertNotNull(result);
-        assertEquals("FIELD_NAME", result.getFieldName());
-        assertEquals(1, result.getStartIndex());
-        assertEquals(10, result.getEndIndex());
-        assertEquals("ALIAS", result.getFieldAlias());
-        assertEquals("CODE", result.getFieldType());
-    }
-}
+  }
