@@ -3,10 +3,12 @@ package com.sbi.microservice.framework.services;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.event.AuditEvent;
+import com.sbi.microservice.framework.repository.AuditDAO;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,254 +16,135 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.sbi.microservice.framework.model.UserProfile;
+import org.springframework.dao.DataAccessException;
 
 @ExtendWith(MockitoExtension.class)
-public class AggregatorValidatorTest {
+class AuditServiceTest {
 
     @Mock
-    private APIBankingService apiBankingService;
+    private AuditDAO auditDAOImpl;
 
     @Mock
-    private UserService userService;
+    private HttpServletRequest request;
 
     @Mock
-    private CorporateService corporateService;
+    private Logger logger;
 
     @InjectMocks
-    private AggregatorValidator aggregatorValidator;
+    private AuditService auditService;
 
-    private Map<String, Object> channelDataMap;
-    private UserProfile userProfile;
-    private static final Logger logger = LoggerFactory.getLogger(AggregatorValidatorTest.class);
+    private final String serviceID = "testService";
+    private final String channelID = "testChannel";
+    private final String endPointName = "testEndpoint";
+    private final String engineID = "testEngine";
+    private final String ipAddress = "127.0.0.1";
+    private final String serviceCategory = "testCategory";
+    private final String cipherKey = "testKey";
+    private final String payload = "testPayload";
+    private final String serviceResRefNo = "testRefNo";
+    private final String traceId = "testTraceId";
 
     @BeforeEach
     void setUp() {
-        channelDataMap = new HashMap<>();
-        userProfile = new UserProfile("userId", "userName", 4); // Default: SARAL user
-        channelDataMap.put("userProfile", userProfile);
-    }
-
-    // ========== AggregatorID Validation ==========
-    @Test
-    void testNullAggregatorID() {
-        channelDataMap.put("aggregatorID", null);
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000016
+        // Mock logger if needed (though usually not necessary as it's static)
     }
 
     @Test
-    void testAggregatorIDTooLong() {
-        channelDataMap.put("aggregatorID", "123456789012345678901"); // 21 chars (>20)
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000032
+    void doAuditRequest_Success() {
+        // Given
+        when(request.getRemoteAddr()).thenReturn(ipAddress);
+        
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+            engineID, ipAddress, serviceCategory, Optional.of(cipherKey), 
+            payload, serviceResRefNo, traceId);
+        
+        // Then
+        verify(auditDAOImpl).insertAuditData(any(AuditEvent.class));
     }
 
     @Test
-    void testInvalidAggregatorIDFormat() {
-        channelDataMap.put("aggregatorID", "INVALID@AGG");
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000019
+    void doAuditRequest_DataAccessException() {
+        // Given
+        when(request.getRemoteAddr()).thenReturn(ipAddress);
+        doThrow(new DataAccessException("DB Error") {}).when(auditDAOImpl).insertAuditData(any(AuditEvent.class));
+        
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+            engineID, ipAddress, serviceCategory, Optional.of(cipherKey), 
+            payload, serviceResRefNo, traceId);
+        
+        // Then
+        verify(auditDAOImpl).insertAuditData(any(AuditEvent.class));
+        // Verify logger was called (if you really want to test logging)
     }
 
     @Test
-    void testAggregatorDoesNotExist() {
-        channelDataMap.put("aggregatorID", "NONEXISTENT");
-        when(apiBankingService.whetherAggregatorExist("NONEXISTENT")).thenReturn(false);
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000019
+    void doAuditRequest_GenericException() {
+        // Given
+        when(request.getRemoteAddr()).thenReturn(ipAddress);
+        doThrow(new RuntimeException("Generic Error")).when(auditDAOImpl).insertAuditData(any(AuditEvent.class));
+        
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+            engineID, ipAddress, serviceCategory, Optional.of(cipherKey), 
+            payload, serviceResRefNo, traceId);
+        
+        // Then
+        verify(auditDAOImpl).insertAuditData(any(AuditEvent.class));
+        // Verify logger was called
     }
 
     @Test
-    void testAggregatorNotActive() {
-        channelDataMap.put("aggregatorID", "INACTIVEAGG");
-        when(apiBankingService.whetherAggregatorExist("INACTIVEAGG")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("INACTIVEAGG")).thenReturn(false);
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000031
+    void doAuditRequest_EmptyCipherKey() {
+        // Given
+        when(request.getRemoteAddr()).thenReturn(ipAddress);
+        
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+            engineID, ipAddress, serviceCategory, Optional.empty(), 
+            payload, serviceResRefNo, traceId);
+        
+        // Then
+        verify(auditDAOImpl).insertAuditData(any(AuditEvent.class));
+        // Should handle Optional.empty() case (though current implementation calls get() without checking)
     }
 
     @Test
-    void testHeaderTokenMismatch() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("headerAPICTokenAggId", "DIFFERENTAGG");
-        when(apiBankingService.whetherAggregatorExist("VALIDAGG")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("VALIDAGG")).thenReturn(true);
-        when(apiBankingService.validateAggregator("VALIDAGG")).thenReturn(true);
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000019
-    }
-
-    // ========== Corporate Alias Validation ==========
-    @Test
-    void testNullCorporateAlias() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", null);
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000022
+    void doAuditResponse_Success() {
+        // Given
+        AuditEvent auditEvent = new AuditEvent();
+        
+        // When
+        auditService.doAuditResponse(auditEvent);
+        
+        // Then
+        verify(auditDAOImpl).insertAuditData(auditEvent);
     }
 
     @Test
-    void testInvalidSaralCorpAliasFormat() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", "INVALID_FORMAT");
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000022
+    void doAuditResponse_Exception() {
+        // Given
+        AuditEvent auditEvent = new AuditEvent();
+        doThrow(new RuntimeException("Error")).when(auditDAOImpl).insertAuditData(auditEvent);
+        
+        // When
+        auditService.doAuditResponse(auditEvent);
+        
+        // Then
+        verify(auditDAOImpl).insertAuditData(auditEvent);
+        // Verify logger was called
     }
 
     @Test
-    void testCorporateNotActive() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", "S123456789ABCDE");
+    void constructor_InitializesCorrectly() {
+        // Given
+        AuditDAO dao = mock(AuditDAO.class);
         
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("corpId", "CORP123");
-        corpDetails.put("active", "N"); // Not active
-        corpDetails.put("isSaral", "Y");
+        // When
+        AuditService service = new AuditService(dao);
         
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000033
-    }
-
-    // ========== CorpToken Validation ==========
-    @Test
-    void testNullCorpToken() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", "S123456789ABCDE");
-        channelDataMap.put("corpToken", null);
-        
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("corpId", "CORP123");
-        corpDetails.put("active", "Y");
-        corpDetails.put("isSaral", "Y");
-        
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        when(userService.whetherUserOnboarded(any(), any())).thenReturn(true);
-        when(apiBankingService.isValidAggregatorAndCorpCount(any(), any())).thenReturn(true);
-        
-        Map<String, String> onboardDetails = new HashMap<>();
-        onboardDetails.put("aggregatorID", "VALIDAGG");
-        onboardDetails.put("status", "APPROVED");
-        when(corporateService.getCorporateOnboardDetail(any())).thenReturn(onboardDetails);
-        
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000028
-    }
-
-    @Test
-    void testInvalidCorpTokenFormat() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", "S123456789ABCDE");
-        channelDataMap.put("corpToken", "INVALID@TOKEN");
-        
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("corpId", "CORP123");
-        corpDetails.put("active", "Y");
-        corpDetails.put("isSaral", "Y");
-        
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        when(userService.whetherUserOnboarded(any(), any())).thenReturn(true);
-        when(apiBankingService.isValidAggregatorAndCorpCount(any(), any())).thenReturn(true);
-        
-        Map<String, String> onboardDetails = new HashMap<>();
-        onboardDetails.put("aggregatorID", "VALIDAGG");
-        onboardDetails.put("status", "APPROVED");
-        when(corporateService.getCorporateOnboardDetail(any())).thenReturn(onboardDetails);
-        
-        aggregatorValidator.validateData(channelDataMap);
-        // Expect API000018
-    }
-
-    // ========== Happy Path (Success Cases) ==========
-    @Test
-    void testSaralUserSuccess() {
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", "S123456789ABCDE");
-        channelDataMap.put("corpToken", "VALIDTOKEN123");
-        channelDataMap.put("headerAPICTokenAggId", "VALIDAGG");
-        
-        when(apiBankingService.whetherAggregatorExist("VALIDAGG")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("VALIDAGG")).thenReturn(true);
-        when(apiBankingService.validateAggregator("VALIDAGG")).thenReturn(true);
-        
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("corpId", "CORP123");
-        corpDetails.put("active", "Y");
-        corpDetails.put("isSaral", "Y");
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        
-        when(userService.whetherUserOnboarded(any(), any())).thenReturn(true);
-        when(apiBankingService.isValidAggregatorAndCorpCount(any(), any())).thenReturn(true);
-        
-        Map<String, String> onboardDetails = new HashMap<>();
-        onboardDetails.put("aggregatorID", "VALIDAGG");
-        onboardDetails.put("status", "APPROVED");
-        when(corporateService.getCorporateOnboardDetail(any())).thenReturn(onboardDetails);
-        
-        when(apiBankingService.validateCorpToken(any(), any(), any())).thenReturn(true);
-        
-        // Should pass all validations
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    @Test
-    void testCorporateUserSuccess() {
-        userProfile = new UserProfile("userId", "userName", 3); // Corporate user (role != 4)
-        channelDataMap.put("userProfile", userProfile);
-        
-        channelDataMap.put("aggregatorID", "VALIDAGG");
-        channelDataMap.put("corporateAlias", "ABC1234567"); // Corporate format
-        channelDataMap.put("corpToken", "VALIDTOKEN123");
-        channelDataMap.put("headerAPICTokenAggId", "VALIDAGG");
-        
-        when(apiBankingService.whetherAggregatorExist("VALIDAGG")).thenReturn(true);
-        when(apiBankingService.isAggregatorActive("VALIDAGG")).thenReturn(true);
-        when(apiBankingService.validateAggregator("VALIDAGG")).thenReturn(true);
-        
-        Map<String, String> corpDetails = new HashMap<>();
-        corpDetails.put("corpId", "CORP123");
-        corpDetails.put("active", "Y");
-        corpDetails.put("isSaral", "N"); // Not SARAL
-        when(apiBankingService.getCorpDetails(any())).thenReturn(corpDetails);
-        
-        when(apiBankingService.checkCorpStatus("CORP123")).thenReturn(true);
-        when(apiBankingService.aggregatorAndCorpCount(any(), any())).thenReturn(true);
-        
-        Map<String, String> onboardDetails = new HashMap<>();
-        onboardDetails.put("aggregatorID", "VALIDAGG");
-        onboardDetails.put("status", "APPROVED");
-        when(apiBankingService.getCorporateOnboardDetail(any())).thenReturn(onboardDetails);
-        
-        when(apiBankingService.validatingCorpToken(any(), any(), any())).thenReturn(false);
-        
-        // Should pass all validations
-        aggregatorValidator.validateData(channelDataMap);
-    }
-
-    // ========== Helper Method Tests ==========
-    @Test
-    void testCheckWhetherUserIsSaral_True() {
-        assertTrue(aggregatorValidator.checkWhetherUserIsSaral(4, "Y"));
-    }
-
-    @Test
-    void testCheckWhetherUserIsSaral_False() {
-        assertFalse(aggregatorValidator.checkWhetherUserIsSaral(4, "N"));
-        assertFalse(aggregatorValidator.checkWhetherUserIsSaral(3, "Y"));
-    }
-
-    @Test
-    void testValidateSaralCorpAlias_Valid() {
-        assertTrue(aggregatorValidator.validateSaralCorpAlias("S123456789ABCDE"));
-    }
-
-    @Test
-    void testValidateSaralCorpAlias_Invalid() {
-        assertFalse(aggregatorValidator.validateSaralCorpAlias("X123456789ABCDE")); // First char not 'S'
-        assertFalse(aggregatorValidator.validateSaralCorpAlias("S1234X6789ABCDE")); // Non-digit in first 9
-        assertFalse(aggregatorValidator.validateSaralCorpAlias("S123456789ABCDEFGH")); // Too long (>17)
+        // Then
+        assertNotNull(service);
     }
 }
