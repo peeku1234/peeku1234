@@ -1,48 +1,91 @@
- public List<String> getResultForIMPSTXNFixed(List<Map<String, String>> listOfConfiguration, FileConfigMasterEntity response,
-                                               StringBuilder debitString, StringBuilder creditString) {
-    List<String> result = new ArrayList<>();
-    listOfConfiguration.forEach(configMap -> {
-      String fieldValue = "Other";
-      for (FixedConfiguration fixedFileConfiguration : response.getFixedConfiguration()) {
-        if(creditString.toString().startsWith("A") && (fixedFileConfiguration.getFieldName().equalsIgnoreCase("Beneficiary MMID") ||
-                fixedFileConfiguration.getFieldName().equalsIgnoreCase("Beneficiary Mobile No"))) {
-          configMap.put("Beneficiary MMID", "       ");
-          configMap.put("Beneficiary Mobile No", "          ");
-        }
+@Test
+void getResultForIMPSTXNFixed_ShouldHandleAllCases() {
+    // Setup test data
+    List<Map<String, String>> listOfConfiguration = new ArrayList<>();
+    Map<String, String> configMap1 = new HashMap<>();
+    configMap1.put("Beneficiary Name", "John Doe");
+    configMap1.put("Beneficiary MMID", "123456");
+    configMap1.put("Beneficiary Mobile No", "9876543210");
+    configMap1.put("Amount", "100.50");
+    listOfConfiguration.add(configMap1);
+    
+    Map<String, String> configMap2 = new HashMap<>();
+    configMap2.put("Beneficiary Name", "Jane Smith with very long name");
+    configMap2.put("Amount", null);
+    listOfConfiguration.add(configMap2);
 
-        if (Optional.ofNullable(configMap.get(fixedFileConfiguration.getFieldName().trim())).isPresent()) {
-          fieldValue = configMap.get(fixedFileConfiguration.getFieldName().trim());
-        }
-        if ((fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex()) < fieldValue.length()) {
-          fieldValue = fieldValue.substring(0, (fixedFileConfiguration.getEndIndex() - fixedFileConfiguration.getStartIndex()) + 1);
-        }
-        int startIndex = fixedFileConfiguration.getStartIndex();
-        getFixedConfigurationFieldType(fixedFileConfiguration, configMap, debitString, creditString, startIndex, fieldValue);
-      }
-      result.add(debitString.toString());
-      result.add(creditString.toString());
-      result.add("");
-    });
-    return result;
-  }
+    FileConfigMasterEntity response = new FileConfigMasterEntity();
+    List<FixedConfiguration> fixedConfigs = new ArrayList<>();
+    fixedConfigs.add(new FixedConfiguration("Beneficiary Name", 1, 10, "A", null));
+    fixedConfigs.add(new FixedConfiguration("Beneficiary MMID", 11, 14, "N", null));
+    fixedConfigs.add(new FixedConfiguration("Beneficiary Mobile No", 15, 24, "N", null));
+    fixedConfigs.add(new FixedConfiguration("Amount", 25, 35, "C", null));
+    response.setFixedConfiguration(fixedConfigs);
 
+    StringBuilder debitString = new StringBuilder();
+    StringBuilder creditString = new StringBuilder();
 
-  @Test
-  void getResultForIMPSTXNFixed() {
-    fixedConfigurations.add(new FixedConfiguration("Beneficiary MMID", 1, 4, "C", null));
-    fileConfiguration.setFormat(1);
-    fileConfiguration.setFixedConfiguration(fixedConfigurations);
-    sampleFileDownloadRequest.setFileType("IMPS_TXN");
-    fixedConfiguration.setFieldName("Beneficiary Name");
-    fileConfigurations.add(new FileConfigMasterEntity(5966359893L, null, "A", 1, "250250", null, null));
-    Mockito.when(sampleFileDownloadDaoimpl.getFileConfiguration(anyString(), anyString())).thenReturn(fileConfigurations);
-    Mockito.when(sampleFileDownloadDaoimpl.getFixedConfiguration(anyString(), anyString(), anyLong(), anyString()))
-            .thenReturn(fileConfiguration);
-    FileDownloadResponse downloadResponse = fileDownloadService.downloadSampleFile(sampleFileDownloadRequest);
-    Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFileConfiguration(anyString(), anyString());
-    Mockito.verify(sampleFileDownloadDaoimpl, Mockito.times(1)).getFixedConfiguration(anyString(), anyString(), anyLong(),
-            anyString());
-    assertEquals(5966359893L, fileConfiguration.getOid());
-    assertNotNull(downloadResponse);
+    // Test case 1: Normal case with credit not starting with "A"
+    List<String> result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
+    assertEquals(6, result.size()); // 2 entries * 3 lines each (debit, credit, empty)
+    assertTrue(result.get(0).contains("John Doe"));
+    assertTrue(result.get(1).contains("123456"));
+    
+    // Test case 2: Credit starting with "A" - should blank out MMID and Mobile No
+    creditString = new StringBuilder("A123");
+    result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
+    assertTrue(result.get(1).contains("       ")); // 7 spaces for MMID
+    assertTrue(result.get(1).contains("          ")); // 10 spaces for Mobile No
+    
+    // Test case 3: Long field value truncation
+    assertTrue(result.get(3).contains("Jane Smith")); // Truncated to 10 chars
+    assertFalse(result.get(3).contains("with very long name"));
+    
+    // Test case 4: Null value handling
+    assertTrue(result.get(4).substring(24, 34).trim().isEmpty()); // Null amount
+    
+    // Test case 5: Empty configMap (though method doesn't handle this case explicitly)
+    listOfConfiguration.add(new HashMap<>());
+    result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
+    assertEquals(9, result.size());
+}
 
-  }
+@Test
+void getResultForIMPSTXNFixed_ShouldHandleDifferentFieldTypes() {
+    // Setup test with different field types
+    List<Map<String, String>> listOfConfiguration = new ArrayList<>();
+    Map<String, String> configMap = new HashMap<>();
+    configMap.put("NumericField", "123");
+    configMap.put("CharacterField", "ABC");
+    configMap.put("DateField", "20230101");
+    listOfConfiguration.add(configMap);
+
+    FileConfigMasterEntity response = new FileConfigMasterEntity();
+    List<FixedConfiguration> fixedConfigs = new ArrayList<>();
+    fixedConfigs.add(new FixedConfiguration("NumericField", 1, 3, "N", null));
+    fixedConfigs.add(new FixedConfiguration("CharacterField", 4, 6, "A", null));
+    fixedConfigs.add(new FixedConfiguration("DateField", 7, 14, "D", "yyyyMMdd"));
+    response.setFixedConfiguration(fixedConfigs);
+
+    StringBuilder debitString = new StringBuilder();
+    StringBuilder creditString = new StringBuilder();
+
+    List<String> result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
+    
+    // Verify different field types are handled correctly
+    assertTrue(result.get(0).startsWith("123"));
+    assertTrue(result.get(0).contains("ABC"));
+    assertTrue(result.get(0).contains("20230101"));
+}
+
+@Test
+void getResultForIMPSTXNFixed_ShouldHandleEmptyConfigurations() {
+    // Test with empty configuration list
+    List<String> result = getResultForIMPSTXNFixed(
+        Collections.emptyList(), 
+        new FileConfigMasterEntity(), 
+        new StringBuilder(), 
+        new StringBuilder()
+    );
+    assertTrue(result.isEmpty());
+}
