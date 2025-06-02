@@ -1,173 +1,134 @@
-package com.sbi.microservice.framework.services;
+package com.sbi.microservice.framework.services.access;
 
 import com.sbi.microservice.framework.cache.CacheManager;
 import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.AccessException;
-import com.sbi.microservice.framework.model.*;
-import com.sbi.microservice.framework.repository.ServiceDAO;
-import com.sbi.microservice.framework.services.access.AuthenticationProvider;
-import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
+import com.sbi.microservice.framework.constant.UserRole;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.repository.CorporateDAO;
+import com.sbi.microservice.framework.repository.UserDAO;
+import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
 import com.sbi.microservice.framework.utils.FrameworkUtils;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.*;
+import org.springframework.stereotype.Component;
 
-import java.util.*;
+import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+@Component
+public final class WebAuthenticationProvider implements AuthenticationProvider {
+	private final CacheManager cacheManager;
+	private final AuthenticationDAO authenticationDAO;
+	private final CorporateDAO corporateDAO;
+	private final UserDAO userDAO;
+	private final FrameworkUtils frameworkUtils;
 
-class AccessVerifierTest {
+	public WebAuthenticationProvider(CacheManager cacheManager, AuthenticationDAO authenticationDAO, CorporateDAO corporateDAO, UserDAO userDAO, FrameworkUtils frameworkUtils){
+		this.cacheManager = cacheManager;
+		this.authenticationDAO = authenticationDAO;
+		this.corporateDAO = corporateDAO;
+		this.userDAO = userDAO;
+		this.frameworkUtils=frameworkUtils;
+	}
 
-    @InjectMocks
-    private AccessVerifier accessVerifier;
+	@Override
+	public Authentication authenticate(HttpServletRequest request) {
+		Optional<String> userName = frameworkUtils.getAttribute(request,"userNameFromFilter");
+		Authentication authentication=cacheManager.getSession("");
+		if(authentication==null || authentication.userProfile() ==null || !"".equals(authentication.userProfile().userName())) {
 
-    @Mock
-    private AuthenticationProviderFactory authenticationProviderFactory;
+			//TODO auth token validation
+			//UserProfile userProfile=authenticationDAO.getUserDetails(null, null);
+			if(userName.isPresent()) {
+				Optional<UserProfile> userProfile = userDAO.getUserProfile(userName.get());
 
-    @Mock
-    private ServiceDAO serviceDAO;
+				if (userProfile.isPresent()) {
+					CorporateProfile corporateProfile = null;
 
-    @Mock
-    private CacheManager cacheManager;
+					if (userProfile.get().userRole() != UserRole.SARAL.getValue()) {
+						corporateProfile = corporateDAO.getCorporateProfile(userProfile.get().corporateId());
+					}
 
-    @Mock
-    private FrameworkUtils frameworkUtils;
+					authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile.get(), corporateProfile, true);
+					cacheManager.setSession(authentication);
+				} else {
+					return null;
+				}
+			}
+		}
+		return authentication;
+		
+		
+		
+	}
 
-    @Mock
-    private HttpServletRequest request;
-
-    @Mock
-    private HttpServletResponse response;
-
-    @Mock
-    private AuthenticationProvider authenticationProvider;
-
-    @BeforeEach
-    void setUp() {
-        MockitoAnnotations.openMocks(this);
-        accessVerifier = new AccessVerifier(authenticationProviderFactory, serviceDAO, cacheManager, frameworkUtils);
-    }
-
-    @Test
-    void testCheckServiceAccess_openService_shouldGrantAccess() throws AccessException {
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("WEB");
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn("token123");
-        when(request.getRequestURI()).thenReturn("/api/test");
-        when(request.getMethod()).thenReturn("GET");
-
-        when(frameworkUtils.extractServiceName("/api/test")).thenReturn("testService");
-        when(frameworkUtils.getEntityValue("WEB")).thenReturn("WEB");
-
-        Service service = new Service("testService", "description", FrameworkConstants.SERVICE_TYPE_OPEN);
-        when(cacheManager.getService("testService")).thenReturn(service);
-
-        Optional<List<Channel>> optionalChannels = Optional.of(List.of(new Channel("WEB")));
-        when(cacheManager.getServiceChannelList("testService")).thenReturn(optionalChannels);
-
-        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(access.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, access.get().accessStatus());
-        assertEquals(FrameworkConstants.SERVICE_TYPE_OPEN, access.get().serviceType());
-    }
-
-    @Test
-    void testCheckServiceAccess_securedService_channelNotAuthorized() throws AccessException {
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("MOBILE");
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn("token123");
-        when(request.getRequestURI()).thenReturn("/api/secure");
-        when(request.getMethod()).thenReturn("POST");
-
-        when(frameworkUtils.extractServiceName("/api/secure")).thenReturn("secureService");
-        when(frameworkUtils.getEntityValue("MOBILE")).thenReturn("MOBILE");
-
-        Service service = new Service("secureService", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
-        when(cacheManager.getService("secureService")).thenReturn(service);
-
-        when(cacheManager.getServiceChannelList("secureService")).thenReturn(Optional.of(List.of(new Channel("WEB"))));
-
-        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(access.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, access.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED, access.get().accessDescription());
-    }
-
-    @Test
-    void testCheckServiceAccess_securedService_channelAuthorized_userAuthenticated_notAuthorized() throws AccessException {
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("WEB");
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn("token123");
-        when(request.getRequestURI()).thenReturn("/api/secure");
-        when(request.getMethod()).thenReturn("POST");
-
-        when(frameworkUtils.extractServiceName("/api/secure")).thenReturn("secureService");
-        when(frameworkUtils.getEntityValue("WEB")).thenReturn("WEB");
-
-        Service service = new Service("secureService", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
-        when(cacheManager.getService("secureService")).thenReturn(service);
-        when(cacheManager.getServiceChannelList("secureService")).thenReturn(Optional.of(List.of(new Channel("WEB"))));
-
-        when(authenticationProviderFactory.getProvider("WEB")).thenReturn(authenticationProvider);
-
-        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(access.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, access.get().accessStatus());
-    }
-
-    @Test
-    void testCheckServiceAccess_withIllegalMethod_shouldDenyAccess() throws AccessException {
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("WEB");
-        when(request.getRequestURI()).thenReturn("/api/secure");
-        when(request.getMethod()).thenReturn("DELETE");
-
-        when(frameworkUtils.extractServiceName("/api/secure")).thenReturn("secureService");
-        when(frameworkUtils.getEntityValue("WEB")).thenReturn("WEB");
-
-        Service service = new Service("secureService", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
-        when(cacheManager.getService("secureService")).thenReturn(service);
-
-        Optional<Access> access = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(access.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED, access.get().accessDescription());
-    }
-
-    @Test
-    void testIsSecuredService_returnsTrueIfSecured() {
-        Service service = new Service("name", "desc", FrameworkConstants.SERVICE_TYPE_SECURED);
-        when(cacheManager.getService("svc")).thenReturn(service);
-
-        assertTrue(accessVerifier.isSecuredService("svc"));
-    }
-
-    @Test
-    void testIsSecuredService_returnsFalseIfOpen() {
-        Service service = new Service("name", "desc", FrameworkConstants.SERVICE_TYPE_OPEN);
-        when(cacheManager.getService("svc")).thenReturn(service);
-
-        assertFalse(accessVerifier.isSecuredService("svc"));
-    }
-
-    @Test
-    void testIsChannelAuthorized_true() {
-        Channel channel = new Channel("WEB");
-        when(cacheManager.getServiceChannelList("svc")).thenReturn(Optional.of(List.of(channel)));
-
-        assertTrue(accessVerifier.isChannelAuthorized("svc", "WEB"));
-    }
-
-    @Test
-    void testIsChannelAuthorized_false() {
-        Channel channel = new Channel("MOBILE");
-        when(cacheManager.getServiceChannelList("svc")).thenReturn(Optional.of(List.of(channel)));
-
-        assertFalse(accessVerifier.isChannelAuthorized("svc", "WEB"));
-    }
 }
 
 
+Iam getting null pointer exception can u please help me with modifying below test cases
 
+
+package com.sbi.microservice.framework.services.access;
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.repository.CorporateDAO;
+import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+
+@ExtendWith(MockitoExtension.class)
+class WebAuthenticationProviderTest {
+@InjectMocks
+private WebAuthenticationProvider webAuthenticationProvider;
+@Mock
+private CacheManager cacheManager;
+@Mock
+private AuthenticationDAO authenticationDAO;
+@Mock
+private CorporateDAO corporateDAO;
+private FrameworkUtils frameworkUtils;
+
+
+    @Test
+    void authenticate() {
+        HttpServletRequest request = null;
+        Authentication  authentication = new Authentication( "userId",  "userName",  new UserProfile("userId",  "userName",  1,  "corporateId",  1,  "branchCode"),  new CorporateProfile("corpId","corpName"),  true);
+        Mockito.when(frameworkUtils.getAttribute(any(),anyString())).thenReturn(Optional.of("value"));
+        Mockito.when(cacheManager.getSession(anyString())).thenReturn(authentication);
+        Authentication request1 =  webAuthenticationProvider.authenticate(request);
+        assertNull(request1);
+    }
+    @Test
+    void userProfile() {
+        HttpServletRequest request = null;
+        UserProfile  userProfile = new UserProfile( "userId",  "userName",  1,  "corporateId",  1,  "branchCode");
+        Mockito.when(authenticationDAO.getUserDetails(any(),any())).thenReturn(userProfile);
+        Mockito.when(corporateDAO.getCorporateProfile(anyString())).thenReturn(null);
+        Authentication request1 =  webAuthenticationProvider.authenticate(request);
+        assertNotNull(request1);
+    }
+    @Test
+    void userProfile_userRole() {
+        HttpServletRequest request = null;
+        UserProfile  userProfile = new UserProfile( "userId",  "userName",  4,  "corporateId",  1,  "branchCode");
+        Mockito.when(authenticationDAO.getUserDetails(any(),any())).thenReturn(userProfile);
+        Authentication request1 =  webAuthenticationProvider.authenticate(request);
+        assertNotNull(request1);
+    }
+
+}
