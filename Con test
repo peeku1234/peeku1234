@@ -1,324 +1,59 @@
-package com.sbi.yb.controller;
+package com.sbi.microservice.framework.services;
 
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.SBIApplicationResponse;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import com.sbi.yb.constants.StatusConstants;
-import com.sbi.yb.constants.ServiceConstants;
-import com.sbi.yb.model.CheckConfigurationRequest;
-import com.sbi.yb.model.GetConfigurationRequest;
-import com.sbi.yb.model.SaveFileConfigurationRequest;
-import com.sbi.yb.service.FileConfigurationService;
-import com.sbi.yb.service.ViewFileConfigurationService;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import java.util.Optional;
+
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.event.AuditEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.dao.DataAccessException;
+import org.springframework.stereotype.Service;
 
-/**
- * @author V1018051.
- * @version 1.0
- * @since 2025
- */
+import com.sbi.microservice.framework.repository.AuditDAO;
 
-@RestController
-@RequestMapping("/v1.0.0")
-public class FileConfigurationController {
-
-  private final Logger logger = LoggerFactory.getLogger(getClass());
-
-  private final FileConfigurationService fileConfigurationService;
-
-  private final ViewFileConfigurationService viewFileConfigurationService;
-
-  private final FrameworkUtils frameworkUtils;
-
-
-  /**
-   * constructor.
-   *
-   * @param fileConfigurationService     object
-   * @param viewFileConfigurationService service class object
-   */
-  @Autowired
-  public FileConfigurationController(FileConfigurationService fileConfigurationService, ViewFileConfigurationService viewFileConfigurationService, FrameworkUtils frameworkUtils) {
-    this.fileConfigurationService = fileConfigurationService;
-    this.viewFileConfigurationService = viewFileConfigurationService;
-    this.frameworkUtils = frameworkUtils;
-  }
-
-  /**
-   * To get the file configuration status @see FileTypeDetails of all filetypes.
-   *
-   * @param httpServletRequest  servlet request
-   * @param httpServletResponse servlet response
-   * @return SBIApplicationResponse
-   */
-  @PostMapping("/configurationsStatus")
-  public ResponseEntity<SBIApplicationResponse> checkConfigurationAvailability(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) {
-    logger.info("Retrieve Configuration status invoked");
-    CheckConfigurationRequest checkConfigurationRequest = (CheckConfigurationRequest) frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, CheckConfigurationRequest.class);
-    SBIApplicationResponse sbiApplicationResponse = frameworkUtils.buildSuccessResponse(fileConfigurationService.getConfigurationStatus(checkConfigurationRequest),"API000000");
-    logger.info("Retrieve Configuration status execution ends");
-    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
-  }
-
-
-  /**
-   * To save the file configuration.
-   *
-   * @param httpServletRequest  servlet request
-   * @param httpServletResponse servlet response
-   * @return sbiApplicationResponse
-   */
-  @PostMapping("/saveConfiguration")
-  public ResponseEntity<SBIApplicationResponse> saveFileConfiguration(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) {
-    logger.info("Save configuration invoked");
-    SBIApplicationResponse sbiApplicationResponse;
-    Optional<String> channelId = frameworkUtils.getAttribute(httpServletRequest, "channelIdFromHeader");
-    SaveFileConfigurationRequest saveFileConfigurationRequest = (SaveFileConfigurationRequest) frameworkUtils.validateAndGetRequest(httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, SaveFileConfigurationRequest.class);
-        if (ServiceConstants.FILE_TYPE_LIST.contains(saveFileConfigurationRequest.getFileType())) {
-          sbiApplicationResponse = frameworkUtils.buildSuccessResponse(fileConfigurationService.validateAndSaveFileConfiguration
-                  (saveFileConfigurationRequest, channelId.orElse("")),"API000000");
-        } else {
-          logger.info("File type is invalid");
-         throw new ValidationException(StatusConstants.YBMFC008,"Request contains invalid file type");
-        }
-    logger.info("Save configuration execution ends");
-    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
-  }
-
-
-  /**
-   * To get file configuration details.
-   *
-   * @param httpServletRequest  servlet request
-   * @param httpServletResponse servlet response
-   * @return sbiApplicationResponse
-   */
-  @PostMapping("/getConfiguration")
-  public ResponseEntity<SBIApplicationResponse> getConfiguration(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) {
-    logger.info("Retrieve Configuration details invoked");
-    GetConfigurationRequest getConfigurationRequest = (GetConfigurationRequest) frameworkUtils.validateAndGetRequest
-              (httpServletRequest, ServiceConstants.PLAIN_PAYLOAD, GetConfigurationRequest.class);
-    SBIApplicationResponse sbiApplicationResponse = frameworkUtils.buildSuccessResponse(viewFileConfigurationService.getConfiguration(getConfigurationRequest),"API000000");
-    logger.info("Retrieve configuration execution ends");
-    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
-  }
-
-}
-
-I wan junit tescases like below some modifictions are there
-package com.sbi.yb.controller;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sbi.microservice.framework.model.SBIApplicationResponse;
-import com.sbi.yb.constants.ServiceConstants;
-
-import com.sbi.yb.service.FileConfigurationService;
-import com.sbi.yb.service.ViewFileConfigurationService;
-
-import com.sbi.yb.model.CheckConfigurationRequest;
-import com.sbi.yb.model.CheckConfigurationResponse;
-import com.sbi.yb.model.DelimitedConfiguration;
-import com.sbi.yb.model.FileTypeDetails;
-import com.sbi.yb.model.GetConfigurationRequest;
-import com.sbi.yb.model.GetConfigurationResponse;
-
-import com.sbi.yb.model.SaveFileConfigurationRequest;
-import com.sbi.yb.model.SaveFileConfigurationResponse;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+@Service
+public class AuditService {
+	private final static Logger logger = LoggerFactory.getLogger(AuditService.class);
+	private final AuditDAO auditDAOImpl;
+	//private final AuditEventProducer auditEventProducer;
+
+//	public AuditService(AuditDAO auditDAOImpl,AuditEventProducer auditEventProducer) {
+//		this.auditDAOImpl = auditDAOImpl;
+//		this.auditEventProducer = auditEventProducer;
+//	}
+
+	public AuditService(AuditDAO auditDAOImpl) {
+		this.auditDAOImpl = auditDAOImpl;
+	}
 
 
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.junit.jupiter.MockitoExtension;
+	public void doAuditRequest(HttpServletRequest req, String serviceID, String channelID, String endPointName,
+			String engineID, String ipAddress, String serviceCategory, Optional<String> cipherKey, String payloadInReqBody, String serviceResRefNo, String traceId) {
+		
+		String corporateType=FrameworkConstants.STRING_BLANK;
+		logger.info("doAuditRequest starts");
+		try {
+			AuditEvent auditEvent = new AuditEvent("to be updated",serviceID,endPointName,serviceCategory,channelID,null,null,null,null,corporateType,cipherKey.get(),payloadInReqBody,serviceResRefNo,null,null,null,null,"insert", traceId);
+			auditDAOImpl.insertAuditData(auditEvent);
+			//auditEventProducer.sendAudit(auditEvent);
+		} catch (DataAccessException e) {
+			logger.info("Exception while inserting audit :: {}",e.getMessage());
+		} catch (Exception e) {
+			logger.info("Exception while inserting audit : {}", e.getMessage());
+		}
+		logger.info("doAuditRequest ends");
+	}
 
-import org.springframework.http.ResponseEntity;
-
-import java.util.*;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-
-@ExtendWith(MockitoExtension.class)
-class FileConfigurationControllerTest {
-
-  @InjectMocks
-  private FileConfigurationController fileConfigurationController;
-
-  @Mock
-  private FileConfigurationService fileConfigurationService;
-
-  @Mock
-  private ViewFileConfigurationService viewFileConfigurationService;
-
-  @Mock
-  private HttpServletRequest httpServletRequest;
-
-  @Mock
-  private HttpServletResponse httpServletResponse;
-
-  private final ObjectMapper objectMapper = new ObjectMapper();
-
-  SaveFileConfigurationRequest saveFileConfigurationRequest = new SaveFileConfigurationRequest();
-
-  List<DelimitedConfiguration> delimitedConfigurations = new ArrayList<>(Arrays.asList(
-          new DelimitedConfiguration("Account Number", "17", 1, "AlphaNumeric", true, "B", null, null),
-          new DelimitedConfiguration("Branch Code", "12", 2, "AlphaNumeric", true, "B", null, null),
-          new DelimitedConfiguration("Date", "10", 3, "AlphaNumeric", true, "B", null, null),
-          new DelimitedConfiguration("Debit Amount", "23", 4, "Numeric", true, "D", null, null),
-          new DelimitedConfiguration("Credit Amount", "23", 5, "Numeric", true, "C", null, null),
-          new DelimitedConfiguration("Reference Number", "15", 6, "AlphaNumeric", true, "B", null, null),
-          new DelimitedConfiguration("Description", "240", 7, "AlphaNumeric", true, "B", null, null),
-          new DelimitedConfiguration("Payment Identifier", "4", 8, "AlphaNumeric", true, "B", null, null)
-  ));
-
-  @BeforeEach
-  void setUp() {
-    saveFileConfigurationRequest.setCorporateAlias("250256");
-    saveFileConfigurationRequest.setFileType("COMPOSITE_BEN");
-    saveFileConfigurationRequest.setFormat(0);
-    saveFileConfigurationRequest.setFieldDelimiter("#");
-  }
-
-  @ParameterizedTest
-  @ValueSource(strings = {"COMPOSITE_BEN", "IMPS_BEN", "IMPS_TXN", "CT|CR|CN|CZ", "CD"})
-  void testSaveFileConfiguration(String fileType) throws JsonProcessingException {
-    SaveFileConfigurationRequest mockRequest = new SaveFileConfigurationRequest();
-    mockRequest.setFileType(fileType);
-    mockRequest.setFormat(0);
-    mockRequest.setFieldDelimiter("|");
-    mockRequest.setCorporateAlias("1234");
-    mockRequest.setDelimitedConfigurations(delimitedConfigurations);
-    mockRequest.setFixedConfigurations(Collections.emptyList());
-    SaveFileConfigurationResponse saveFileConfigurationResponse = new SaveFileConfigurationResponse("File configuration saved successfully");
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(mockRequest));
-    Mockito.when(httpServletRequest.getAttribute("channelIdFromHeader")).thenReturn("web");
-    Mockito.when(fileConfigurationService.validateAndSaveFileConfiguration(any(SaveFileConfigurationRequest.class), anyString())).thenReturn(saveFileConfigurationResponse);
-    ResponseEntity<SBIApplicationResponse> responseEntity = fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse);
-    assertNotNull(responseEntity);
-  }
-
-  @Test
-  void testSaveFileConfiguration_invalidFileType() throws JsonProcessingException {
-    SaveFileConfigurationRequest mockRequest = new SaveFileConfigurationRequest();
-    mockRequest.setFileType("COMPOSITE");
-    mockRequest.setFormat(0);
-    mockRequest.setFieldDelimiter("|");
-//    mockRequest.setCorporateAlias("1234");
-    mockRequest.setDelimitedConfigurations(delimitedConfigurations);
-    mockRequest.setFixedConfigurations(Collections.emptyList());
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(mockRequest));
-//    MicroServiceException exception = assertThrows(MicroServiceException.class, () ->
-    fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse);
-//    assertEquals("YBMFC008", exception.getErrorCode());
-  }
-
-  @Test
-  void testSaveFileConfiguration_exception() {
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn("abc$${}");
-    MicroServiceException exception = assertThrows(MicroServiceException.class, () -> fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse));
-    assertEquals("API000045", exception.getErrorCode());
-  }
-
-  @Test
-  void testSaveFileConfiguration_payLoadIsNull() {
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(null);
-    MicroServiceException exception = assertThrows(MicroServiceException.class, () -> fileConfigurationController.saveFileConfiguration(httpServletRequest, httpServletResponse));
-    assertEquals("F001", exception.getErrorCode());
-  }
-
-  @Test
-  void fileConfiguration() throws JsonProcessingException {
-    GetConfigurationRequest getConfigurationRequest = new GetConfigurationRequest();
-    GetConfigurationResponse getConfigurationResponse = new GetConfigurationResponse();
-    getConfigurationRequest.setFileType("IMPS_TXN");
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(getConfigurationRequest));
-    Mockito.when(viewFileConfigurationService.getConfiguration(any(GetConfigurationRequest.class))).thenReturn(getConfigurationResponse);
-    fileConfigurationController.getConfiguration(httpServletRequest, httpServletResponse);
-    Mockito.verify(httpServletRequest).getAttribute("plainPayload");
-  }
-
-  @Test
-  void exception_view() {
-    Optional<String> string = Optional.empty();
-    Mockito.when(httpServletRequest.getAttribute("pl")).thenReturn(string);
-    assertThrows(MicroServiceException.class, () -> {
-      fileConfigurationController.checkConfigurationAvailability(httpServletRequest, httpServletResponse);
-    });
-  }
-
-  @Test
-  void fileConfiguration_landing() throws JsonProcessingException {
-    CheckConfigurationRequest checkConfigurationRequest = new CheckConfigurationRequest();
-    CheckConfigurationResponse checkConfigurationResponse = null;
-    Map<String, List<FileTypeDetails>> fileTypesMap = new HashMap<>();
-    fileTypesMap.put("ACCOUNT_TXN", List.of(new FileTypeDetails("fileType", "date", true, Boolean.TRUE)));
-    checkConfigurationResponse = new CheckConfigurationResponse(fileTypesMap);
-    checkConfigurationRequest.setCorporateAlias("250250");
-    checkConfigurationRequest.setFileType(List.of());
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(checkConfigurationRequest));
-    Mockito.when(fileConfigurationService.getConfigurationStatus(any(CheckConfigurationRequest.class), eq("250250"))).thenReturn(checkConfigurationResponse);
-    fileConfigurationController.checkConfigurationAvailability(httpServletRequest, httpServletResponse);
-    assertEquals("SUCCESS", ServiceConstants.SUCCESS);
-  }
-
-  @Test
-  void exception() {
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn("abc$${}");
-    MicroServiceException exception = assertThrows(MicroServiceException.class, () -> fileConfigurationController.getConfiguration(httpServletRequest, httpServletResponse));
-    assertEquals("API000045", exception.getErrorCode());
-  }
-
-  @Test
-  void viewFileConfiguration_payLoadIsNull() {
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(null);
-    MicroServiceException exception = assertThrows(MicroServiceException.class, () -> fileConfigurationController.getConfiguration(httpServletRequest, httpServletResponse));
-    assertEquals("F001", exception.getErrorCode());
-  }
-
-    @Test
-  void exception_view_catch() {
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn("abc$${}");
-    MicroServiceException exception = assertThrows(MicroServiceException.class, () -> fileConfigurationController.checkConfigurationAvailability(httpServletRequest, httpServletResponse));
-    assertEquals("API000045", exception.getErrorCode());
-  }
-  @Test
-  void checkConfigurationAvailability_branch() throws JsonProcessingException {
-    GetConfigurationRequest getConfigurationRequest = new GetConfigurationRequest();
-    getConfigurationRequest.setFileType("IMPS_TXN");
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(getConfigurationRequest));
-    Mockito.when(viewFileConfigurationService.getConfiguration(any(GetConfigurationRequest.class))).thenReturn(null);
-    fileConfigurationController.getConfiguration(httpServletRequest, httpServletResponse);
-    Mockito.verify(httpServletRequest).getAttribute("plainPayload");
-  }
-  @Test
-  void getConfiguration_branch() throws JsonProcessingException {
-    CheckConfigurationRequest checkConfigurationRequest = new CheckConfigurationRequest();
-    checkConfigurationRequest.setCorporateAlias("250250");
-    checkConfigurationRequest.setFileType(List.of());
-    Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(checkConfigurationRequest));
-    Mockito.when(fileConfigurationService.getConfigurationStatus(any(CheckConfigurationRequest.class), eq("250250"))).thenReturn(null);
-    fileConfigurationController.checkConfigurationAvailability(httpServletRequest, httpServletResponse);
-    Mockito.verify(httpServletRequest).getAttribute("plainPayload");
-    assertEquals("SUCCESS", ServiceConstants.SUCCESS);
-  }
-
+	public void doAuditResponse(AuditEvent auditEvent) {
+		logger.info("doAuditResponse starts");
+		try {
+			auditDAOImpl.insertAuditData(auditEvent);
+			//auditEventProducer.sendAudit(auditEvent);
+		} catch (Exception exception) {
+			logger.info("Exception while updating audit :: {} ", exception.getMessage());
+		}
+		logger.info("doAuditResponse ends");
+	}
 }
