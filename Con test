@@ -1,59 +1,13 @@
-package com.sbi.microservice.framework.services;
-
-import java.util.Optional;
-
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.event.AuditEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessException;
-import org.springframework.stereotype.Service;
-
-import com.sbi.microservice.framework.repository.AuditDAO;
-
-import jakarta.servlet.http.HttpServletRequest;
-
-@Service
-public class AuditService {
-	private final static Logger logger = LoggerFactory.getLogger(AuditService.class);
-	private final AuditDAO auditDAOImpl;
-	//private final AuditEventProducer auditEventProducer;
-
-//	public AuditService(AuditDAO auditDAOImpl,AuditEventProducer auditEventProducer) {
-//		this.auditDAOImpl = auditDAOImpl;
-//		this.auditEventProducer = auditEventProducer;
-//	}
-
-	public AuditService(AuditDAO auditDAOImpl) {
-		this.auditDAOImpl = auditDAOImpl;
-	}
-
-
-	public void doAuditRequest(HttpServletRequest req, String serviceID, String channelID, String endPointName,
-			String engineID, String ipAddress, String serviceCategory, Optional<String> cipherKey, String payloadInReqBody, String serviceResRefNo, String traceId) {
-		
-		String corporateType=FrameworkConstants.STRING_BLANK;
-		logger.info("doAuditRequest starts");
-		try {
-			AuditEvent auditEvent = new AuditEvent("to be updated",serviceID,endPointName,serviceCategory,channelID,null,null,null,null,corporateType,cipherKey.get(),payloadInReqBody,serviceResRefNo,null,null,null,null,"insert", traceId);
-			auditDAOImpl.insertAuditData(auditEvent);
-			//auditEventProducer.sendAudit(auditEvent);
-		} catch (DataAccessException e) {
-			logger.info("Exception while inserting audit :: {}",e.getMessage());
-		} catch (Exception e) {
-			logger.info("Exception while inserting audit : {}", e.getMessage());
-		}
-		logger.info("doAuditRequest ends");
-	}
-
-	public void doAuditResponse(AuditEvent auditEvent) {
-		logger.info("doAuditResponse starts");
-		try {
-			auditDAOImpl.insertAuditData(auditEvent);
-			//auditEventProducer.sendAudit(auditEvent);
-		} catch (Exception exception) {
-			logger.info("Exception while updating audit :: {} ", exception.getMessage());
-		}
-		logger.info("doAuditResponse ends");
-	}
+@Test
+void authenticate_whenCorporateUserButProfileNotFound_shouldReturnNull() {
+    UserProfile userProfile = new UserProfile("userId", "userName", 
+        UserRole.CORPORATE.getValue(), "corporateId", 1, "branchCode");
+        
+    Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
+    Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
+    Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.of(userProfile));
+    Mockito.when(corporateDAO.getCorporateProfile(anyString())).thenReturn(null);
+    
+    Authentication result = webAuthenticationProvider.authenticate(request);
+    assertNull(result);
 }
