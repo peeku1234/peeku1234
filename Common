@@ -1,117 +1,309 @@
-package com.sbi.microservice.framework.services.access;
+package com.sbi.microservice.framework.services;
+
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.sbi.microservice.framework.cache.CacheManager;
 import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.constant.UserRole;
-import com.sbi.microservice.framework.model.Authentication;
-import com.sbi.microservice.framework.model.CorporateProfile;
-import com.sbi.microservice.framework.model.UserProfile;
-import com.sbi.microservice.framework.repository.CorporateDAO;
+import com.sbi.microservice.framework.exception.AccessException;
+import com.sbi.microservice.framework.exception.ConfigurationException;
+import com.sbi.microservice.framework.filter.GatewayFilter;
+import com.sbi.microservice.framework.model.*;
+import com.sbi.microservice.framework.repository.ServiceDAO;
 import com.sbi.microservice.framework.repository.UserDAO;
+import com.sbi.microservice.framework.services.access.AuthenticationProvider;
+import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@org.springframework.stereotype.Service
+public class AccessVerifier {
+
+	private final static Logger logger = LoggerFactory.getLogger(AccessVerifier.class);
+
+	private final AuthenticationProviderFactory authenticationProviderFactory;
+	private final ServiceDAO serviceDAO;
+	private final CacheManager cacheManager;
+	private final FrameworkUtils frameworkUtils;
+	private final UserDAO userDAO;
+	
+	public AccessVerifier(AuthenticationProviderFactory authenticationProviderFactory,ServiceDAO serviceDAO,CacheManager cacheManager,FrameworkUtils frameworkUtils, UserDAO userDAO) {
+		this.authenticationProviderFactory=authenticationProviderFactory;
+		this.serviceDAO=serviceDAO;
+		this.cacheManager=cacheManager;
+		this.frameworkUtils=frameworkUtils;
+		this.userDAO = userDAO;
+	}
+
+	public Optional<Access> checkServiceAccess(HttpServletRequest request,HttpServletResponse response) throws AccessException{
+
+		String channelId = request.getHeader(FrameworkConstants.CHANNELID);
+		String token = request.getHeader(FrameworkConstants.USER_TOKEN);// user token
+		String requestURI = request.getRequestURI();
+		Optional<String> optionalServiceName = Optional.of(frameworkUtils.extractServiceName(requestURI));
+
+		String accessStatus = FrameworkConstants.ACCESS_DENIED;
+		String accessDescription = FrameworkConstants.STRING_BLANK;
+		String entityType = channelId;
+		String entityValue = frameworkUtils.getEntityValue(entityType);
+		Optional<String> userName = frameworkUtils.getAttribute(request,"userNameFromFilter");
+		String method = request.getMethod().toUpperCase();
+		
+		if (optionalServiceName.isPresent()) {
+			String serviceName=optionalServiceName.orElse("");
+			boolean isSecuredService=isSecuredService(serviceName);
+			String serviceType = (isSecuredService ? FrameworkConstants.SERVICE_TYPE_SECURED : FrameworkConstants.SERVICE_TYPE_OPEN);
+			
+			if ("DELETE".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method) || "DEBUG".equalsIgnoreCase(method)) {
+	        	accessDescription = FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED;
+	            return Optional.of(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
+	        }
+			/**
+			 * Check if access to the requested service requires verification
+			 */
+			if (isSecuredService) {
+				/**
+				 * Check if the channel has access to the requested service
+				 */
+				logger.info("Access to the requested service requires verification");
+				if (isChannelAuthorized(serviceName, channelId)) {
+					logger.info("Channel is authorized");
+					try {
+
+						//Auth token validation
+						AuthenticationProvider authProvider = authenticationProviderFactory.getProvider(channelId);
+						if (userName.isPresent()) {
+							Authentication authentication = authProvider.authenticate(request);
+
+							if (Objects.nonNull(authentication) && authentication.authenticated()) {
+								logger.info("User is authenticated");
+								/**
+								 * Check if the user has access to the requested service
+								 */
+								if (!isUserAuthorized(authentication.userProfile().userRole())) {
+									accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHORIZED;
+									logger.info("User not authorized to access requested resource");
+								} else {
+									logger.info("User is authorized");
+									accessStatus = FrameworkConstants.ACCESS_GRANTED;
+								}
+							} else {
+								logger.info("User authentication failed");
+								accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED;
+							}
+						}
+
+					} catch (IllegalArgumentException e) {
+						accessDescription = FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL;
+						logger.info("Unrecognized channel : {}",channelId);
+					}
+				} else {
+					/**
+					 * Access to the requested service is denied to the channel
+					 */
+					logger.info("Access to requested resource is denied for channel : {}",channelId);
+					accessDescription = FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED;
+				}
+			} else {
+				/**
+				 * Requested service does not require any verification, access to be allowed
+				 */
+				logger.info("Access to the requested resource doesn't require verification");
+				accessStatus = FrameworkConstants.ACCESS_GRANTED;
+			}
+			return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
+		}else {
+			throw new ConfigurationException("API000045", "Service details not available");
+		}
+	}
+
+	private boolean isUserAuthorized(int userRole) {
+		// TODO - User Rationalization to be enabled
+		return true;
+	}
+
+	private boolean isSecuredService(String serviceName) {
+		Optional<Service> optionalService=Optional.ofNullable(cacheManager.getService(serviceName));
+		if(optionalService.isPresent()) {
+			return (optionalService.get().serviceType().equalsIgnoreCase(FrameworkConstants.SERVICE_TYPE_OPEN))?false:true;
+		}
+		return false;
+	}
+
+	private boolean isChannelAuthorized(String serviceName, String channelId) {
+		
+		AtomicBoolean hasAccess=new AtomicBoolean(false);
+		Optional<List<Channel>> serviceChannelList=Optional.ofNullable(cacheManager.getServiceChannelList(serviceName));
+		
+		if(serviceChannelList.isPresent()) {
+			serviceChannelList.get().forEach(channel->{
+				if(channel.channelId().equalsIgnoreCase(channelId)) {
+					hasAccess.set(true); 
+					}
+			});
+				
+		}
+		return hasAccess.get();
+	}
+	public boolean verifyRBA(Optional<String> userName, int corpType, int userRole, Service service, Endpoint endpoint) {
+		int mappingCount=serviceDAO.getRBACCount(userName,corpType,userRole, service.serviceId(), endpoint.endpointId());
+		return mappingCount > 0;
+	}
+
+}
+ they updated some methods as private so it should be called from first class where it is getting called can you bplease help me by modifying the below testcases
+ 
+ package com.sbi.microservice.framework.services;
+
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.exception.AccessException;
+import com.sbi.microservice.framework.model.Access;
+import com.sbi.microservice.framework.model.Channel;
+import com.sbi.microservice.framework.model.Service;
+import com.sbi.microservice.framework.repository.ServiceDAO;
+import com.sbi.microservice.framework.services.access.AuthenticationProvider;
+import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
 import com.sbi.microservice.framework.utils.FrameworkUtils;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
+
 
 @ExtendWith(MockitoExtension.class)
-class WebAuthenticationProviderTest {
+class AccessVerifierTest {
     @InjectMocks
-    private WebAuthenticationProvider webAuthenticationProvider;
-    
+    private AccessVerifier accessVerifier;
+
+
+    @Mock
+    private ServiceDAO serviceDAO;
+
     @Mock
     private CacheManager cacheManager;
-    
-    @Mock
-    private UserDAO userDAO;
-    
-    @Mock
-    private CorporateDAO corporateDAO;
-    
+
     @Mock
     private FrameworkUtils frameworkUtils;
-    
+
     @Mock
     private HttpServletRequest request;
+    @Mock
+    private HttpServletResponse response;
+    @Mock
+    private AuthenticationProviderFactory authenticationProviderFactory;
 
     @Test
-    void authenticate_whenNoUserNameInRequest_shouldReturnNull() {
-        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.empty());
-        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
-        
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        assertNull(result);
+    void checkServiceAccess() throws AccessException {
+        Optional<String> optionalServiceName = Optional.of("xyz");
+        when(frameworkUtils.extractServiceName(any())).thenReturn(String.valueOf(optionalServiceName));
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("DEBUG");
+        Service openService = new Service("serviceId","XZX","serviceType","serviceDescription","envDomain","version","encryptionAlgo","hashAlgo","rsaAlgo","rsaKeyPatg",1,1,"status",List.of(),List.of(),"category");
+        when(cacheManager.getService(anyString())).thenReturn(openService);
+        accessVerifier.checkServiceAccess(request, response);
+
+    }
+    @Test
+    void isSecuredService_else() throws AccessException {
+        when(frameworkUtils.extractServiceName(any())).thenReturn("OptionalServiceName");
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("DEBUG");
+        when(cacheManager.getService(anyString())).thenReturn(null);
+        accessVerifier.checkServiceAccess(request, response);
+
+    }
+    @Test
+    void OptionalServiceName_notPresent() throws AccessException {
+        when(frameworkUtils.extractServiceName(any())).thenReturn("");
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("");
+        Service openService = new Service("serviceId","XZX","serviceType","serviceDescription","envDomain","version","encryptionAlgo","hashAlgo","rsaAlgo","rsaKeyPatg",1,1,"status",List.of(),List.of(),"category");
+        when(cacheManager.getService(anyString())).thenReturn(openService);
+        accessVerifier.checkServiceAccess(request, response);
+
+    }
+    @Test
+    void checkServiceAccess_OpenService() throws AccessException {
+        AuthenticationProvider authenticationProvider = null;
+        when(frameworkUtils.extractServiceName(any())).thenReturn("JGUYJTG");
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("");
+        Channel channel1 = new Channel("service!", "channelId","channelName","status");
+        Channel channel2 = new Channel("service!", "channelId","channelName","status");
+        when(cacheManager.getServiceChannelList(anyString())).thenReturn(List.of(channel1,channel2));
+        when(authenticationProviderFactory.getProvider(anyString())).thenReturn(authenticationProvider);
+        Service openService = new Service("serviceId","XZX","","serviceDescription","envDomain","version","encryptionAlgo","hashAlgo","rsaAlgo","rsaKeyPatg",1,1,"status",List.of(),List.of(),"category");
+        when(cacheManager.getService(anyString())).thenReturn(openService);
+        accessVerifier.checkServiceAccess(request, response);
+
+    }
+    @Test
+    void checkServiceAccess_OpenService_Exception() throws AccessException {
+
+        when(frameworkUtils.extractServiceName(any())).thenReturn("JGUYJTG");
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("");
+        Channel channel1 = new Channel("service!", "channelId","channelName","status");
+        Channel channel2 = new Channel("service!", "channelId","channelName","status");
+        when(cacheManager.getServiceChannelList(anyString())).thenReturn(List.of(channel1,channel2));
+        when(authenticationProviderFactory.getProvider(anyString())).thenThrow(new IllegalArgumentException("e"));
+        Service openService = new Service("serviceId","XZX","","serviceDescription","envDomain","version","encryptionAlgo","hashAlgo","rsaAlgo","rsaKeyPatg",1,1,"status",List.of(),List.of(),"category");
+        when(cacheManager.getService(anyString())).thenReturn(openService);
+        accessVerifier.checkServiceAccess(request, response);
+
+    }
+
+//    @Test
+//    void isChannelAuthorized_EmptyChannelList_ShouldReturnFalse() {
+//        when(cacheManager.getServiceChannelList(anyString())).thenReturn(Collections.emptyList());
+//        Boolean b = accessVerifier.isChannelAuthorized("serviceName", "channelId");
+//        assertFalse(b);
+//    }
+
+
+
+    @Test
+    void checkServiceAccess_UnrecognizedChannel_ShouldDenyAccess() throws AccessException {
+        Optional<String> optionalServiceName = Optional.of("xyz");
+        when(frameworkUtils.extractServiceName(any())).thenReturn(String.valueOf(optionalServiceName));
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("OPTIONS");
+        Service openService = new Service("serviceId","serviceName","serviceType","serviceDescription","envDomain","version","encryptionAlgo","hashAlgo","rsaAlgo","rsaKeyPatg",1,1,"status",List.of(),List.of(),"category");
+        when(cacheManager.getService(any())).thenReturn(openService);
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        Assertions.assertNotNull(result);
     }
 
     @Test
-    void authenticate_whenUserProfileNotFound_shouldReturnNull() {
-        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
-        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
-        Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.empty());
-        
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        assertNull(result);
+    void checkServiceAccess_() throws AccessException {
+        Optional<String> optionalServiceName = Optional.of("XZX");
+        when(frameworkUtils.extractServiceName(any())).thenReturn(String.valueOf(optionalServiceName));
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn("channelId");
+        when(request.getMethod()).thenReturn("OPTIONS");
+        Service openService = new Service("serviceId","serviceName","serviceType","serviceDescription","envDomain","version","encryptionAlgo","hashAlgo","rsaAlgo","rsaKeyPatg",1,1,"status",List.of(),List.of(),"category");
+        when(cacheManager.getService(any())).thenReturn(openService);
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        Assertions.assertNotNull(result);
+
     }
 
-    @Test
-    void authenticate_whenUserIsSaral_shouldReturnAuthenticationWithoutCorporateProfile() {
-        UserProfile userProfile = new UserProfile("userId", "userName", 
-            UserRole.SARAL.getValue(), "corporateId", 1, "branchCode");
-            
-        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
-        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
-        Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.of(userProfile));
-        
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        assertNotNull(result);
-        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
-        assertNull(result.corporateProfile());
-        assertTrue(result.isAuthenticated());
-    }
 
-    @Test
-    void authenticate_whenUserIsNotSaral_shouldReturnAuthenticationWithCorporateProfile() {
-        UserProfile userProfile = new UserProfile("userId", "userName", 
-            UserRole.CORPORATE.getValue(), "corporateId", 1, "branchCode");
-        CorporateProfile corporateProfile = new CorporateProfile("corpId", "corpName");
-        
-        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
-        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
-        Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.of(userProfile));
-        Mockito.when(corporateDAO.getCorporateProfile(anyString())).thenReturn(corporateProfile);
-        
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        assertNotNull(result);
-        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
-        assertNotNull(result.corporateProfile());
-        assertEquals("corpId", result.corporateProfile().corporateId());
-        assertTrue(result.isAuthenticated());
-    }
-
-    @Test
-    void authenticate_whenSessionExists_shouldReturnCachedAuthentication() {
-        Authentication cachedAuth = new Authentication(FrameworkConstants.REQUESTOR_WEB, 
-            null, 
-            new UserProfile("userId", "userName", UserRole.SARAL.getValue(), "corpId", 1, "branchCode"),
-            null,
-            true);
-            
-        Mockito.when(cacheManager.getSession(anyString())).thenReturn(cachedAuth);
-        
-        Authentication result = webAuthenticationProvider.authenticate(request);
-        
-        assertNotNull(result);
-        assertSame(cachedAuth, result);
-    }
 }
