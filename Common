@@ -8,71 +8,6 @@ import com.sbi.microservice.framework.model.CorporateProfile;
 import com.sbi.microservice.framework.model.UserProfile;
 import com.sbi.microservice.framework.repository.CorporateDAO;
 import com.sbi.microservice.framework.repository.UserDAO;
-import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.stereotype.Component;
-
-import java.util.Optional;
-
-@Component
-public final class WebAuthenticationProvider implements AuthenticationProvider {
-	private final CacheManager cacheManager;
-	private final AuthenticationDAO authenticationDAO;
-	private final CorporateDAO corporateDAO;
-	private final UserDAO userDAO;
-	private final FrameworkUtils frameworkUtils;
-
-	public WebAuthenticationProvider(CacheManager cacheManager, AuthenticationDAO authenticationDAO, CorporateDAO corporateDAO, UserDAO userDAO, FrameworkUtils frameworkUtils){
-		this.cacheManager = cacheManager;
-		this.authenticationDAO = authenticationDAO;
-		this.corporateDAO = corporateDAO;
-		this.userDAO = userDAO;
-		this.frameworkUtils=frameworkUtils;
-	}
-
-	@Override
-	public Authentication authenticate(HttpServletRequest request) {
-			Optional<String> userName = frameworkUtils.getAttribute(request,"userNameFromFilter");
-		Authentication authentication=cacheManager.getSession("");
-		if(authentication==null || authentication.userProfile() ==null || !"".equals(authentication.userProfile().userName())) {
-
-			//TODO auth token validation
-			//UserProfile userProfile=authenticationDAO.getUserDetails(null, null);
-			if(userName.isPresent()) {
-				Optional<UserProfile> userProfile = userDAO.getUserProfile(userName.get());
-
-				if (userProfile.isPresent()) {
-					CorporateProfile corporateProfile = null;
-
-					if (userProfile.get().userRole() != UserRole.SARAL.getValue()) {
-						corporateProfile = corporateDAO.getCorporateProfile(userProfile.get().corporateId());
-					}
-
-					authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile.get(), corporateProfile, true);
-					cacheManager.setSession(authentication);
-				} else {
-					return null;
-				}
-			}
-		}
-		return authentication;
-		
-		
-		
-	}
-
-}
- It shd be like this i need some changes in testcases caz im getting errors
-
-
-package com.sbi.microservice.framework.services.access;
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.model.Authentication;
-import com.sbi.microservice.framework.model.CorporateProfile;
-import com.sbi.microservice.framework.model.UserProfile;
-import com.sbi.microservice.framework.repository.CorporateDAO;
-import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
 import com.sbi.microservice.framework.utils.FrameworkUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
@@ -81,49 +16,102 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+
 import java.util.Optional;
-import static org.junit.jupiter.api.Assertions.assertNull;
+
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 
 @ExtendWith(MockitoExtension.class)
 class WebAuthenticationProviderTest {
-@InjectMocks
-private WebAuthenticationProvider webAuthenticationProvider;
-@Mock
-private CacheManager cacheManager;
-@Mock
-private AuthenticationDAO authenticationDAO;
-@Mock
-private CorporateDAO corporateDAO;
-private FrameworkUtils frameworkUtils;
-
+    @InjectMocks
+    private WebAuthenticationProvider webAuthenticationProvider;
+    
+    @Mock
+    private CacheManager cacheManager;
+    
+    @Mock
+    private UserDAO userDAO;
+    
+    @Mock
+    private CorporateDAO corporateDAO;
+    
+    @Mock
+    private FrameworkUtils frameworkUtils;
+    
+    @Mock
+    private HttpServletRequest request;
 
     @Test
-    void authenticate() {
-        HttpServletRequest request = null;
-        Authentication  authentication = new Authentication( "userId",  "userName",  new UserProfile("userId",  "userName",  1,  "corporateId",  1,  "branchCode"),  new CorporateProfile("corpId","corpName"),  true);
-        Mockito.when(frameworkUtils.getAttribute(any(),anyString())).thenReturn(Optional.of("name"));
+    void authenticate_whenNoUserNameInRequest_shouldReturnNull() {
+        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.empty());
         Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
-        Authentication request1 =  webAuthenticationProvider.authenticate(request);
-        assertNull(request1);
-    }
-    @Test
-    void userProfile() {
-        HttpServletRequest request = null;
-        UserProfile  userProfile = new UserProfile( "userId",  "userName",  1,  "corporateId",  1,  "branchCode");
-        Mockito.when(authenticationDAO.getUserDetails(any(),any())).thenReturn(userProfile);
-        Mockito.when(corporateDAO.getCorporateProfile(anyString())).thenReturn(null);
-        Authentication request1 =  webAuthenticationProvider.authenticate(request);
         
-    }
-    @Test
-    void userProfile_userRole() {
-        HttpServletRequest request = null;
-        UserProfile  userProfile = new UserProfile( "userId",  "userName",  4,  "corporateId",  1,  "branchCode");
-        Mockito.when(authenticationDAO.getUserDetails(any(),any())).thenReturn(userProfile);
-        Authentication request1 =  webAuthenticationProvider.authenticate(request);
-        
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        assertNull(result);
     }
 
+    @Test
+    void authenticate_whenUserProfileNotFound_shouldReturnNull() {
+        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
+        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
+        Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.empty());
+        
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        assertNull(result);
+    }
+
+    @Test
+    void authenticate_whenUserIsSaral_shouldReturnAuthenticationWithoutCorporateProfile() {
+        UserProfile userProfile = new UserProfile("userId", "userName", 
+            UserRole.SARAL.getValue(), "corporateId", 1, "branchCode");
+            
+        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
+        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
+        Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.of(userProfile));
+        
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        assertNotNull(result);
+        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
+        assertNull(result.corporateProfile());
+        assertTrue(result.isAuthenticated());
+    }
+
+    @Test
+    void authenticate_whenUserIsNotSaral_shouldReturnAuthenticationWithCorporateProfile() {
+        UserProfile userProfile = new UserProfile("userId", "userName", 
+            UserRole.CORPORATE.getValue(), "corporateId", 1, "branchCode");
+        CorporateProfile corporateProfile = new CorporateProfile("corpId", "corpName");
+        
+        Mockito.when(frameworkUtils.getAttribute(any(), anyString())).thenReturn(Optional.of("testUser"));
+        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
+        Mockito.when(userDAO.getUserProfile(anyString())).thenReturn(Optional.of(userProfile));
+        Mockito.when(corporateDAO.getCorporateProfile(anyString())).thenReturn(corporateProfile);
+        
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        assertNotNull(result);
+        assertEquals(FrameworkConstants.REQUESTOR_WEB, result.requestor());
+        assertNotNull(result.corporateProfile());
+        assertEquals("corpId", result.corporateProfile().corporateId());
+        assertTrue(result.isAuthenticated());
+    }
+
+    @Test
+    void authenticate_whenSessionExists_shouldReturnCachedAuthentication() {
+        Authentication cachedAuth = new Authentication(FrameworkConstants.REQUESTOR_WEB, 
+            null, 
+            new UserProfile("userId", "userName", UserRole.SARAL.getValue(), "corpId", 1, "branchCode"),
+            null,
+            true);
+            
+        Mockito.when(cacheManager.getSession(anyString())).thenReturn(cachedAuth);
+        
+        Authentication result = webAuthenticationProvider.authenticate(request);
+        
+        assertNotNull(result);
+        assertSame(cachedAuth, result);
+    }
 }
