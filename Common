@@ -1,91 +1,129 @@
-@Test
-void getResultForIMPSTXNFixed_ShouldHandleAllCases() {
-    // Setup test data
-    List<Map<String, String>> listOfConfiguration = new ArrayList<>();
-    Map<String, String> configMap1 = new HashMap<>();
-    configMap1.put("Beneficiary Name", "John Doe");
-    configMap1.put("Beneficiary MMID", "123456");
-    configMap1.put("Beneficiary Mobile No", "9876543210");
-    configMap1.put("Amount", "100.50");
-    listOfConfiguration.add(configMap1);
-    
-    Map<String, String> configMap2 = new HashMap<>();
-    configMap2.put("Beneficiary Name", "Jane Smith with very long name");
-    configMap2.put("Amount", null);
-    listOfConfiguration.add(configMap2);
+package com.sbi.microservice.framework.services.access;
 
-    FileConfigMasterEntity response = new FileConfigMasterEntity();
-    List<FixedConfiguration> fixedConfigs = new ArrayList<>();
-    fixedConfigs.add(new FixedConfiguration("Beneficiary Name", 1, 10, "A", null));
-    fixedConfigs.add(new FixedConfiguration("Beneficiary MMID", 11, 14, "N", null));
-    fixedConfigs.add(new FixedConfiguration("Beneficiary Mobile No", 15, 24, "N", null));
-    fixedConfigs.add(new FixedConfiguration("Amount", 25, 35, "C", null));
-    response.setFixedConfiguration(fixedConfigs);
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.constant.UserRole;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.repository.CorporateDAO;
+import com.sbi.microservice.framework.repository.UserDAO;
+import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.stereotype.Component;
 
-    StringBuilder debitString = new StringBuilder();
-    StringBuilder creditString = new StringBuilder();
+import java.util.Optional;
 
-    // Test case 1: Normal case with credit not starting with "A"
-    List<String> result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
-    assertEquals(6, result.size()); // 2 entries * 3 lines each (debit, credit, empty)
-    assertTrue(result.get(0).contains("John Doe"));
-    assertTrue(result.get(1).contains("123456"));
-    
-    // Test case 2: Credit starting with "A" - should blank out MMID and Mobile No
-    creditString = new StringBuilder("A123");
-    result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
-    assertTrue(result.get(1).contains("       ")); // 7 spaces for MMID
-    assertTrue(result.get(1).contains("          ")); // 10 spaces for Mobile No
-    
-    // Test case 3: Long field value truncation
-    assertTrue(result.get(3).contains("Jane Smith")); // Truncated to 10 chars
-    assertFalse(result.get(3).contains("with very long name"));
-    
-    // Test case 4: Null value handling
-    assertTrue(result.get(4).substring(24, 34).trim().isEmpty()); // Null amount
-    
-    // Test case 5: Empty configMap (though method doesn't handle this case explicitly)
-    listOfConfiguration.add(new HashMap<>());
-    result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
-    assertEquals(9, result.size());
+@Component
+public final class WebAuthenticationProvider implements AuthenticationProvider {
+	private final CacheManager cacheManager;
+	private final AuthenticationDAO authenticationDAO;
+	private final CorporateDAO corporateDAO;
+	private final UserDAO userDAO;
+	private final FrameworkUtils frameworkUtils;
+
+	public WebAuthenticationProvider(CacheManager cacheManager, AuthenticationDAO authenticationDAO, CorporateDAO corporateDAO, UserDAO userDAO, FrameworkUtils frameworkUtils){
+		this.cacheManager = cacheManager;
+		this.authenticationDAO = authenticationDAO;
+		this.corporateDAO = corporateDAO;
+		this.userDAO = userDAO;
+		this.frameworkUtils=frameworkUtils;
+	}
+
+	@Override
+	public Authentication authenticate(HttpServletRequest request) {
+			Optional<String> userName = frameworkUtils.getAttribute(request,"userNameFromFilter");
+		Authentication authentication=cacheManager.getSession("");
+		if(authentication==null || authentication.userProfile() ==null || !"".equals(authentication.userProfile().userName())) {
+
+			//TODO auth token validation
+			//UserProfile userProfile=authenticationDAO.getUserDetails(null, null);
+			if(userName.isPresent()) {
+				Optional<UserProfile> userProfile = userDAO.getUserProfile(userName.get());
+
+				if (userProfile.isPresent()) {
+					CorporateProfile corporateProfile = null;
+
+					if (userProfile.get().userRole() != UserRole.SARAL.getValue()) {
+						corporateProfile = corporateDAO.getCorporateProfile(userProfile.get().corporateId());
+					}
+
+					authentication = new Authentication(FrameworkConstants.REQUESTOR_WEB, null, userProfile.get(), corporateProfile, true);
+					cacheManager.setSession(authentication);
+				} else {
+					return null;
+				}
+			}
+		}
+		return authentication;
+		
+		
+		
+	}
+
 }
+ It shd be like this i need some changes in testcases caz im getting errors
 
-@Test
-void getResultForIMPSTXNFixed_ShouldHandleDifferentFieldTypes() {
-    // Setup test with different field types
-    List<Map<String, String>> listOfConfiguration = new ArrayList<>();
-    Map<String, String> configMap = new HashMap<>();
-    configMap.put("NumericField", "123");
-    configMap.put("CharacterField", "ABC");
-    configMap.put("DateField", "20230101");
-    listOfConfiguration.add(configMap);
 
-    FileConfigMasterEntity response = new FileConfigMasterEntity();
-    List<FixedConfiguration> fixedConfigs = new ArrayList<>();
-    fixedConfigs.add(new FixedConfiguration("NumericField", 1, 3, "N", null));
-    fixedConfigs.add(new FixedConfiguration("CharacterField", 4, 6, "A", null));
-    fixedConfigs.add(new FixedConfiguration("DateField", 7, 14, "D", "yyyyMMdd"));
-    response.setFixedConfiguration(fixedConfigs);
+package com.sbi.microservice.framework.services.access;
+import com.sbi.microservice.framework.cache.CacheManager;
+import com.sbi.microservice.framework.model.Authentication;
+import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.model.UserProfile;
+import com.sbi.microservice.framework.repository.CorporateDAO;
+import com.sbi.microservice.framework.repository.access.AuthenticationDAO;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import java.util.Optional;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 
-    StringBuilder debitString = new StringBuilder();
-    StringBuilder creditString = new StringBuilder();
+@ExtendWith(MockitoExtension.class)
+class WebAuthenticationProviderTest {
+@InjectMocks
+private WebAuthenticationProvider webAuthenticationProvider;
+@Mock
+private CacheManager cacheManager;
+@Mock
+private AuthenticationDAO authenticationDAO;
+@Mock
+private CorporateDAO corporateDAO;
+private FrameworkUtils frameworkUtils;
 
-    List<String> result = getResultForIMPSTXNFixed(listOfConfiguration, response, debitString, creditString);
-    
-    // Verify different field types are handled correctly
-    assertTrue(result.get(0).startsWith("123"));
-    assertTrue(result.get(0).contains("ABC"));
-    assertTrue(result.get(0).contains("20230101"));
-}
 
-@Test
-void getResultForIMPSTXNFixed_ShouldHandleEmptyConfigurations() {
-    // Test with empty configuration list
-    List<String> result = getResultForIMPSTXNFixed(
-        Collections.emptyList(), 
-        new FileConfigMasterEntity(), 
-        new StringBuilder(), 
-        new StringBuilder()
-    );
-    assertTrue(result.isEmpty());
+    @Test
+    void authenticate() {
+        HttpServletRequest request = null;
+        Authentication  authentication = new Authentication( "userId",  "userName",  new UserProfile("userId",  "userName",  1,  "corporateId",  1,  "branchCode"),  new CorporateProfile("corpId","corpName"),  true);
+        Mockito.when(frameworkUtils.getAttribute(any(),anyString())).thenReturn(Optional.of("name"));
+        Mockito.when(cacheManager.getSession(anyString())).thenReturn(null);
+        Authentication request1 =  webAuthenticationProvider.authenticate(request);
+        assertNull(request1);
+    }
+    @Test
+    void userProfile() {
+        HttpServletRequest request = null;
+        UserProfile  userProfile = new UserProfile( "userId",  "userName",  1,  "corporateId",  1,  "branchCode");
+        Mockito.when(authenticationDAO.getUserDetails(any(),any())).thenReturn(userProfile);
+        Mockito.when(corporateDAO.getCorporateProfile(anyString())).thenReturn(null);
+        Authentication request1 =  webAuthenticationProvider.authenticate(request);
+        
+    }
+    @Test
+    void userProfile_userRole() {
+        HttpServletRequest request = null;
+        UserProfile  userProfile = new UserProfile( "userId",  "userName",  4,  "corporateId",  1,  "branchCode");
+        Mockito.when(authenticationDAO.getUserDetails(any(),any())).thenReturn(userProfile);
+        Authentication request1 =  webAuthenticationProvider.authenticate(request);
+        
+    }
+
 }
