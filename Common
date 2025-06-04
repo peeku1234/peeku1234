@@ -1,13 +1,16 @@
 package com.sbi.microservice.framework.services;
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
 
 import com.sbi.microservice.framework.cache.CacheManager;
 import com.sbi.microservice.framework.constant.FrameworkConstants;
 import com.sbi.microservice.framework.exception.AccessException;
 import com.sbi.microservice.framework.exception.ConfigurationException;
-import com.sbi.microservice.framework.filter.GatewayFilter;
 import com.sbi.microservice.framework.model.*;
 import com.sbi.microservice.framework.repository.ServiceDAO;
 import com.sbi.microservice.framework.repository.UserDAO;
@@ -17,155 +20,338 @@ import com.sbi.microservice.framework.utils.FrameworkUtils;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@org.springframework.stereotype.Service
-public class AccessVerifier {
+@ExtendWith(MockitoExtension.class)
+class AccessVerifierTest {
 
-	private final static Logger logger = LoggerFactory.getLogger(AccessVerifier.class);
+    @Mock
+    private AuthenticationProviderFactory authenticationProviderFactory;
 
-	private final AuthenticationProviderFactory authenticationProviderFactory;
-	private final ServiceDAO serviceDAO;
-	private final CacheManager cacheManager;
-	private final FrameworkUtils frameworkUtils;
-	private final UserDAO userDAO;
-	
-	public AccessVerifier(AuthenticationProviderFactory authenticationProviderFactory,ServiceDAO serviceDAO,CacheManager cacheManager,FrameworkUtils frameworkUtils, UserDAO userDAO) {
-		this.authenticationProviderFactory=authenticationProviderFactory;
-		this.serviceDAO=serviceDAO;
-		this.cacheManager=cacheManager;
-		this.frameworkUtils=frameworkUtils;
-		this.userDAO = userDAO;
-	}
+    @Mock
+    private ServiceDAO serviceDAO;
 
-	public Optional<Access> checkServiceAccess(HttpServletRequest request,HttpServletResponse response) throws AccessException{
+    @Mock
+    private CacheManager cacheManager;
 
-		String channelId = request.getHeader(FrameworkConstants.CHANNELID);
-		String token = request.getHeader(FrameworkConstants.USER_TOKEN);// user token
-		String requestURI = request.getRequestURI();
-		Optional<String> optionalServiceName = Optional.of(frameworkUtils.extractServiceName(requestURI));
+    @Mock
+    private FrameworkUtils frameworkUtils;
 
-		String accessStatus = FrameworkConstants.ACCESS_DENIED;
-		String accessDescription = FrameworkConstants.STRING_BLANK;
-		String entityType = channelId;
-		String entityValue = frameworkUtils.getEntityValue(entityType);
-		Optional<String> userName = frameworkUtils.getAttribute(request,"userNameFromFilter");
-		String method = request.getMethod().toUpperCase();
-		
-		if (optionalServiceName.isPresent()) {
-			String serviceName=optionalServiceName.orElse("");
-			boolean isSecuredService=isSecuredService(serviceName);
-			String serviceType = (isSecuredService ? FrameworkConstants.SERVICE_TYPE_SECURED : FrameworkConstants.SERVICE_TYPE_OPEN);
-			
-			if ("DELETE".equalsIgnoreCase(method) || "OPTIONS".equalsIgnoreCase(method) || "DEBUG".equalsIgnoreCase(method)) {
-	        	accessDescription = FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED;
-	            return Optional.of(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
-	        }
-			/**
-			 * Check if access to the requested service requires verification
-			 */
-			if (isSecuredService) {
-				/**
-				 * Check if the channel has access to the requested service
-				 */
-				logger.info("Access to the requested service requires verification");
-				if (isChannelAuthorized(serviceName, channelId)) {
-					logger.info("Channel is authorized");
-					try {
+    @Mock
+    private UserDAO userDAO;
 
-						//Auth token validation
-						AuthenticationProvider authProvider = authenticationProviderFactory.getProvider(channelId);
-							if (userName.isPresent()) {
-								Authentication authentication = authProvider.authenticate(request);
+    @Mock
+    private HttpServletRequest request;
 
-								if (Objects.nonNull(authentication) && authentication.authenticated()) {
-									logger.info("User is authenticated");
-									/**
-									 * Check if the user has access to the requested service
-									 */
-									if (!isUserAuthorized(authentication.userProfile().userRole())) {
-										accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHORIZED;
-										logger.info("User not authorized to access requested resource");
-									} else {
-										logger.info("User is authorized");
-										accessStatus = FrameworkConstants.ACCESS_GRANTED;
-									}
-								} else {
-									logger.info("User authentication failed");
-									accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED;
-								}
-							}
+    @Mock
+    private HttpServletResponse response;
 
-					} catch (IllegalArgumentException e) {
-						accessDescription = FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL;
-						logger.info("Unrecognized channel : {}",channelId);
-					}
-				} else {
-					/**
-					 * Access to the requested service is denied to the channel
-					 */
-					logger.info("Access to requested resource is denied for channel : {}",channelId);
-					accessDescription = FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED;
-				}
-			} else {
-				/**
-				 * Requested service does not require any verification, access to be allowed
-				 */
-				logger.info("Access to the requested resource doesn't require verification");
-				accessStatus = FrameworkConstants.ACCESS_GRANTED;
-			}
-			return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
-		}else {
-			throw new ConfigurationException("API000045", "Service details not available");
-		}
-	}
+    @Mock
+    private AuthenticationProvider authenticationProvider;
 
-	private boolean isUserAuthorized(int userRole) {
-		// TODO - User Rationalization to be enabled
-		return true;
-	}
+    @Mock
+    private Authentication authentication;
 
-	private boolean isSecuredService(String serviceName) {
-		Optional<Service> optionalService=Optional.ofNullable(cacheManager.getService(serviceName));
-		if(optionalService.isPresent()) {
-			return (optionalService.get().serviceType().equalsIgnoreCase(FrameworkConstants.SERVICE_TYPE_OPEN))?false:true;
-		}
-		return false;
-	}
+    @Mock
+    private UserProfile userProfile;
 
-	private boolean isChannelAuthorized(String serviceName, String channelId) {
-		
-		AtomicBoolean hasAccess=new AtomicBoolean(false);
-		Optional<List<Channel>> serviceChannelList=Optional.ofNullable(cacheManager.getServiceChannelList(serviceName));
-		
-		if(serviceChannelList.isPresent()) {
-			serviceChannelList.get().forEach(channel->{
-				if(channel.channelId().equalsIgnoreCase(channelId)) {
-					hasAccess.set(true); 
-					}
-			});
-				
-		}
-		return hasAccess.get();
-	}
-	public boolean verifyRBA(Optional<String> userName, int corpType, int userRole, Service service, Endpoint endpoint) {
-		int mappingCount	=serviceDAO.getRBACCount(userName,corpType,userRole, service.serviceId(), endpoint.endpointId());
-		return mappingCount > 0;
-	}
+    @InjectMocks
+    private AccessVerifier accessVerifier;
 
+    private static final String SERVICE_NAME = "testService";
+    private static final String CHANNEL_ID = "WEB";
+    private static final String USER_TOKEN = "testToken";
+    private static final String REQUEST_URI = "/api/" + SERVICE_NAME + "/resource";
+    private static final String USER_NAME = "testUser";
+
+    @BeforeEach
+    void setUp() {
+        when(request.getRequestURI()).thenReturn(REQUEST_URI);
+        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(CHANNEL_ID);
+        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn(USER_TOKEN);
+    }
+
+    @Test
+    void checkServiceAccess_OpenService_AccessGranted() throws AccessException {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_OPEN, 1, null));
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
+        assertEquals(SERVICE_NAME, result.get().serviceName());
+        assertEquals(FrameworkConstants.SERVICE_TYPE_OPEN, result.get().serviceType());
+    }
+
+    @Test
+    void checkServiceAccess_SecuredService_ChannelAuthorized_UserAuthenticated_UserAuthorized() throws AccessException {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+        
+        List<Channel> channels = Arrays.asList(new Channel(CHANNEL_ID, "Web Channel"));
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
+        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenReturn(authenticationProvider);
+        when(authenticationProvider.authenticate(request)).thenReturn(authentication);
+        when(authentication.authenticated()).thenReturn(true);
+        when(authentication.userProfile()).thenReturn(userProfile);
+        when(userProfile.userRole()).thenReturn(1); // Assuming role 1 is authorized
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
+        assertEquals(SERVICE_NAME, result.get().serviceName());
+        assertEquals(FrameworkConstants.SERVICE_TYPE_SECURED, result.get().serviceType());
+    }
+
+    @Test
+    void checkServiceAccess_SecuredService_ChannelAuthorized_UserNotAuthenticated() throws AccessException {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+        
+        List<Channel> channels = Arrays.asList(new Channel(CHANNEL_ID, "Web Channel"));
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
+        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenReturn(authenticationProvider);
+        when(authenticationProvider.authenticate(request)).thenReturn(authentication);
+        when(authentication.authenticated()).thenReturn(false);
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
+        assertEquals(FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED, result.get().accessDescription());
+    }
+
+    @Test
+    void checkServiceAccess_SecuredService_ChannelAuthorized_UserAuthenticated_UserNotAuthorized() throws AccessException {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+        
+        List<Channel> channels = Arrays.asList(new Channel(CHANNEL_ID, "Web Channel"));
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
+        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenReturn(authenticationProvider);
+        when(authenticationProvider.authenticate(request)).thenReturn(authentication);
+        when(authentication.authenticated()).thenReturn(true);
+        when(authentication.userProfile()).thenReturn(userProfile);
+        when(userProfile.userRole()).thenReturn(0); // Assuming role 0 is not authorized
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
+        assertEquals(FrameworkConstants.ACCESS_USER_NOT_AUTHORIZED, result.get().accessDescription());
+    }
+
+    @Test
+    void checkServiceAccess_SecuredService_ChannelNotAuthorized() throws AccessException {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+        
+        List<Channel> channels = Arrays.asList(new Channel("MOBILE", "Mobile Channel"));
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
+        assertEquals(FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED, result.get().accessDescription());
+    }
+
+    @Test
+    void checkServiceAccess_UnrecognizedChannel() throws AccessException {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+        
+        List<Channel> channels = Arrays.asList(new Channel(CHANNEL_ID, "Web Channel"));
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
+        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenThrow(new IllegalArgumentException());
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
+        assertEquals(FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL, result.get().accessDescription());
+    }
+
+    @Test
+    void checkServiceAccess_UnsupportedHttpMethod() throws AccessException {
+        // Arrange
+        when(request.getMethod()).thenReturn("DELETE");
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+        
+        // Act
+        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
+        assertEquals(FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED, result.get().accessDescription());
+    }
+
+    @Test
+    void checkServiceAccess_ServiceNotAvailable_ThrowsConfigurationException() {
+        // Arrange
+        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn("");
+        
+        // Act & Assert
+        assertThrows(ConfigurationException.class, () -> {
+            accessVerifier.checkServiceAccess(request, response);
+        });
+    }
+
+    @Test
+    void isSecuredService_OpenService_ReturnsFalse() {
+        // Arrange
+        Service openService = new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_OPEN, 1, null);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(openService);
+        
+        // Act
+        boolean result = accessVerifier.isSecuredService(SERVICE_NAME);
+        
+        // Assert
+        assertFalse(result);
+    }
+
+    @Test
+    void isSecuredService_SecuredService_ReturnsTrue() {
+        // Arrange
+        Service securedService = new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null);
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(securedService);
+        
+        // Act
+        boolean result = accessVerifier.isSecuredService(SERVICE_NAME);
+        
+        // Assert
+        assertTrue(result);
+    }
+
+    @Test
+    void isSecuredService_ServiceNotInCache_ReturnsFalse() {
+        // Arrange
+        when(cacheManager.getService(SERVICE_NAME)).thenReturn(null);
+        
+        // Act
+        boolean result = accessVerifier.isSecuredService(SERVICE_NAME);
+        
+        // Assert
+        assertFalse(result);
+    }
+
+    @Test
+    void isChannelAuthorized_ChannelInList_ReturnsTrue() {
+        // Arrange
+        List<Channel> channels = Arrays.asList(
+            new Channel("MOBILE", "Mobile Channel"),
+            new Channel(CHANNEL_ID, "Web Channel"),
+            new Channel("TP", "Third Party")
+        );
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        // Act
+        boolean result = accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID);
+        
+        // Assert
+        assertTrue(result);
+    }
+
+    @Test
+    void isChannelAuthorized_ChannelNotInList_ReturnsFalse() {
+        // Arrange
+        List<Channel> channels = Arrays.asList(
+            new Channel("MOBILE", "Mobile Channel"),
+            new Channel("TP", "Third Party")
+        );
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        // Act
+        boolean result = accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID);
+        
+        // Assert
+        assertFalse(result);
+    }
+
+    @Test
+    void isChannelAuthorized_EmptyChannelList_ReturnsFalse() {
+        // Arrange
+        List<Channel> channels = List.of();
+        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        
+        // Act
+        boolean result = accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID);
+        
+        // Assert
+        assertFalse(result);
+    }
+
+    @Test
+    void verifyRBA_ValidMapping_ReturnsTrue() {
+        // Arrange
+        Optional<String> userName = Optional.of(USER_NAME);
+        int corpType = 1;
+        int userRole = 1;
+        Service service = new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null);
+        Endpoint endpoint = new Endpoint(1, "/resource", "GET", 1);
+        
+        when(serviceDAO.getRBACCount(userName, corpType, userRole, service.serviceId(), endpoint.endpointId())).thenReturn(1);
+        
+        // Act
+        boolean result = accessVerifier.verifyRBA(userName, corpType, userRole, service, endpoint);
+        
+        // Assert
+        assertTrue(result);
+    }
+
+    @Test
+    void verifyRBA_NoMapping_ReturnsFalse() {
+        // Arrange
+        Optional<String> userName = Optional.of(USER_NAME);
+        int corpType = 1;
+        int userRole = 1;
+        Service service = new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null);
+        Endpoint endpoint = new Endpoint(1, "/resource", "GET", 1);
+        
+        when(serviceDAO.getRBACCount(userName, corpType, userRole, service.serviceId(), endpoint.endpointId())).thenReturn(0);
+        
+        // Act
+        boolean result = accessVerifier.verifyRBA(userName, corpType, userRole, service, endpoint);
+        
+        // Assert
+        assertFalse(result);
+    }
 }
-AuthenticationProvider is the below interface...
-package com.sbi.microservice.framework.services.access;
-
-import com.sbi.microservice.framework.model.Authentication;
-
-import jakarta.servlet.http.HttpServletRequest;
-
-public sealed interface AuthenticationProvider permits WebAuthenticationProvider, MobileAuthenticationProvider, ThirdPartyAuthenticationProvider {
-	Authentication authenticate(HttpServletRequest request);
-	
-}
-
-
-I need Junit for coveriong all lines and branch can you please help me with this.
