@@ -1,51 +1,281 @@
-@Test
-public void testGetFixedConfiguration_NoIndexChange_WhenFileTypeIsNotCompositeBen() {
-    FileConfigurationEntity entity = new FileConfigurationEntity();
-    entity.setId("250250");
+package com.sbi.microservice.framework.services;
 
-    FixedConfiguration fixedConfig = new FixedConfiguration("Account Number", "AlphaNumeric", true, 10, 16, "8", null, null);
-    List<FixedConfiguration> mockConfigs = List.of(fixedConfig);
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-    when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-            .thenReturn(mockConfigs);
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
-    List<FixedConfiguration> result = fileConfigurationDAOimpl.getFixedConfiguration("250250", "NON-BEN", entity);
+import com.sbi.microservice.framework.event.AuditEvent;
+import com.sbi.microservices.framework.stream.AuditEventProducer;
+import jakarta.servlet.http.HttpServletRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.springframework.dao.DataAccessException;
 
-    assertEquals(10, result.get(0).getStartIndex());
-    assertEquals(16, result.get(0).getEndIndex());
-}
+import com.sbi.microservice.framework.repository.AuditDAO;
 
+@ExtendWith(MockitoExtension.class)
+class AuditServiceTest {
 
+    @Mock
+    private AuditDAO auditDAOImpl;
 
-@Test
-public void testGetFixedConfiguration_AdjustsStartAndEndIndex_WhenFileTypeIsCompositeBen() {
-    // Arrange
-    FileConfigurationEntity fileConfigEntity = new FileConfigurationEntity();
-    fileConfigEntity.setId("250250");
-    fileConfigEntity.setFormat(1);
-    fileConfigEntity.setDefaultConfig(true);
-    fileConfigEntity.setOid("5966359893L");
-    fileConfigEntity.setCompConfigType("any");
-    fileConfigEntity.setLastConfigBy("test-user");
-    fileConfigEntity.setFieldDelimiter(",");
-    fileConfigEntity.setLastModTime("2025-05-30");
+    @Mock
+    private AuditEventProducer auditEventProducer;
 
-    // This config will be returned from the mocked DB call
-    FixedConfiguration fixedConfig = new FixedConfiguration("Account Number", "AlphaNumeric", true, 10, 16, "8", null, null);
-    List<FixedConfiguration> mockConfigs = List.of(fixedConfig);
+    @Mock
+    private HttpServletRequest request;
 
-    // Mock JDBC template response
-    when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-            .thenReturn(mockConfigs);
+    @Mock
+    private Logger logger;
 
-    // Act
-    List<FixedConfiguration> result = fileConfigurationDAOimpl.getFixedConfiguration("250250", "COMPOSITE BEN", fileConfigEntity);
+    @InjectMocks
+    private AuditService auditService;
 
-    // Assert
-    assertNotNull(result);
-    assertEquals(1, result.size());
+    @BeforeEach
+    void setUp() {
+        // Mock any common setup if needed
+    }
 
-    FixedConfiguration updatedConfig = result.get(0);
-    assertEquals(9, updatedConfig.getStartIndex()); // 10 - 1
-    assertEquals(15, updatedConfig.getEndIndex());  // 16 - 1
+    @Test
+    void testDoAuditRequest_Success() {
+        // Given
+        String serviceID = "testService";
+        String channelID = "testChannel";
+        String endPointName = "testEndpoint";
+        String engineID = "testEngine";
+        String ipAddress = "127.0.0.1";
+        String serviceCategory = "testCategory";
+        Optional<String> cipherKey = Optional.of("testKey");
+        String payload = "testPayload";
+        String serviceResRefNo = "testRefNo";
+        String traceId = "testTraceId";
+
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+                                    engineID, ipAddress, serviceCategory, cipherKey, 
+                                    payload, serviceResRefNo, traceId);
+
+        // Then
+        verify(auditEventProducer).sendAudit(any(AuditEvent.class));
+    }
+
+    @Test
+    void testDoAuditRequest_DataAccessException() {
+        // Given
+        String serviceID = "testService";
+        String channelID = "testChannel";
+        String endPointName = "testEndpoint";
+        String engineID = "testEngine";
+        String ipAddress = "127.0.0.1";
+        String serviceCategory = "testCategory";
+        Optional<String> cipherKey = Optional.of("testKey");
+        String payload = "testPayload";
+        String serviceResRefNo = "testRefNo";
+        String traceId = "testTraceId";
+
+        doThrow(new DataAccessException("DB Error") {}).when(auditEventProducer).sendAudit(any(AuditEvent.class));
+
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+                                  engineID, ipAddress, serviceCategory, cipherKey, 
+                                  payload, serviceResRefNo, traceId);
+
+        // Then
+        verify(logger).info("Exception while inserting audit :: DB Error");
+    }
+
+    @Test
+    void testDoAuditRequest_GeneralException() {
+        // Given
+        String serviceID = "testService";
+        String channelID = "testChannel";
+        String endPointName = "testEndpoint";
+        String engineID = "testEngine";
+        String ipAddress = "127.0.0.1";
+        String serviceCategory = "testCategory";
+        Optional<String> cipherKey = Optional.of("testKey");
+        String payload = "testPayload";
+        String serviceResRefNo = "testRefNo";
+        String traceId = "testTraceId";
+
+        doThrow(new RuntimeException("General Error")).when(auditEventProducer).sendAudit(any(AuditEvent.class));
+
+        // When
+        auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+                                  engineID, ipAddress, serviceCategory, cipherKey, 
+                                  payload, serviceResRefNo, traceId);
+
+        // Then
+        verify(logger).info("Exception while inserting audit : General Error");
+    }
+
+    @Test
+    void testDoAuditRequest_EmptyCipherKey() {
+        // Given
+        String serviceID = "testService";
+        String channelID = "testChannel";
+        String endPointName = "testEndpoint";
+        String engineID = "testEngine";
+        String ipAddress = "127.0.0.1";
+        String serviceCategory = "testCategory";
+        Optional<String> cipherKey = Optional.empty();
+        String payload = "testPayload";
+        String serviceResRefNo = "testRefNo";
+        String traceId = "testTraceId";
+
+        // When
+        assertThrows(NullPointerException.class, () -> {
+            auditService.doAuditRequest(request, serviceID, channelID, endPointName, 
+                                      engineID, ipAddress, serviceCategory, cipherKey, 
+                                      payload, serviceResRefNo, traceId);
+        });
+    }
+
+    @Test
+    void testDoAuditResponse_Success() {
+        // Given
+        AuditEvent auditEvent = new AuditEvent();
+
+        // When
+        auditService.doAuditResponse(auditEvent);
+
+        // Then
+        verify(auditEventProducer).sendAudit(auditEvent);
+    }
+
+    @Test
+    void testDoAuditResponse_Exception() {
+        // Given
+        AuditEvent auditEvent = new AuditEvent();
+        doThrow(new RuntimeException("Error")).when(auditEventProducer).sendAudit(auditEvent);
+
+        // When
+        auditService.doAuditResponse(auditEvent);
+
+        // Then
+        verify(logger).info("Exception while updating audit :: Error ");
+    }
+
+    @Test
+    void testDoAudit_Success() {
+        // Given
+        Map<String, Object> auditMap = new HashMap<>();
+        auditMap.put("aPIReqRefNo", "req123");
+        auditMap.put("serviceID", "service1");
+        auditMap.put("endpointId", "endpoint1");
+        auditMap.put("serviceCategory", "category1");
+        auditMap.put("channelId", "channel1");
+        auditMap.put("userName", "user1");
+        auditMap.put("corpId", "corp1");
+        auditMap.put("aggregatorID", "agg1");
+        auditMap.put("userRole", "role1");
+        auditMap.put("smallFlag", "flag1");
+        auditMap.put("key", "key1");
+        auditMap.put("payloadInReq", "payload1");
+        auditMap.put("serviceResRefNo", "ref1");
+        auditMap.put("resKey", "resKey1");
+        auditMap.put("response", "response1");
+        auditMap.put("status", "status1");
+        auditMap.put("statusCode", "code1");
+        auditMap.put("traceId", "trace1");
+        auditMap.put("requestTime", LocalDateTime.now());
+        auditMap.put("ipaddress", "127.0.0.1");
+
+        // When
+        auditService.doAudit(auditMap);
+
+        // Then
+        verify(auditEventProducer).sendAudit(any(AuditEvent.class));
+    }
+
+    @Test
+    void testDoAudit_WithTimestamp() {
+        // Given
+        Map<String, Object> auditMap = new HashMap<>();
+        auditMap.put("aPIReqRefNo", "req123");
+        auditMap.put("requestTime", new Timestamp(System.currentTimeMillis()));
+        // Add other required fields
+        auditMap.put("serviceID", "service1");
+        auditMap.put("endpointId", "endpoint1");
+        // ... add all other required fields
+
+        // When
+        auditService.doAudit(auditMap);
+
+        // Then
+        verify(auditEventProducer).sendAudit(any(AuditEvent.class));
+    }
+
+    @Test
+    void testDoAudit_Exception() {
+        // Given
+        Map<String, Object> auditMap = new HashMap<>();
+        auditMap.put("aPIReqRefNo", "req123");
+        // Add other required fields
+        auditMap.put("serviceID", "service1");
+        // ... add all other required fields
+
+        doThrow(new RuntimeException("Audit Error")).when(auditEventProducer).sendAudit(any(AuditEvent.class));
+
+        // When
+        auditService.doAudit(auditMap);
+
+        // Then
+        verify(logger).info("Exception while saving audit :: Audit Error ");
+    }
+
+    @Test
+    void testExtractTimestamp_WithTimestamp() {
+        // Given
+        Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+
+        // When
+        Timestamp result = auditService.extractTimestamp(timestamp);
+
+        // Then
+        assertEquals(timestamp, result);
+    }
+
+    @Test
+    void testExtractTimestamp_WithLocalDateTime() {
+        // Given
+        LocalDateTime localDateTime = LocalDateTime.now();
+
+        // When
+        Timestamp result = auditService.extractTimestamp(localDateTime);
+
+        // Then
+        assertEquals(Timestamp.valueOf(localDateTime), result);
+    }
+
+    @Test
+    void testExtractTimestamp_WithOtherType() {
+        // Given
+        String notATimestamp = "not a timestamp";
+
+        // When
+        Timestamp result = auditService.extractTimestamp(notATimestamp);
+
+        // Then
+        assertNull(result);
+    }
+
+    @Test
+    void testExtractTimestamp_NullInput() {
+        // When
+        Timestamp result = auditService.extractTimestamp(null);
+
+        // Then
+        assertNull(result);
+    }
 }
