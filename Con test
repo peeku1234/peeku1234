@@ -1,279 +1,102 @@
 package com.sbi.microservice.framework.services;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import com.sbi.microservice.framework.cache.CacheManager;
 import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.AccessException;
-import com.sbi.microservice.framework.exception.ConfigurationException;
-import com.sbi.microservice.framework.model.*;
-import com.sbi.microservice.framework.repository.ServiceDAO;
-import com.sbi.microservice.framework.repository.UserDAO;
-import com.sbi.microservice.framework.services.access.AuthenticationProvider;
-import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import com.sbi.microservice.framework.event.AuditEvent;
+import com.sbi.microservices.framework.stream.AuditEventProducer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
 
-@ExtendWith(MockitoExtension.class)
-class AccessVerifierTest {
+import com.sbi.microservice.framework.repository.AuditDAO;
 
-    @Mock
-    private AuthenticationProviderFactory authenticationProviderFactory;
+import jakarta.servlet.http.HttpServletRequest;
 
-    @Mock
-    private ServiceDAO serviceDAO;
+@Service
+public class AuditService {
+	private final static Logger logger = LoggerFactory.getLogger(AuditService.class);
+	private final AuditDAO auditDAOImpl;
+	private final AuditEventProducer auditEventProducer;
 
-    @Mock
-    private CacheManager cacheManager;
+	public AuditService(AuditDAO auditDAOImpl, AuditEventProducer auditEventProducer) {
+		this.auditDAOImpl = auditDAOImpl;
+		this.auditEventProducer = auditEventProducer;
+	}
+//
+//	public AuditService(AuditDAO auditDAOImpl) {
+//		this.auditDAOImpl = auditDAOImpl;
+//	}
 
-    @Mock
-    private FrameworkUtils frameworkUtils;
 
-    @Mock
-    private UserDAO userDAO;
+	public void doAuditRequest(HttpServletRequest req, String serviceID, String channelID, String endPointName,
+														 String engineID, String ipAddress, String serviceCategory, Optional<String> cipherKey, String payloadInReqBody, String serviceResRefNo, String traceId) {
 
-    @Mock
-    private HttpServletRequest request;
+		String corporateType=FrameworkConstants.STRING_BLANK;
+		logger.info("doAuditRequest starts");
+		try {
+			AuditEvent auditEvent = new AuditEvent("to be updated",serviceID,endPointName,serviceCategory,channelID,null,null,null,null,corporateType,cipherKey.get(),payloadInReqBody,serviceResRefNo,null,null,null,null,"insert", traceId,null,"");
+			//auditDAOImpl.insertAuditData(auditEvent);
+			auditEventProducer.sendAudit(auditEvent);
+		} catch (DataAccessException e) {
+			logger.info("Exception while inserting audit :: {}",e.getMessage());
+		} catch (Exception e) {
+			logger.info("Exception while inserting audit : {}", e.getMessage());
+		}
+		logger.info("doAuditRequest ends");
+	}
 
-    @Mock
-    private HttpServletResponse response;
+	public void doAuditResponse(AuditEvent auditEvent) {
+		logger.info("doAuditResponse starts");
+		try {
+			//auditDAOImpl.insertAuditData(auditEvent);
+			auditEventProducer.sendAudit(auditEvent);
+		} catch (Exception exception) {
+			logger.info("Exception while updating audit :: {} ", exception.getMessage());
+		}
+		logger.info("doAuditResponse ends");
+	}
 
-    @Mock
-    private AuthenticationProvider authProvider;
+	@Async
+	public void doAudit(Map<String, Object> auditMap) {
+		logger.info("doAudit starts");
+		try {
+			/*
+			 * AuditEvent auditEvent = new AuditEvent(auditMap.get("aPIReqRefNo"),
+			 * auditMap.get("serviceID"), auditMap.get("endpointId"),
+			 * auditMap.get("serviceCategory")
+			 * ,auditMap.get("channelId"),auditMap.get("userName"),auditMap.get("corpId"),
+			 * auditMap.get("aggregatorID"),auditMap.get("userRole")
+			 * ,auditMap.get("smallFlag"),auditMap.get("key"),auditMap.get("payloadInReq"),
+			 * auditMap.get("serviceResRefNo"),auditMap.get("resKey"),auditMap.get(
+			 * "response") ,auditMap.get("status"),auditMap.get("statusCode"),
+			 * "insert",auditMap.get("traceId"));
+			 */
+			AuditEvent auditEvent = new AuditEvent(String.valueOf(auditMap.get("aPIReqRefNo")), String.valueOf(auditMap.get("serviceID")), String.valueOf(auditMap.get("endpointId")), String.valueOf(auditMap.get("serviceCategory"))
+					,String.valueOf(auditMap.get("channelId")),String.valueOf(auditMap.get("userName")),String.valueOf(auditMap.get("corpId")),String.valueOf(auditMap.get("aggregatorID")),String.valueOf(auditMap.get("userRole"))
+					,String.valueOf(auditMap.get("smallFlag")),String.valueOf(auditMap.get("key")),String.valueOf(auditMap.get("payloadInReq")),String.valueOf(auditMap.get("serviceResRefNo")),String.valueOf(auditMap.get("resKey")),String.valueOf(auditMap.get("response"))
+					,String.valueOf(auditMap.get("status")),String.valueOf(auditMap.get("statusCode")), "insert",String.valueOf(auditMap.get("traceId")), extractTimestamp(auditMap.get("requestTime")),String.valueOf(auditMap.get("ipaddress")));
+			//auditDAOImpl.insertAuditData(auditEvent);
+			auditEventProducer.sendAudit(auditEvent);
+		} catch (Exception exception) {
+			logger.info("Exception while saving audit :: {} ", exception.getMessage());
+		}
+		logger.info("doAudit ends");
+	}
 
-    @Mock
-    private Authentication authentication;
-
-    @InjectMocks
-    private AccessVerifier accessVerifier;
-
-    private static final String TEST_SERVICE_NAME = "testService";
-    private static final String TEST_CHANNEL_ID = "testChannel";
-    private static final String TEST_TOKEN = "testToken";
-    private static final String TEST_REQUEST_URI = "/api/" + TEST_SERVICE_NAME + "/endpoint";
-    private static final String TEST_USERNAME = "testUser";
-
-    @BeforeEach
-    void setUp() {
-        when(request.getRequestURI()).thenReturn(TEST_REQUEST_URI);
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(TEST_CHANNEL_ID);
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn(TEST_TOKEN);
-        when(request.getMethod()).thenReturn("GET");
-    }
-
-    @Test
-    void testCheckServiceAccess_OpenService() throws AccessException {
-        // Mock service as open
-        Service openService = new Service(TEST_SERVICE_NAME, "OPEN", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(openService);
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.SERVICE_TYPE_OPEN, result.get().serviceType());
-    }
-
-    @Test
-    void testCheckServiceAccess_SecuredService_ChannelAuthorized_UserAuthenticated() throws AccessException {
-        // Mock service as secured
-        Service securedService = new Service(TEST_SERVICE_NAME, "SECURED", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-
-        // Mock channel authorization
-        List<Channel> channels = Collections.singletonList(new Channel(TEST_CHANNEL_ID, "Test Channel"));
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        // Mock authentication
-        when(authenticationProviderFactory.getProvider(TEST_CHANNEL_ID)).thenReturn(authProvider);
-        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(TEST_USERNAME));
-        when(authProvider.authenticate(request)).thenReturn(authentication);
-        when(authentication.authenticated()).thenReturn(true);
-
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.SERVICE_TYPE_SECURED, result.get().serviceType());
-    }
-
-    @Test
-    void testCheckServiceAccess_SecuredService_ChannelNotAuthorized() throws AccessException {
-        // Mock service as secured
-        Service securedService = new Service(TEST_SERVICE_NAME, "SECURED", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-
-        // Mock channel not authorized
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Collections.emptyList());
-
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED, result.get().accessDescription());
-    }
-
-    @Test
-    void testCheckServiceAccess_SecuredService_UnrecognizedChannel() throws AccessException {
-        // Mock service as secured
-        Service securedService = new Service(TEST_SERVICE_NAME, "SECURED", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-
-        // Mock channel authorization
-        List<Channel> channels = Collections.singletonList(new Channel(TEST_CHANNEL_ID, "Test Channel"));
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        // Mock authentication with unrecognized channel
-        when(authenticationProviderFactory.getProvider(TEST_CHANNEL_ID)).thenThrow(new IllegalArgumentException());
-        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(TEST_USERNAME));
-
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL, result.get().accessDescription());
-    }
-
-    @Test
-    void testCheckServiceAccess_SecuredService_UserNotAuthenticated() throws AccessException {
-        // Mock service as secured
-        Service securedService = new Service(TEST_SERVICE_NAME, "SECURED", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-
-        // Mock channel authorization
-        List<Channel> channels = Collections.singletonList(new Channel(TEST_CHANNEL_ID, "Test Channel"));
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        // Mock authentication failed
-        when(authenticationProviderFactory.getProvider(TEST_CHANNEL_ID)).thenReturn(authProvider);
-        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(TEST_USERNAME));
-        when(authProvider.authenticate(request)).thenReturn(authentication);
-        when(authentication.authenticated()).thenReturn(false);
-
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED, result.get().accessDescription());
-    }
-
-    @Test
-    void testCheckServiceAccess_UnsupportedHttpMethod() throws AccessException {
-        when(request.getMethod()).thenReturn("DELETE");
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn(TEST_SERVICE_NAME);
-
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED, result.get().accessDescription());
-    }
-
-    @Test
-    void testCheckServiceAccess_ServiceNotAvailable() {
-        when(frameworkUtils.extractServiceName(TEST_REQUEST_URI)).thenReturn("nonExistingService");
-        when(cacheManager.getService("nonExistingService")).thenReturn(null);
-
-        assertThrows(ConfigurationException.class, () -> {
-            accessVerifier.checkServiceAccess(request, response);
-        });
-    }
-
-    @Test
-    void testIsSecuredService_OpenService() {
-        Service openService = new Service(TEST_SERVICE_NAME, "OPEN", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(openService);
-
-        assertFalse(accessVerifier.isSecuredService(TEST_SERVICE_NAME));
-    }
-
-    @Test
-    void testIsSecuredService_SecuredService() {
-        Service securedService = new Service(TEST_SERVICE_NAME, "SECURED", "desc", 1, "v1");
-        when(cacheManager.getService(TEST_SERVICE_NAME)).thenReturn(securedService);
-
-        assertTrue(accessVerifier.isSecuredService(TEST_SERVICE_NAME));
-    }
-
-    @Test
-    void testIsSecuredService_ServiceNotExist() {
-        when(cacheManager.getService("nonExistingService")).thenReturn(null);
-
-        assertFalse(accessVerifier.isSecuredService("nonExistingService"));
-    }
-
-    @Test
-    void testIsChannelAuthorized_ChannelHasAccess() {
-        List<Channel> channels = Arrays.asList(
-            new Channel("channel1", "Channel 1"),
-            new Channel(TEST_CHANNEL_ID, "Test Channel"),
-            new Channel("channel2", "Channel 2")
-        );
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        assertTrue(accessVerifier.isChannelAuthorized(TEST_SERVICE_NAME, TEST_CHANNEL_ID));
-    }
-
-    @Test
-    void testIsChannelAuthorized_ChannelNoAccess() {
-        List<Channel> channels = Arrays.asList(
-            new Channel("channel1", "Channel 1"),
-            new Channel("channel2", "Channel 2")
-        );
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(channels);
-
-        assertFalse(accessVerifier.isChannelAuthorized(TEST_SERVICE_NAME, TEST_CHANNEL_ID));
-    }
-
-    @Test
-    void testIsChannelAuthorized_NoChannelsConfigured() {
-        when(cacheManager.getServiceChannelList(TEST_SERVICE_NAME)).thenReturn(Collections.emptyList());
-
-        assertFalse(accessVerifier.isChannelAuthorized(TEST_SERVICE_NAME, TEST_CHANNEL_ID));
-    }
-
-    @Test
-    void testIsUserAuthorized() {
-        // Currently always returns true as per implementation
-        assertTrue(accessVerifier.isUserAuthorized(1));
-        assertTrue(accessVerifier.isUserAuthorized(2));
-        assertTrue(accessVerifier.isUserAuthorized(3));
-    }
-
-    @Test
-    void testVerifyRBA() {
-        Optional<String> username = Optional.of(TEST_USERNAME);
-        int corpType = 1;
-        int userRole = 2;
-        Service service = new Service(TEST_SERVICE_NAME, "SECURED", "desc", 1, "v1");
-        Endpoint endpoint = new Endpoint(1, "/endpoint", "GET", "desc");
-
-        when(serviceDAO.getRBACCount(username, corpType, userRole, service.serviceId(), endpoint.endpointId()))
-            .thenReturn(1);
-
-        assertTrue(accessVerifier.verifyRBA(username, corpType, userRole, service, endpoint));
-
-        when(serviceDAO.getRBACCount(username, corpType, userRole, service.serviceId(), endpoint.endpointId()))
-            .thenReturn(0);
-
-        assertFalse(accessVerifier.verifyRBA(username, corpType, userRole, service, endpoint));
-    }
+	private Timestamp extractTimestamp(Object obj) {
+		if(obj instanceof Timestamp) {
+			logger.info("instanceof Timestamp:{}",(Timestamp) obj);
+			return (Timestamp) obj;
+		}else if(obj instanceof LocalDateTime) {
+			logger.info("instanceof LocalDateTime:{}",Timestamp.valueOf((LocalDateTime) obj));
+			return Timestamp.valueOf((LocalDateTime) obj);
+		}
+		return null;
+	}
 }
