@@ -1,147 +1,47 @@
-package com.sbi.microservice.framework.services;
+public Map<String, String> getCorpDetails(String corpAlias) {
+		logger.info("[APIBankingDAOImpl][validateCorpAlias()][Start]");
+		String corpId = null;
+		String isSaral = null;
+		String active = null;
+		Map<String, String> corpDetails = null;
+		List<APIBankingEntity> aggCorpDetails = null;
+		String fetchTranctionQuery = "select * from SBI_YB_APIBNKNG_CORP_MASTER where CORPORATE_ALIAS=:corporateAlias";
+		try {
+			MapSqlParameterSource params = new MapSqlParameterSource();
+			params.addValue("corporateAlias", corpAlias);
+			aggCorpDetails = namedParameterJdbcTemplate.query(fetchTranctionQuery, params,
+                    new RowMapper<>() {
+                      public APIBankingEntity mapRow(ResultSet rs, int rowNum) throws SQLException {
+                        APIBankingEntity aggCorpData = new APIBankingEntity(rs.getString("CORPORATE_ID"),
+                                FrameworkConstants.STRING_BLANK, rs.getString("CORPORATE_ALIAS"),
+                                FrameworkConstants.STRING_BLANK, FrameworkConstants.STRING_BLANK, null,
+                                FrameworkConstants.STRING_BLANK, rs.getString("ACTIVE"), rs.getString("IS_SARAL"));
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.AccessException;
-import com.sbi.microservice.framework.exception.ConfigurationException;
-import com.sbi.microservice.framework.model.*;
-import com.sbi.microservice.framework.repository.ServiceDAO;
-import com.sbi.microservice.framework.repository.UserDAO;
-import com.sbi.microservice.framework.services.access.AuthenticationProvider;
-import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+                        return aggCorpData;
+                      }
+                    });
+			if (aggCorpDetails.size() == 0) {
+				logger.info("no record found for corpateId : {}", corpAlias);
 
-@org.springframework.stereotype.Service
-public class AccessVerifier {
-
-	private final static Logger logger = LoggerFactory.getLogger(AccessVerifier.class);
-
-	private final AuthenticationProviderFactory authenticationProviderFactory;
-	private final ServiceDAO serviceDAO;
-	private final CacheManager cacheManager;
-	private final FrameworkUtils frameworkUtils;
-	private final UserDAO userDAO;
-	
-	public AccessVerifier(AuthenticationProviderFactory authenticationProviderFactory,ServiceDAO serviceDAO,CacheManager cacheManager,FrameworkUtils frameworkUtils, UserDAO userDAO) {
-		this.authenticationProviderFactory=authenticationProviderFactory;
-		this.serviceDAO=serviceDAO;
-		this.cacheManager=cacheManager;
-		this.frameworkUtils=frameworkUtils;
-		this.userDAO = userDAO;
-	}
-
-	public Optional<Access> checkServiceAccess(HttpServletRequest request,HttpServletResponse response) throws AccessException{
-
-		String channelId = request.getHeader(FrameworkConstants.CHANNELID);
-		String token = request.getHeader(FrameworkConstants.USER_TOKEN);// user token
-		String requestURI = request.getRequestURI();
-		Optional<String> optionalServiceName = Optional.of(frameworkUtils.extractServiceName(requestURI));
-
-		String accessStatus = FrameworkConstants.ACCESS_DENIED;
-		String accessDescription = FrameworkConstants.STRING_BLANK;
-		String entityType = channelId;
-		String entityValue = frameworkUtils.getEntityValue(entityType);
-		Optional<String> userName = frameworkUtils.getAttribute(request,"userNameFromFilter");
-		String method = request.getMethod().toUpperCase();
-		logger.error("Requested method type:{}",method);
-		if (optionalServiceName.isPresent()) {
-			String serviceName=optionalServiceName.orElse("");
-			boolean isSecuredService=isSecuredService(serviceName);
-			String serviceType = (isSecuredService ? FrameworkConstants.SERVICE_TYPE_SECURED : FrameworkConstants.SERVICE_TYPE_OPEN);
-			
-			if (!FrameworkConstants.ACCESS_METHOD_POST.equalsIgnoreCase(method) && !FrameworkConstants.ACCESS_METHOD_GET.equalsIgnoreCase(method)) {
-				logger.error("Unsupported method type:{}",method);
-				accessDescription = FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED;
-	            return Optional.of(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
-	        }
-			/**
-			 * Check if access to the requested service requires verification
-			 */
-			if (isSecuredService) {
-				/**
-				 * Check if the channel has access to the requested service
-				 */
-				logger.info("Access to the requested service requires verification");
-				if (isChannelAuthorized(serviceName, channelId)) {
-					logger.info("Channel is authorized");
-					try {
-
-						//Auth token validation
-						AuthenticationProvider authProvider = authenticationProviderFactory.getProvider(channelId);
-						if (userName.isPresent()) {
-							Authentication authentication = authProvider.authenticate(request);
-
-							if (Objects.nonNull(authentication) && authentication.authenticated()) {
-								logger.info("User is authenticated");
-								accessStatus = FrameworkConstants.ACCESS_GRANTED;
-							} else {
-								logger.info("User authentication failed");
-								accessDescription = FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED;
-							}
-						}
-
-					} catch (IllegalArgumentException e) {
-						accessDescription = FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL;
-						logger.info("Unrecognized channel : {}",channelId);
-					}
-				} else {
-					/**
-					 * Access to the requested service is denied to the channel
-					 */
-					logger.info("Access to requested resource is denied for channel : {}",channelId);
-					accessDescription = FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED;
-				}
 			} else {
-				/**
-				 * Requested service does not require any verification, access to be allowed
-				 */
-				logger.info("Access to the requested resource doesn't require verification");
-				accessStatus = FrameworkConstants.ACCESS_GRANTED;
+				corpId =  aggCorpDetails.get(0).corpId();
+				isSaral = aggCorpDetails.get(0).isSaral();
+				active = aggCorpDetails.get(0).active();
+				corpDetails = new HashMap<>();
+				corpDetails.put("corpId", corpId);
+				corpDetails.put("isSaral", isSaral);
+				corpDetails.put("active", active);
+				logger.info("corpDetails--> : {}", corpDetails);
 			}
-			return Optional.ofNullable(new Access(serviceName, serviceType, accessStatus, accessDescription, entityType, entityValue));
-		}else {
-			throw new ConfigurationException("API000045", "Service details not available");
+
+		} catch (DataAccessException e) {
+			logger.info("Exception while validateCorpAlias ::  " + corpAlias + "  " + e);
+
+		} catch (Exception e) {
+			logger.info("Exception while validateCorpAlias :: " + corpAlias + "  " + e);
+
 		}
-	}
+		logger.info("[APIBankingDAOImpl][validateCorpAlias()][ends]");
+		return corpDetails;
 
-	private boolean isUserAuthorized(int userRole) {
-		// TODO - User Rationalization to be enabled
-		return true;
 	}
-
-	private boolean isSecuredService(String serviceName) {
-		Optional<Service> optionalService=Optional.ofNullable(cacheManager.getService(serviceName));
-		if(optionalService.isPresent()) {
-			return (optionalService.get().serviceType().equalsIgnoreCase(FrameworkConstants.SERVICE_TYPE_OPEN))?false:true;
-		}
-		return false;
-	}
-
-	private boolean isChannelAuthorized(String serviceName, String channelId) {
-		
-		AtomicBoolean hasAccess=new AtomicBoolean(false);
-		Optional<List<Channel>> serviceChannelList=Optional.ofNullable(cacheManager.getServiceChannelList(serviceName));
-		
-		if(serviceChannelList.isPresent()) {
-			serviceChannelList.get().forEach(channel->{
-				if(channel.channelId().equalsIgnoreCase(channelId)) {
-					hasAccess.set(true); 
-					}
-			});
-				
-		}
-		return hasAccess.get();
-	}
-	public boolean verifyRBA(Optional<String> userName, int corpType, int userRole, Service service, Endpoint endpoint) {
-		int mappingCount=serviceDAO.getRBACCount(userName,corpType,userRole, service.serviceId(), endpoint.endpointId());
-		return mappingCount > 0;
-	}
-
-}
-
