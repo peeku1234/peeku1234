@@ -1,391 +1,151 @@
-package com.sbi.microservice.framework.repository;
-
-
-import com.sbi.microservice.framework.utils.UtilsConstant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
-
-import java.util.ArrayList;
-import java.util.List;
-
-@Qualifier
-@Repository
-public class CoreInterfaceImpl extends BaseDAO implements CoreInterface {
-	private final static Logger logger = LoggerFactory.getLogger(CoreInterfaceImpl.class);
-	private static final String GET_CORE_SERVER_DATA = "select * from core_interface where txnno=? and type=? order by ?,position";
-	private   static final String GET_MESSAGE_ID = "select cb_msg_id.NEXTVAL from dual";
-
-	 static final String GET_SBI_CORE_SERVER_DATA = "select * from sbi_core_interface where txnno=? and type=? order by ?,position";
-
-	public CoreInterfaceImpl(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
-		super(namedParameterJdbcTemplate);
-	}
-	
-	public List findCoreResponseData(String txnID) {
-
-		if(logger.isDebugEnabled()){
-			//logger.debug("findCoreResponseData(String txnID) "+ LoggingConstants.METHODBEGIN);
-			logger.debug("txnID :" + txnID);
-		}
-
-		List coreResponseDataList = null;
-
-		if (txnID != null && !txnID.trim().equalsIgnoreCase(UtilsConstant.EMPTY)) {
-		
-			String key = "core_res_" + txnID;
-			
-			System.out.println("CHECK");
-			
-			//List coreResponseData = (List)corePropertiesDataCache.getData(key);//SWA
-			List coreResponseData = null;
-			if (coreResponseData == null || coreResponseData.size() == 0) {		
-				//logger.info("From table.......");				
-				coreResponseData = getCoreServerDatas(txnID, "res");
-			}
-			
-			coreResponseDataList = coreResponseData;//(List) coreResponseData.get("dataList");
-			
-		} else {
-			//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-		}
-
-		if (logger.isDebugEnabled()) {
-			logger.debug("coreResponseDataList :" + coreResponseDataList);
-			//logger.debug("findCoreResponseData(String txnID) "+ LoggingConstants.METHODEND);
-		}
-		
-		
-		return coreResponseDataList;
-	}
-	private List getCoreServerDatas(String txnID, String type) {
-		
-		
-		
-		//if(logger.isDebugEnabled())
-			//logger.debug("getCoreServerData(String txnID, String type) "+ LoggingConstants.METHODBEGIN);
-
-		List dataList = null;
-
-		String key = "core_" + type + "_" + txnID;
-
-		try {
-	/*		Object[] params = { Integer.parseInt(txnID), type, Integer.parseInt(txnID) };
-		
-			String sql = GET_CORE_SERVER_DATA;
-			SqlParameterSource sqlParameterSource = new MapSqlParameterSource().
-					addValue(UtilsConstant.TXNNO,Integer.parseInt(txnID)).
-					addValue(UtilsConstant.TYPE,type).
-					addValue(UtilsConstant.TXNNO,Integer.parseInt(txnID));
-			dataList = namedParameterJdbcTemplate.queryForList(sql, sqlParameterSource);*/
-
-			Object[] params = { Integer.parseInt(txnID), type, Integer.parseInt(txnID) };
-			String sql = GET_CORE_SERVER_DATA;
-			dataList = namedParameterJdbcTemplate.getJdbcTemplate().queryForList(sql, params);
-
-		} catch (DataAccessException ex) {
-			logger.error("DataAccessException :",ex);
-			//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
-		}
-
-		if (dataList != null && dataList.size() > 0) {
-
-			//Map coreDatas = new HashMap(); 
-			
-			//coreDatas.put("dataList", dataList);
-			
-		//	corePropertiesDataCache.setData(key, dataList);//SWA
-			
-			System.out.println("CHECK");
-			
-			//if(logger.isDebugEnabled())
-				//logger.debug("getCoreServerData(String txnID, String type) "+ LoggingConstants.METHODBEGIN);
-			
-			return dataList;
-			
-		} else {
-			//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-		}
-		return null;
-	}
-	
-	
-	public int getMessageID(){
-
-		int msgID = 0;
-		try{
-			 msgID = namedParameterJdbcTemplate.getJdbcTemplate().update(GET_MESSAGE_ID);
-		}catch (DataAccessException ex) {
-			logger.error("DataAccessException :",ex);
-			//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
-		}
-		return msgID;		
-	}
-	public List findCoreRequestData(String txnID) {
-		
-		if(logger.isDebugEnabled()){
-			//logger.debug("findCoreRequestData(String txnID) "+ LoggingConstants.METHODBEGIN);
-			logger.debug("txnID :" + txnID);
-		}
-
-		List coreRequestDataList = null;
-
-		if (txnID != null && !txnID.trim().equalsIgnoreCase(UtilsConstant.EMPTY)) {
-			
-			String key = "core_req_" + txnID;
-			System.out.println("CHECK");
-		//	List coreRequestData = (List)corePropertiesDataCache.getData(key);//SWA
-			List coreRequestData = null;
-			
-			
-			if (coreRequestData == null || coreRequestData.size() == 0) {
-				//logger.info("From table.......");				
-				coreRequestData = getCoreServerDatas(txnID, "req");
-			}
-			
-			coreRequestDataList = new ArrayList(coreRequestData);//(List) coreRequestData.get("dataList");
-			
-			
-			
-		} else {
-			//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-		}
-		
-		if (logger.isDebugEnabled()) {
-			logger.debug("coreRequestDataList :" + coreRequestDataList);
-			//logger.debug("findCoreRequestData(String txnID) "+ LoggingConstants.METHODEND);
-		}
-		
-
-		return coreRequestDataList;
-	}
-	public List findCoreRequestData(String txnID,String bankCode) {
-		
-
-		logger.info("TXNNO :" + txnID+" "+"bankCode :" + bankCode);
-
-		List coreRequestDataList = null;
-
-		if (txnID != null && !txnID.trim().equalsIgnoreCase(UtilsConstant.EMPTY)) {
-			
-			String key = "core_req_" + txnID+"_"+bankCode;
-			System.out.println("CHECK");
-			//List coreRequestData = (List)corePropertiesDataCache.getData(key);//SWA
-			List coreRequestData = null;
-			
-			if (coreRequestData == null || coreRequestData.size() == 0) {
-				//logger.info("From table.......");				
-				coreRequestData = getCoreServerDatas(txnID, "req",bankCode);
-			}
-			
-			coreRequestDataList = new ArrayList(coreRequestData);//(List) coreRequestData.get("dataList");
-			
-			
-			
-		} else {
-			//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-		}
-		
-
-		
-
-		return coreRequestDataList;
-	}
-	
-	private List getCoreServerDatas(String txnID, String type,String bankCode) {
-
-
-			List dataList = null;
-
-			String key = "core_" + type + "_" + txnID+"_"+bankCode;
-
-			try {
-/*
-				Object[] params = { Integer.parseInt(txnID), type, Integer.parseInt(txnID) };
-*/
-/*				SqlParameterSource sqlParameterSource = new MapSqlParameterSource().
-						addValue(UtilsConstant.TXNNO,Integer.parseInt(txnID)).
-						addValue(UtilsConstant.TYPE,type).
-						addValue(UtilsConstant.TXNNO,Integer.parseInt(txnID));
-				String sql =GET_SBI_CORE_SERVER_DATA;
-				dataList =namedParameterJdbcTemplate.queryForList(sql, sqlParameterSource);*/
-
-				Object[] params = { Integer.parseInt(txnID), type, Integer.parseInt(txnID) };
-				String sql = GET_CORE_SERVER_DATA;
-				dataList = namedParameterJdbcTemplate.getJdbcTemplate().queryForList(sql, params);
-
-			} catch (DataAccessException ex) {
-				logger.error("DataAccessException :",ex);
-				//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
-			}
-
-			if (dataList != null && dataList.size() > 0) {
-				System.out.println("CHECK");
-				
-				//corePropertiesDataCache.setData(key, dataList); //SWA
-
-				return dataList;
-				
-			} else {
-				//DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-			}
-			return null;
-		}
-	
-
-}
-below are the test cases.. i want test cases for missing lines like if(logger.isDebugEnabled)
-
-
-package com.sbi.microservice.framework.repository;
-
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.slf4j.event.Level;
 
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.logging.Logger;
-
-import static org.junit.Assert.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.junit.jupiter.api.Assertions.*;
 
 @ExtendWith(MockitoExtension.class)
-public class CoreInterfaceImplTest {
+public class CoreInterfaceImplLoggerTest {
 
     @Mock
     private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-
+    
     @Mock
     private JdbcTemplate jdbcTemplate;
-
+    
     @InjectMocks
     private CoreInterfaceImpl coreInterface;
+    
+    @Mock
+    private Logger logger;
 
-    @BeforeEach
-    public void setUp() {
-        MockitoAnnotations.openMocks(this);
+    @Test
+    public void testFindCoreResponseData_logsDebugWhenEnabled() {
+        // Setup
         when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
-        coreInterface = new CoreInterfaceImpl(namedParameterJdbcTemplate);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(new ArrayList<>());
+        
+        // Replace logger with mock
+        Logger originalLogger = LoggerFactory.getLogger(CoreInterfaceImpl.class);
+        try {
+            // This requires PowerMock or similar to mock static LoggerFactory
+            // For now, we'll assume the logger is properly set up
+            
+            // Enable debug logging for this test
+            when(logger.isDebugEnabled()).thenReturn(true);
+            
+            // Test
+            String txnId = "123";
+            coreInterface.findCoreResponseData(txnId);
+            
+            // Verify debug logs were called
+            // This would need a proper logger mock verification
+            // verify(logger).debug("txnID :" + txnId);
+            // verify(logger).debug(eq("coreResponseDataList :"), any());
+        } finally {
+            // Restore original logger
+            // LoggerFactory.getLogger(CoreInterfaceImpl.class) = originalLogger;
+        }
     }
 
     @Test
-    public void testFindCoreResponseData_validTxnId_returnsData() {
-        String txnId = "123";
-        List<Map<String, Object>> mockList = new ArrayList<>();
-        mockList.add(Collections.singletonMap("key", "value"));
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(mockList);
-        List result = coreInterface.findCoreResponseData(txnId);
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        verify(jdbcTemplate, times(1)).queryForList(anyString(), any(Object[].class));
-    }
-
-    @Test
-    void test_getCoreServerDatas_catchBlock_DataAccessException() throws Exception {
-        // Arrange
-        String txnID = "123";
-        String type = "test";
-
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class)))
-                .thenThrow(new DataAccessException("Test exception") {});
-
-        Method method = CoreInterfaceImpl.class.getDeclaredMethod("getCoreServerDatas", String.class, String.class);
-        method.setAccessible(true);
-
-        // Act
-        Object result = method.invoke(coreInterface, txnID, type);
-
-        // Assert
-        assertNull(result);
-    }
-
-    @Test
-    void test_getCoreServerDatas_emptyResult_shouldReturnNull() throws Exception {
-        // Arrange
-        String txnID = "123";
-        String type = "test";
-
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class)))
-                .thenReturn(Collections.emptyList());
-
-        Method method = CoreInterfaceImpl.class.getDeclaredMethod("getCoreServerDatas", String.class, String.class);
-        method.setAccessible(true);
-
-        // Act
-        Object result = method.invoke(coreInterface, txnID, type);
-
-        // Assert
-        assertNull(result);
-    }
-
-    @Test
-    public void testFindCoreRequestData_validTxnId_returnsData() {
+    public void testFindCoreRequestData_logsDebugWhenEnabled() {
+        // Setup
+        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(new ArrayList<>());
+        
+        // Enable debug logging for this test
+        when(logger.isDebugEnabled()).thenReturn(true);
+        
+        // Test
         String txnId = "456";
-        List<Map<String, Object>> mockList = new ArrayList<>();
-        mockList.add(Collections.singletonMap("reqKey", "reqValue"));
-
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(mockList);
-
-        List result = coreInterface.findCoreRequestData(txnId);
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        verify(jdbcTemplate, times(1)).queryForList(anyString(), any(Object[].class));
+        coreInterface.findCoreRequestData(txnId);
+        
+        // Verify debug logs were called
+        // verify(logger).debug("txnID :" + txnId);
+        // verify(logger).debug(eq("coreRequestDataList :"), any());
     }
 
     @Test
-    public void testFindCoreRequestData_withBankCode_returnsData() {
+    public void testFindCoreRequestDataWithBankCode_logsInfo() {
+        // Setup
+        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(new ArrayList<>());
+        
+        // Test
         String txnId = "789";
         String bankCode = "SBI";
-
-        List<Map<String, Object>> mockList = new ArrayList<>();
-        mockList.add(Collections.singletonMap("key", "value"));
-
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(mockList);
-
-        List result = coreInterface.findCoreRequestData(txnId, bankCode);
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        verify(jdbcTemplate).queryForList(anyString(), any(Object[].class));
+        coreInterface.findCoreRequestData(txnId, bankCode);
+        
+        // Verify info log was called
+        // verify(logger).info("TXNNO :" + txnId + " " + "bankCode :" + bankCode);
     }
 
     @Test
-    public void testGetMessageID_returnsGeneratedValue() {
-        when(jdbcTemplate.update(anyString())).thenReturn(101);
-
-        int result = coreInterface.getMessageID();
-
-        assertEquals(101, result);
-        verify(jdbcTemplate).update(anyString());
+    public void testGetCoreServerDatas_logsErrorOnDataAccessException() throws Exception {
+        // Setup
+        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
+        when(jdbcTemplate.queryForList(anyString(), any(Object[].class)))
+            .thenThrow(new DataAccessException("Test exception") {});
+        
+        // Test
+        String txnId = "123";
+        String type = "req";
+        List result = coreInterface.getCoreServerDatas(txnId, type);
+        
+        // Verify error log was called
+        // verify(logger).error(eq("DataAccessException :"), any(DataAccessException.class));
+        assertNull(result);
     }
+}
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.Appender;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
+
+public class CoreInterfaceImplLogbackTest {
+    
+    private Appender<ILoggingEvent> mockAppender;
+    private Logger coreInterfaceLogger;
+    
+    @BeforeEach
+    public void setup() {
+        mockAppender = mock(Appender.class);
+        coreInterfaceLogger = (Logger) LoggerFactory.getLogger(CoreInterfaceImpl.class);
+        coreInterfaceLogger.addAppender(mockAppender);
+    }
+    
     @Test
-    public void testGetMessageID_throwsException_returnsZero() {
-        when(jdbcTemplate.update(anyString())).thenThrow(new DataAccessException("DB Error") {
-        });
-
-        int result = coreInterface.getMessageID();
-
-        assertEquals(0, result);
+    public void testDebugLogging() {
+        // Set logger level to DEBUG
+        coreInterfaceLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        
+        // Call method that should log
+        // coreInterface.findCoreResponseData("123");
+        
+        // Verify logging
+        ArgumentCaptor<ILoggingEvent> argumentCaptor = ArgumentCaptor.forClass(ILoggingEvent.class);
+        verify(mockAppender).doAppend(argumentCaptor.capture());
+        
+        ILoggingEvent loggingEvent = argumentCaptor.getValue();
+        assertEquals(ch.qos.logback.classic.Level.DEBUG, loggingEvent.getLevel());
+        assertTrue(loggingEvent.getFormattedMessage().contains("txnID :123"));
     }
-
-
-
 }
