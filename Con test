@@ -1,57 +1,199 @@
 package com.sbi.microservice.framework.repository;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 
 import com.sbi.microservice.framework.model.IntegrationApiRequest;
-import org.springframework.beans.factory.annotation.Qualifier;
+import com.sbi.microservice.framework.model.IntegrationMockResponse;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
 
-import com.sbi.microservice.framework.model.IntegrationConfig;
-import com.sbi.microservice.framework.model.IntegrationMockResponse;
-@Repository
-public class IntegrationDAOImpl extends BaseDAO implements IntegrationDAO{
-	public IntegrationDAOImpl(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
-		super(namedParameterJdbcTemplate);
-	}
+@ExtendWith(MockitoExtension.class)
+class IntegrationDAOImplTest {
 
-	public Optional<IntegrationConfig> getIntegrationDetails(String integrationName) {
-		// TODO Auto-generated method stub
-		return null;
-	}
+    @Mock
+    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
-	public List<Optional<IntegrationConfig>> getAllIntegrationDetails() {
-		// TODO Auto-generated method stub
-		return null;
-	}
+    @InjectMocks
+    private IntegrationDAOImpl integrationDAO;
 
-	public List<IntegrationApiRequest> getAPIIntegrationDetail(String serviceName) {
-		List<IntegrationApiRequest> integrationApiRequest = new ArrayList<>();
-		String sql = "select mas.entity_id, mas.protocol,mas.url,mas.host,mas.port,insreq.attribute_name,insreq.attribute_type,insreq.attribute_data_type,insreq.attribute_length,insreq.is_mandatory_attribute," +
-				"insreq.validate_data,insreq.regex_pattern,insreq.min_value,insreq.max_value,insreq.is_attribute_branch_code from sbi_entity_integration_master mas, " +
-				"sbi_entity_integration_api_req insreq where mas.entity_id=insreq.entity_id and mas.entity_id=:serviceName";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-		params.addValue("serviceName", serviceName.toUpperCase());
-		//integrationApiRequest=namedParameterJdbcTemplate.query(sql, params, new IntegrationApiRowMapper());
-		return namedParameterJdbcTemplate.query(sql, params, (rs, rowNum) -> new IntegrationApiRequest(
-				rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getInt(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getInt(9), rs.getString(10), rs.getString(11), rs.getString(12), rs.getInt(13),rs.getInt(14),rs.getString(15)
-		));
-		//return integrationApiRequest;
-	}
+    @Test
+    void getIntegrationDetails_ShouldReturnEmptyOptional() {
+        Optional<IntegrationConfig> result = integrationDAO.getIntegrationDetails("test");
+        assertFalse(result.isPresent());
+    }
 
-	@Override
-	public List<IntegrationMockResponse> getEntityMockResponse(String httpEntity, String responseType) {
-		List<IntegrationMockResponse> integrationMockResponseList = new ArrayList<>();
-		String sql = "select MOCK_REPONSE,RESPONSE_TYPE FROM SBI_ENTITY_INTEGRATION_MOCK_RESPONSE FROM entity_id=:serviceName and RESPONSE_TYPE=:responseType and status=1";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-		params.addValue("serviceName", httpEntity.toUpperCase());
-		params.addValue("responseType", responseType.toUpperCase());
-		return namedParameterJdbcTemplate.query(sql, params, (rs, rowNum) -> new IntegrationMockResponse(rs.getString(1), rs.getString(2)));
-	}
+    @Test
+    void getAllIntegrationDetails_ShouldReturnEmptyList() {
+        List<Optional<IntegrationConfig>> result = integrationDAO.getAllIntegrationDetails();
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void getAPIIntegrationDetail_ShouldReturnListOfIntegrationApiRequest() {
+        // Mock the jdbcTemplate behavior
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+            .thenReturn(Collections.singletonList(
+                new IntegrationApiRequest(
+                    "ENTITY1", "HTTP", "http://test.com", "localhost", 8080,
+                    "attr1", "header", "string", 10, "Y", "Y", "regex", 1, 100, "N"
+                )
+            ));
+
+        List<IntegrationApiRequest> result = integrationDAO.getAPIIntegrationDetail("testService");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        IntegrationApiRequest request = result.get(0);
+        assertEquals("ENTITY1", request.getEntityId());
+        assertEquals("HTTP", request.getProtocol());
+        assertEquals("http://test.com", request.getUrl());
+        assertEquals("localhost", request.getHost());
+        assertEquals(8080, request.getPort());
+        assertEquals("attr1", request.getAttributeName());
+        assertEquals("header", request.getAttributeType());
+        assertEquals("string", request.getAttributeDataType());
+        assertEquals(10, request.getAttributeLength());
+        assertEquals("Y", request.getIsMandatoryAttribute());
+        assertEquals("Y", request.getValidateData());
+        assertEquals("regex", request.getRegexPattern());
+        assertEquals(1, request.getMinValue());
+        assertEquals(100, request.getMaxValue());
+        assertEquals("N", request.getIsAttributeBranchCode());
+
+        verify(namedParameterJdbcTemplate).query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class));
+    }
+
+    @Test
+    void getAPIIntegrationDetail_ShouldReturnEmptyListWhenNoResults() {
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+            .thenReturn(Collections.emptyList());
+
+        List<IntegrationApiRequest> result = integrationDAO.getAPIIntegrationDetail("nonExistingService");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+        verify(namedParameterJdbcTemplate).query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class));
+    }
+
+    @Test
+    void getEntityMockResponse_ShouldReturnListOfMockResponses() {
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+            .thenReturn(Arrays.asList(
+                new IntegrationMockResponse("response1", "JSON"),
+                new IntegrationMockResponse("response2", "JSON")
+            ));
+
+        List<IntegrationMockResponse> result = integrationDAO.getEntityMockResponse("testEntity", "JSON");
+
+        assertNotNull(result);
+        assertEquals(2, result.size());
+        assertEquals("response1", result.get(0).getMockReponse());
+        assertEquals("JSON", result.get(0).getResponseType());
+        assertEquals("response2", result.get(1).getMockReponse());
+        assertEquals("JSON", result.get(1).getResponseType());
+
+        verify(namedParameterJdbcTemplate).query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class));
+    }
+
+    @Test
+    void getEntityMockResponse_ShouldReturnEmptyListWhenNoResults() {
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+            .thenReturn(Collections.emptyList());
+
+        List<IntegrationMockResponse> result = integrationDAO.getEntityMockResponse("nonExistingEntity", "XML");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+        verify(namedParameterJdbcTemplate).query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class));
+    }
+
+    @Test
+    void getAPIIntegrationDetail_ShouldHandleSQLException() {
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+            .thenThrow(new RuntimeException("DB Error"));
+
+        assertThrows(RuntimeException.class, () -> {
+            integrationDAO.getAPIIntegrationDetail("failingService");
+        });
+
+        verify(namedParameterJdbcTemplate).query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class));
+    }
+
+    @Test
+    void getEntityMockResponse_ShouldHandleSQLException() {
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+            .thenThrow(new RuntimeException("DB Error"));
+
+        assertThrows(RuntimeException.class, () -> {
+            integrationDAO.getEntityMockResponse("failingEntity", "JSON");
+        });
+
+        verify(namedParameterJdbcTemplate).query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class));
+    }
+
+    @Test
+    void rowMapperForIntegrationApiRequest_ShouldMapResultSetCorrectly() throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getString(1)).thenReturn("ENTITY1");
+        when(rs.getString(2)).thenReturn("HTTPS");
+        when(rs.getString(3)).thenReturn("https://api.test.com");
+        when(rs.getString(4)).thenReturn("api.test.com");
+        when(rs.getInt(5)).thenReturn(443);
+        when(rs.getString(6)).thenReturn("authToken");
+        when(rs.getString(7)).thenReturn("header");
+        when(rs.getString(8)).thenReturn("string");
+        when(rs.getInt(9)).thenReturn(32);
+        when(rs.getString(10)).thenReturn("Y");
+        when(rs.getString(11)).thenReturn("Y");
+        when(rs.getString(12)).thenReturn("[a-zA-Z0-9]+");
+        when(rs.getInt(13)).thenReturn(1);
+        when(rs.getInt(14)).thenReturn(32);
+        when(rs.getString(15)).thenReturn("N");
+
+        IntegrationApiRequest result = integrationDAO.getAPIIntegrationDetail("test").get(0);
+
+        assertEquals("ENTITY1", result.getEntityId());
+        assertEquals("HTTPS", result.getProtocol());
+        assertEquals("https://api.test.com", result.getUrl());
+        assertEquals("api.test.com", result.getHost());
+        assertEquals(443, result.getPort());
+        assertEquals("authToken", result.getAttributeName());
+        assertEquals("header", result.getAttributeType());
+        assertEquals("string", result.getAttributeDataType());
+        assertEquals(32, result.getAttributeLength());
+        assertEquals("Y", result.getIsMandatoryAttribute());
+        assertEquals("Y", result.getValidateData());
+        assertEquals("[a-zA-Z0-9]+", result.getRegexPattern());
+        assertEquals(1, result.getMinValue());
+        assertEquals(32, result.getMaxValue());
+        assertEquals("N", result.getIsAttributeBranchCode());
+    }
+
+    @Test
+    void rowMapperForMockResponse_ShouldMapResultSetCorrectly() throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getString(1)).thenReturn("{\"status\":\"success\"}");
+        when(rs.getString(2)).thenReturn("JSON");
+
+        IntegrationMockResponse result = integrationDAO.getEntityMockResponse("test", "JSON").get(0);
+
+        assertEquals("{\"status\":\"success\"}", result.getMockReponse());
+        assertEquals("JSON", result.getResponseType());
+    }
 }
