@@ -1,447 +1,57 @@
 package com.sbi.microservice.framework.repository;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataAccessException;
+import com.sbi.microservice.framework.model.IntegrationApiRequest;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.model.APIBankingEntity;
-import com.sbi.microservice.framework.model.CorporateOnboard;
-
-@ExtendWith(MockitoExtension.class)
-class APIBankingDAOImplTest {
-
-    @Mock
-    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-
-    @InjectMocks
-    private APIBankingDAOImpl apiBankingDAO;
-
-    @Mock
-    private ResultSet resultSet;
-
-    private final String testCorpAlias = "testCorpAlias";
-    private final String testCorpId = "testCorpId";
-    private final String testAggregatorId = "testAggregatorId";
-    private final String testCorpToken = "testCorpToken";
-
-    @Test
-    void testGetCorpDetails_Success() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("CORPORATE_ID")).thenReturn(testCorpId);
-        when(resultSet.getString("CORPORATE_ALIAS")).thenReturn(testCorpAlias);
-        when(resultSet.getString("ACTIVE")).thenReturn("Y");
-        when(resultSet.getString("IS_SARAL")).thenReturn("N");
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity(testCorpId, "", testCorpAlias, "", "", null, "", "Y", "N"));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        // Test
-        Map<String, String> result = apiBankingDAO.getCorpDetails(testCorpAlias);
-
-        // Verify
-        assertNotNull(result);
-        assertEquals(testCorpId, result.get("corpId"));
-        assertEquals("N", result.get("isSaral"));
-        assertEquals("Y", result.get("active"));
-    }
-
-    @Test
-    void testGetCorpDetails_NoRecords() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
-
-        Map<String, String> result = apiBankingDAO.getCorpDetails(testCorpAlias);
-        assertNull(result);
-    }
-
-    @Test
-    void testGetCorpDetails_Exception() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenThrow(new RuntimeException("Test exception"));
-
-        Map<String, String> result = apiBankingDAO.getCorpDetails(testCorpAlias);
-        assertNull(result);
-    }
-
-    @Test
-    void testWhetherAggregatorExist_True() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(1);
-
-        boolean result = apiBankingDAO.whetherAggregatorExist(testAggregatorId);
-        assertTrue(result);
-    }
-
-    @Test
-    void testWhetherAggregatorExist_False() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(0);
-
-        boolean result = apiBankingDAO.whetherAggregatorExist(testAggregatorId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testWhetherAggregatorExist_Exception() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenThrow(new RuntimeException("Test exception"));
-
-        boolean result = apiBankingDAO.whetherAggregatorExist(testAggregatorId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testValidateAggregatorWhetherActive_True() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("AGGRTR_ID")).thenReturn(testAggregatorId);
-        when(resultSet.getString("ACTIVE")).thenReturn("Y");
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity("", "", "", testAggregatorId, "", null, "", "Y", ""));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        boolean result = apiBankingDAO.validateAggregatorWhetherActive(testAggregatorId);
-        assertTrue(result);
-    }
-
-    @Test
-    void testValidateAggregatorWhetherActive_False() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("AGGRTR_ID")).thenReturn(testAggregatorId);
-        when(resultSet.getString("ACTIVE")).thenReturn("N");
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity("", "", "", testAggregatorId, "", null, "", "N", ""));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        boolean result = apiBankingDAO.validateAggregatorWhetherActive(testAggregatorId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testValidateAggregatorWhetherActive_EmptyResult() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
-
-        boolean result = apiBankingDAO.validateAggregatorWhetherActive(testAggregatorId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testValidateAggregator_True() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("AGGRTR_ID")).thenReturn(testAggregatorId);
-        when(resultSet.getString("ACTIVE")).thenReturn("Y");
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity("", "", "", testAggregatorId, "", null, "", "Y", ""));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        boolean result = apiBankingDAO.validateAggregator(testAggregatorId);
-        assertTrue(result);
-    }
-
-    @Test
-    void testValidateAggregator_False() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
-
-        boolean result = apiBankingDAO.validateAggregator(testAggregatorId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testValidateCorpToken_ValidToken() throws SQLException, ParseException {
-        // Mock current date
-        Date currentDate = new Date();
-        Calendar calendar = Calendar.getInstance();
-        calendar.add(Calendar.DAY_OF_MONTH, 1); // Tomorrow's date
-        Date futureDate = calendar.getTime();
-
-        // Mock result set
-        when(resultSet.getString("CORPORATE_ID")).thenReturn(testCorpId);
-        when(resultSet.getString("CORP_TOKEN")).thenReturn(testCorpToken);
-        when(resultSet.getTimestamp("TOKEN_EXPIRY_TS")).thenReturn(new Timestamp(futureDate.getTime()));
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity(testCorpId, "", "", "", testCorpToken, new Timestamp(futureDate.getTime()), "", "", ""));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        boolean result = apiBankingDAO.validateCorpToken(testAggregatorId, testCorpId, testCorpToken);
-        assertTrue(result);
-    }
-
-    @Test
-    void testValidateCorpToken_ExpiredToken() throws SQLException, ParseException {
-        // Mock current date
-        Date currentDate = new Date();
-        Calendar calendar = Calendar.getInstance();
-        calendar.add(Calendar.DAY_OF_MONTH, -1); // Yesterday's date
-        Date pastDate = calendar.getTime();
-
-        // Mock result set
-        when(resultSet.getString("CORPORATE_ID")).thenReturn(testCorpId);
-        when(resultSet.getString("CORP_TOKEN")).thenReturn(testCorpToken);
-        when(resultSet.getTimestamp("TOKEN_EXPIRY_TS")).thenReturn(new Timestamp(pastDate.getTime()));
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity(testCorpId, "", "", "", testCorpToken, new Timestamp(pastDate.getTime()), "", "", ""));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        boolean result = apiBankingDAO.validateCorpToken(testAggregatorId, testCorpId, testCorpToken);
-        assertFalse(result);
-    }
-
-    @Test
-    void testValidateCorpToken_InvalidToken() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("CORPORATE_ID")).thenReturn(testCorpId);
-        when(resultSet.getString("CORP_TOKEN")).thenReturn("differentToken");
-        when(resultSet.getTimestamp("TOKEN_EXPIRY_TS")).thenReturn(new Timestamp(System.currentTimeMillis()));
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity(testCorpId, "", "", "", "differentToken", new Timestamp(System.currentTimeMillis()), "", "", ""));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        boolean result = apiBankingDAO.validateCorpToken(testAggregatorId, testCorpId, testCorpToken);
-        assertFalse(result);
-    }
-
-    @Test
-    void testValidateCorpToken_NoRecords() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
-
-        boolean result = apiBankingDAO.validateCorpToken(testAggregatorId, testCorpId, testCorpToken);
-        assertFalse(result);
-    }
-
-    @Test
-    void testIsValidAggregatorAndCorpCount_True() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(1);
-
-        boolean result = apiBankingDAO.isValidAggregatorAndCorpCount(testAggregatorId, testCorpId);
-        assertTrue(result);
-    }
-
-    @Test
-    void testIsValidAggregatorAndCorpCount_False() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(0);
-
-        boolean result = apiBankingDAO.isValidAggregatorAndCorpCount(testAggregatorId, testCorpId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testCheckCorpStatus_True() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(1);
-
-        boolean result = apiBankingDAO.checkCorpStatus(testCorpId);
-        assertTrue(result);
-    }
-
-    @Test
-    void testCheckCorpStatus_False() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(0);
-
-        boolean result = apiBankingDAO.checkCorpStatus(testCorpId);
-        assertFalse(result);
-    }
-
-    @Test
-    void testAggregatorAndCorpCount_True() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(1);
-
-        boolean result = apiBankingDAO.aggregatorAndCorpCount(testAggregatorId, testCorpId);
-        assertTrue(result);
-    }
-
-    @Test
-    void testGetCorporateOnboardDetail_Success() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("AGGRTR_ID")).thenReturn(testAggregatorId);
-        when(resultSet.getString("STATUS")).thenReturn("ACTIVE");
-
-        // Mock query response
-        List<CorporateOnboard> mockList = Collections.singletonList(
-                new CorporateOnboard(testAggregatorId, "ACTIVE"));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        Map<String, String> result = apiBankingDAO.getCorporateOnboardDetail(testCorpId);
-        assertNotNull(result);
-        assertEquals(testAggregatorId, result.get("aggregatorID"));
-        assertEquals("ACTIVE", result.get("status"));
-    }
-
-    @Test
-    void testGetCorporateOnboardDetail_NoRecords() {
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
-
-        Map<String, String> result = apiBankingDAO.getCorporateOnboardDetail(testCorpId);
-        assertNull(result);
-    }
-
-    @Test
-    void testValidateCorpID_Success() throws SQLException {
-        // Mock result set
-        when(resultSet.getString("CORPORATE_ID")).thenReturn(testCorpId);
-        when(resultSet.getString("CORPORATE_ALIAS")).thenReturn(testCorpAlias);
-        when(resultSet.getString("ACTIVE")).thenReturn("Y");
-        when(resultSet.getString("IS_SARAL")).thenReturn("N");
-
-        // Mock query response
-        List<APIBankingEntity> mockList = Collections.singletonList(
-                new APIBankingEntity(testCorpId, "", testCorpAlias, "", "", null, "", "Y", "N"));
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(mockList);
-
-        Map<String, String> result = apiBankingDAO.validateCorpID(testCorpId);
-        assertNotNull(result);
-        assertEquals(testCorpId, result.get("corpId"));
-        assertEquals("N", result.get("isSaral"));
-        assertEquals("Y", result.get("active"));
-    }
-
-    @Test
-    void testIsDuplicateAPIReqRefNo_True() {
-        String testRefNo = "testRefNo";
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(1);
-
-        boolean result = apiBankingDAO.isDuplicateAPIReqRefNo(Optional.of(testRefNo));
-        assertTrue(result);
-    }
-
-    @Test
-    void testIsDuplicateAPIReqRefNo_False() {
-        String testRefNo = "testRefNo";
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(0);
-
-        boolean result = apiBankingDAO.isDuplicateAPIReqRefNo(Optional.of(testRefNo));
-        assertFalse(result);
-    }
-
-    @Test
-    void testIsDuplicateAPIReqRefNo_Empty() {
-        boolean result = apiBankingDAO.isDuplicateAPIReqRefNo(Optional.empty());
-        assertFalse(result);
-    }
-
-    @Test
-    void testRowMapper_APIBankingEntity() throws SQLException {
-        // Setup mock ResultSet
-        when(resultSet.getString("CORPORATE_ID")).thenReturn("corp123");
-        when(resultSet.getString("CORPORATE_ALIAS")).thenReturn("alias123");
-        when(resultSet.getString("AGGRTR_ID")).thenReturn("agg123");
-        when(resultSet.getString("CORP_TOKEN")).thenReturn("token123");
-        when(resultSet.getTimestamp("TOKEN_EXPIRY_TS")).thenReturn(new Timestamp(System.currentTimeMillis()));
-        when(resultSet.getString("ACTIVE")).thenReturn("Y");
-        when(resultSet.getString("IS_SARAL")).thenReturn("N");
-
-        // Create RowMapper instance (this would normally be created by Spring)
-        RowMapper<APIBankingEntity> rowMapper = (rs, rowNum) -> new APIBankingEntity(
-                rs.getString("CORPORATE_ID"),
-                "",
-                rs.getString("CORPORATE_ALIAS"),
-                rs.getString("AGGRTR_ID"),
-                rs.getString("CORP_TOKEN"),
-                rs.getTimestamp("TOKEN_EXPIRY_TS"),
-                "",
-                rs.getString("ACTIVE"),
-                rs.getString("IS_SARAL"));
-
-        // Test the mapping
-        APIBankingEntity entity = rowMapper.mapRow(resultSet, 1);
-
-        // Verify
-        assertEquals("corp123", entity.corpId());
-        assertEquals("alias123", entity.corpAlias());
-        assertEquals("agg123", entity.aggregatorId());
-        assertEquals("token123", entity.corpToken());
-        assertEquals("Y", entity.active());
-        assertEquals("N", entity.isSaral());
-        assertNotNull(entity.expiryDate());
-    }
-
-    @Test
-    void testRowMapper_CorporateOnboard() throws SQLException {
-        // Setup mock ResultSet
-        when(resultSet.getString("AGGRTR_ID")).thenReturn("agg123");
-        when(resultSet.getString("STATUS")).thenReturn("ACTIVE");
-
-        // Create RowMapper instance
-        RowMapper<CorporateOnboard> rowMapper = (rs, rowNum) -> 
-                new CorporateOnboard(rs.getString("AGGRTR_ID"), rs.getString("STATUS"));
-
-        // Test the mapping
-        CorporateOnboard onboard = rowMapper.mapRow(resultSet, 1);
-
-        // Verify
-        assertEquals("agg123", onboard.aggregatorID());
-        assertEquals("ACTIVE", onboard.status());
-    }
-
-    @Test
-    void testFormatDate() {
-        Date date = new Date();
-        String formatted = APIBankingDAOImpl.formatDate(date);
-        assertNotNull(formatted);
-        assertTrue(formatted.matches("\\d{4}/\\d{2}/\\d{2} \\d{2}:\\d{2}:\\d{2}"));
-    }
-
-    @Test
-    void testIsSameDay() {
-        Date date1 = new Date();
-        Date date2 = new Date(date1.getTime() + 1000); // 1 second later
-        
-        assertTrue(APIBankingDAOImpl.isSameDay(date1, date2));
-        
-        Calendar cal = Calendar.getInstance();
-        cal.add(Calendar.DAY_OF_MONTH, 1);
-        Date tomorrow = cal.getTime();
-        
-        assertFalse(APIBankingDAOImpl.isSameDay(date1, tomorrow));
-    }
+import org.springframework.stereotype.Repository;
+
+import com.sbi.microservice.framework.model.IntegrationConfig;
+import com.sbi.microservice.framework.model.IntegrationMockResponse;
+@Repository
+public class IntegrationDAOImpl extends BaseDAO implements IntegrationDAO{
+	public IntegrationDAOImpl(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
+		super(namedParameterJdbcTemplate);
+	}
+
+	public Optional<IntegrationConfig> getIntegrationDetails(String integrationName) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	public List<Optional<IntegrationConfig>> getAllIntegrationDetails() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	public List<IntegrationApiRequest> getAPIIntegrationDetail(String serviceName) {
+		List<IntegrationApiRequest> integrationApiRequest = new ArrayList<>();
+		String sql = "select mas.entity_id, mas.protocol,mas.url,mas.host,mas.port,insreq.attribute_name,insreq.attribute_type,insreq.attribute_data_type,insreq.attribute_length,insreq.is_mandatory_attribute," +
+				"insreq.validate_data,insreq.regex_pattern,insreq.min_value,insreq.max_value,insreq.is_attribute_branch_code from sbi_entity_integration_master mas, " +
+				"sbi_entity_integration_api_req insreq where mas.entity_id=insreq.entity_id and mas.entity_id=:serviceName";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+		params.addValue("serviceName", serviceName.toUpperCase());
+		//integrationApiRequest=namedParameterJdbcTemplate.query(sql, params, new IntegrationApiRowMapper());
+		return namedParameterJdbcTemplate.query(sql, params, (rs, rowNum) -> new IntegrationApiRequest(
+				rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getInt(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getInt(9), rs.getString(10), rs.getString(11), rs.getString(12), rs.getInt(13),rs.getInt(14),rs.getString(15)
+		));
+		//return integrationApiRequest;
+	}
+
+	@Override
+	public List<IntegrationMockResponse> getEntityMockResponse(String httpEntity, String responseType) {
+		List<IntegrationMockResponse> integrationMockResponseList = new ArrayList<>();
+		String sql = "select MOCK_REPONSE,RESPONSE_TYPE FROM SBI_ENTITY_INTEGRATION_MOCK_RESPONSE FROM entity_id=:serviceName and RESPONSE_TYPE=:responseType and status=1";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+		params.addValue("serviceName", httpEntity.toUpperCase());
+		params.addValue("responseType", responseType.toUpperCase());
+		return namedParameterJdbcTemplate.query(sql, params, (rs, rowNum) -> new IntegrationMockResponse(rs.getString(1), rs.getString(2)));
+	}
 }
