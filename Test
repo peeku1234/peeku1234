@@ -1,294 +1,122 @@
-package com.sbi.microservice.framework.services;
+package com.sbi.microservice.framework.repository;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import java.sql.Types;
+import java.util.List;
+import java.util.Optional;
 
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
 
-import com.sbi.microservice.framework.cache.CacheManager;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.AccessException;
-import com.sbi.microservice.framework.exception.ConfigurationException;
-import com.sbi.microservice.framework.model.*;
-import com.sbi.microservice.framework.repository.ServiceDAO;
-import com.sbi.microservice.framework.repository.UserDAO;
-import com.sbi.microservice.framework.services.access.AuthenticationProvider;
-import com.sbi.microservice.framework.services.access.AuthenticationProviderFactory;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
+import com.sbi.microservice.framework.model.Channel;
+import com.sbi.microservice.framework.model.Endpoint;
+import com.sbi.microservice.framework.model.Service;
+/**
+ *@author RX001020040
+ */
+@Repository
+public class ServiceDAOImpl extends BaseDAO implements ServiceDAO {
 
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+	public ServiceDAOImpl(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
+		super(namedParameterJdbcTemplate);
+	}
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+	@Override
+	public List<Endpoint> getServiceEndpointList(String serviceId) {
+		String sql="SELECT B.SERVICE_ID, A.SERVICE_NAME, B.ENDPOINT_ID, B.ENDPOINT_NAME, B.DESCRIPTION, B.STATUS, B.HAS_REQUEST_BODY, IS_ENCRYPTED, METHOD_TYPE, HAS_PATH_PARAMS, B.CATEGORY  FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE B.SERVICE_ID=:serviceId AND A.SERVICE_ID=B.SERVICE_ID";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("serviceId", serviceId);
+        
+        RowMapper<Endpoint> rowMapper= (rs, rowNum) -> new Endpoint(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),rs.getString(5),rs.getString(6),rs.getBoolean(7),rs.getBoolean(8),rs.getString(9),rs.getBoolean(10),rs.getString(11));
+        
+		return namedParameterJdbcTemplate.query(sql, params,rowMapper);
+	}
 
-@ExtendWith(MockitoExtension.class)
-class AccessVerifierTest {
+	@Override
+	public Optional<Service> getServiceDetails(String serviceName) {
+		String sql="SELECT A.SERVICE_ID, A.SERVICE_NAME, A.SERVICE_TYPE,A.SERVICE_DESCRIPTION, A.ENV_DOMAIN, A.VERSION, A.ENCRYPTION_ALGO, A.HASH_ALGO, A.RSA_ALGO, A.RSA_KEY_PATH, A.CHARGES_AGGREGATOR, A.CHARGES_CORPORATE, A.STATUS FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE SERVICE_NAME=:serviceName AND A.SERVICE_ID=B.SERVICE_ID";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("serviceName", serviceName);
+        RowMapper<Service> rowMapper= (rs, rowNum) -> new Service(
+        		rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10), rs.getInt(11), rs.getInt(12), rs.getString(13), 
+        		getChannelList(rs.getString(1)),getServiceEndpointList(rs.getString(1)));
+        
+		return namedParameterJdbcTemplate.query(sql, params,rowMapper).stream().findFirst();
+	}
 
-    @Mock
-    private AuthenticationProviderFactory authenticationProviderFactory;
-    
-    @Mock
-    private ServiceDAO serviceDAO;
-    
-    @Mock
-    private CacheManager cacheManager;
-    
-    @Mock
-    private FrameworkUtils frameworkUtils;
-    
-    @Mock
-    private UserDAO userDAO;
-    
-    @Mock
-    private HttpServletRequest request;
-    
-    @Mock
-    private HttpServletResponse response;
-    
-    @Mock
-    private AuthenticationProvider authProvider;
-    
-    @Mock
-    private Authentication authentication;
-    
-    @InjectMocks
-    private AccessVerifier accessVerifier;
-    
-    private static final String SERVICE_NAME = "testService";
-    private static final String CHANNEL_ID = "testChannel";
-    private static final String USER_TOKEN = "testToken";
-    private static final String REQUEST_URI = "/api/" + SERVICE_NAME + "/endpoint";
-    private static final String USER_NAME = "testUser";
+	@Override
+	public Optional<Endpoint> getServiceEndpointDetails(String serviceId, String endPointName) {
+		String sql="SELECT B.SERVICE_ID, A.SERVICE_NAME, B.ENDPOINT_ID, B.ENDPOINT_NAME, B.DESCRIPTION, B.STATUS, B.HAS_REQUEST_BODY, IS_ENCRYPTED, METHOD_TYPE, HAS_PATH_PARAMS, B.CATEGORY  FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE B.SERVICE_ID=:serviceId AND A.SERVICE_ID=B.SERVICE_ID AND B.ENDPOINT_NAME=:endpointName";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("serviceId", serviceId);
+        params.addValue("endpointName", endPointName);
+        
+        RowMapper<Endpoint> rowMapper= (rs, rowNum) -> new Endpoint(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),rs.getString(5),rs.getString(6),rs.getBoolean(7),rs.getBoolean(8),rs.getString(9),rs.getBoolean(10),rs.getString(11));
+        
+		return namedParameterJdbcTemplate.query(sql, params,rowMapper).stream().findFirst();
 
-    @BeforeEach
-    void setUp() {
-        when(request.getRequestURI()).thenReturn(REQUEST_URI);
-        when(request.getHeader(FrameworkConstants.CHANNELID)).thenReturn(CHANNEL_ID);
-        when(request.getHeader(FrameworkConstants.USER_TOKEN)).thenReturn(USER_TOKEN);
-    }
+	}
 
-    @Test
-    void testCheckServiceAccess_OpenService() throws AccessException {
-        // Setup
-        when(request.getMethod()).thenReturn("GET");
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_OPEN, 1, null));
+	@Override
+	public List<Channel> getChannelList(String serviceId) {
+		String sql="SELECT B.SERVICE_ID, A.CHANNEL_ID, A.CHANNEL_NAME, A.STATUS FROM SBI_CHANNEL_MASTER A, SBI_SERVICE_CHANNEL_MAPPING B WHERE B.SERVICE_ID=:serviceId AND A.CHANNEL_ID=B.CHANNEL_ID";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("serviceId", serviceId);
         
-        // Execute
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
+        RowMapper<Channel> rowMapper= (rs, rowNum) -> new Channel(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4));
         
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.SERVICE_TYPE_OPEN, result.get().serviceType());
-    }
+		return namedParameterJdbcTemplate.query(sql, params,rowMapper);
 
-    @Test
-    void testCheckServiceAccess_SecuredService_ChannelAuthorized_UserAuthenticated() throws AccessException {
-        // Setup
-        when(request.getMethod()).thenReturn("POST");
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
-        
-        List<Channel> channels = Collections.singletonList(new Channel(CHANNEL_ID, "Test Channel"));
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
-        
-        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenReturn(authProvider);
-        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
-        when(authProvider.authenticate(request)).thenReturn(authentication);
-        when(authentication.authenticated()).thenReturn(true);
-        
-        // Execute
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-        
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_GRANTED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.SERVICE_TYPE_SECURED, result.get().serviceType());
-    }
+	}
 
-    @Test
-    void testCheckServiceAccess_SecuredService_ChannelNotAuthorized() throws AccessException {
-        // Setup
-        when(request.getMethod()).thenReturn("GET");
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
+	@Override
+	public List<Channel> getChannelServiceMappingList(String channelId) {
+		//String sql="SELECT B.SERVICE_ID, A.CHANNEL_ID, A.CHANNEL_NAME, A.STATUS FROM SBI_CHANNEL_MASTER A, SBI_SERVICE_CHANNEL_MAPPING B WHERE B.SERVICE_ID=:serviceId AND A.CHANNEL_ID=B.CHANNEL_ID";
+		String sql="SELECT B.SERVICE_ID, A.CHANNEL_ID, A.CHANNEL_NAME, A.STATUS FROM SBI_CHANNEL_MASTER A, SBI_SERVICE_CHANNEL_MAPPING B WHERE B.SERVICE_ID=:serviceId AND A.CHANNEL_ID=B.CHANNEL_ID";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("channelId", channelId);
         
-        List<Channel> channels = Collections.singletonList(new Channel("otherChannel", "Other Channel"));
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
+        RowMapper<Channel> rowMapper= (rs, rowNum) -> new Channel(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4));
         
-        // Execute
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-        
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_CHANNEL_NOT_AUTHORIZED, result.get().accessDescription());
-    }
+		return namedParameterJdbcTemplate.query(sql, params,rowMapper);
+	}
 
-    @Test
-    void testCheckServiceAccess_SecuredService_ChannelAuthorized_UserNotAuthenticated() throws AccessException {
-        // Setup
-        when(request.getMethod()).thenReturn("POST");
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
-        
-        List<Channel> channels = Collections.singletonList(new Channel(CHANNEL_ID, "Test Channel"));
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
-        
-        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenReturn(authProvider);
-        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
-        when(authProvider.authenticate(request)).thenReturn(authentication);
-        when(authentication.authenticated()).thenReturn(false);
-        
-        // Execute
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-        
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_USER_NOT_AUTHENTICATED, result.get().accessDescription());
-    }
+	@Override
+	public Optional<Endpoint> getEndpointDetails(String serviceId,String endpointUrl) {
+		String sql="SELECT B.SERVICE_ID, A.SERVICE_NAME, B.ENDPOINT_ID, B.ENDPOINT_NAME, B.DESCRIPTION, B.STATUS, B.HAS_REQUEST_BODY, IS_ENCRYPTED, METHOD_TYPE, HAS_PATH_PARAMS, B.CATEGORY  FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE B.SERVICE_ID=:serviceId AND A.SERVICE_ID=B.SERVICE_ID AND B.API_URL=:endpointUrl";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+		params.addValue("serviceId", serviceId);
+		params.addValue("endpointUrl", endpointUrl);
 
-    @Test
-    void testCheckServiceAccess_UnsupportedMethod() throws AccessException {
-        // Setup
-        when(request.getMethod()).thenReturn("PUT");
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
-        
-        // Execute
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-        
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_METHOD_NOT_ALLOWED, result.get().accessDescription());
-    }
+		RowMapper<Endpoint> rowMapper= (rs, rowNum) -> new Endpoint(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),rs.getString(5),rs.getString(6),rs.getBoolean(7),rs.getBoolean(8),rs.getString(9),rs.getBoolean(10) ,rs.getString(11));
 
-    @Test
-    void testCheckServiceAccess_UnrecognizedChannel() throws AccessException {
-        // Setup
-        when(request.getMethod()).thenReturn("POST");
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn(SERVICE_NAME);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null));
-        
-        List<Channel> channels = Collections.singletonList(new Channel(CHANNEL_ID, "Test Channel"));
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
-        
-        when(authenticationProviderFactory.getProvider(CHANNEL_ID)).thenThrow(new IllegalArgumentException());
-        when(frameworkUtils.getAttribute(request, "userNameFromFilter")).thenReturn(Optional.of(USER_NAME));
-        
-        // Execute
-        Optional<Access> result = accessVerifier.checkServiceAccess(request, response);
-        
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(FrameworkConstants.ACCESS_DENIED, result.get().accessStatus());
-        assertEquals(FrameworkConstants.ACCESS_UNRECOGNIZED_CHANNEL, result.get().accessDescription());
-    }
+		return namedParameterJdbcTemplate.query(sql, params,rowMapper).stream().findFirst();
 
-    @Test
-    void testCheckServiceAccess_ServiceNotAvailable() {
-        // Setup
-        when(frameworkUtils.extractServiceName(REQUEST_URI)).thenReturn("");
-        
-        // Execute & Verify
-        assertThrows(ConfigurationException.class, () -> {
-            accessVerifier.checkServiceAccess(request, response);
-        });
-    }
+	}
 
-    @Test
-    void testIsSecuredService_OpenService() {
-        Service openService = new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_OPEN, 1, null);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(openService);
-        
-        assertFalse(accessVerifier.isSecuredService(SERVICE_NAME));
-    }
+	@Override
+	public int getRBACCount(Optional<String> userName, int corpType, int userRole, String serviceId, String endpointId) {
+		
+		int mappedUserRole=userRole;
+		if(userRole==8) { // ONLY FOR CORPORATE USER
+			MapSqlParameterSource params = new MapSqlParameterSource();
+			params.addValue("userName", userName.get(), Types.VARCHAR);
+			mappedUserRole=namedParameterJdbcTemplate.queryForObject("SELECT to_number(nvl(DECODE(MAX(ACCESS_LEVEL),5,81,6,82,7,83),8)) MAPPED_ROLE "
+					+ " FROM SBI_CUSTOMER_ACCOUNT_MAP WHERE USER_NAME=:userName AND ACCOUNT_NATURE=0 AND STATUS=1", params, Integer.class);
+		}
+		
+		String sql="SELECT count(1) from SBI_SRV_ENDPOINT_RBAC B WHERE B.SERVICE_ID=:serviceId AND B.ENDPOINT_ID=:endpointId and (CORP_TYPE=:corpType OR CORP_TYPE=-1) and (USER_ROLE=:userRole OR USER_ROLE=:mappedUserRole OR USER_ROLE=-1)";
+		MapSqlParameterSource params = new MapSqlParameterSource();
+		params.addValue("serviceId", serviceId);
+		params.addValue("endpointId", endpointId);
+		params.addValue("corpType", corpType);
+		params.addValue("mappedUserRole", mappedUserRole);
+		params.addValue("userRole", userRole);
 
-    @Test
-    void testIsSecuredService_SecuredService() {
-        Service securedService = new Service(SERVICE_NAME, FrameworkConstants.SERVICE_TYPE_SECURED, 1, null);
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(securedService);
-        
-        assertTrue(accessVerifier.isSecuredService(SERVICE_NAME));
-    }
 
-    @Test
-    void testIsSecuredService_ServiceNotInCache() {
-        when(cacheManager.getService(SERVICE_NAME)).thenReturn(null);
-        
-        assertFalse(accessVerifier.isSecuredService(SERVICE_NAME));
-    }
+		Integer mappedCount = namedParameterJdbcTemplate.queryForObject(sql, params, Integer.class);
+		return mappedCount;
+	}
 
-    @Test
-    void testIsChannelAuthorized_ChannelHasAccess() {
-        List<Channel> channels = Arrays.asList(
-            new Channel("channel1", "Channel 1"),
-            new Channel(CHANNEL_ID, "Test Channel"),
-            new Channel("channel3", "Channel 3")
-        );
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
-        
-        assertTrue(accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID));
-    }
-
-    @Test
-    void testIsChannelAuthorized_ChannelNoAccess() {
-        List<Channel> channels = Arrays.asList(
-            new Channel("channel1", "Channel 1"),
-            new Channel("channel2", "Channel 2")
-        );
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(channels);
-        
-        assertFalse(accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID));
-    }
-
-    @Test
-    void testIsChannelAuthorized_NoChannelsConfigured() {
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(Collections.emptyList());
-        
-        assertFalse(accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID));
-    }
-
-    @Test
-    void testIsChannelAuthorized_NullChannels() {
-        when(cacheManager.getServiceChannelList(SERVICE_NAME)).thenReturn(null);
-        
-        assertFalse(accessVerifier.isChannelAuthorized(SERVICE_NAME, CHANNEL_ID));
-    }
-
-    @Test
-    void testIsUserAuthorized() {
-        // Currently always returns true
-        assertTrue(accessVerifier.isUserAuthorized(1));
-        assertTrue(accessVerifier.isUserAuthorized(2));
-    }
-
-    @Test
-    void testVerifyRBA_WithAccess() {
-        Service service = new Service(SERVICE_NAME, "type", 1, null);
-        Endpoint endpoint = new Endpoint(1, "endpoint", "GET", true);
-        when(serviceDAO.getRBACCount(Optional.of(USER_NAME), 1, 1, 1, 1)).thenReturn(1);
-        
-        assertTrue(accessVerifier.verifyRBA(Optional.of(USER_NAME), 1, 1, service, endpoint));
-    }
-
-    @Test
-    void testVerifyRBA_WithoutAccess() {
-        Service service = new Service(SERVICE_NAME, "type", 1, null);
-        Endpoint endpoint = new Endpoint(1, "endpoint", "GET", true);
-        when(serviceDAO.getRBACCount(Optional.of(USER_NAME), 1, 1, 1, 1)).thenReturn(0);
-        
-        assertFalse(accessVerifier.verifyRBA(Optional.of(USER_NAME), 1, 1, service, endpoint));
-    }
 }
