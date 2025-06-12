@@ -1,4 +1,4 @@
-{
+ public void setFixedConfigurationDetails(SaveFileConfigurationRequest saveFileConfigurationRequest) {
     logger.info("setFixedConfigurationDetails  method begin");
     List<FixedConfiguration> fixedConfigurationList = new ArrayList<>();
     for (FixedConfiguration fixedConfiguration : saveFileConfigurationRequest.getFixedConfigurations()) {
