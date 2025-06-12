@@ -1,32 +1,231 @@
- public void setFixedConfigurationDetails(SaveFileConfigurationRequest saveFileConfigurationRequest) {
-    logger.info("setFixedConfigurationDetails  method begin");
-    List<FixedConfiguration> fixedConfigurationList = new ArrayList<>();
-    for (FixedConfiguration fixedConfiguration : saveFileConfigurationRequest.getFixedConfigurations()) {
-      if ((!fixedConfiguration.getFieldName().contains(ServiceConstants.OUTREF)) && StringUtils.hasText(fixedConfiguration.getFieldName()) &&StringUtils.hasText(fixedConfiguration.getFieldType()) && fixedConfiguration.getStartIndex() > 0 && fixedConfiguration.getEndIndex() > 0) {
-        fixedConfiguration.setStartIndex(fixedConfiguration.getStartIndex() - 1);
-        fixedConfiguration.setEndIndex(fixedConfiguration.getEndIndex() - 1);
-        switch (fixedConfiguration.getFieldName()) {
-          case ServiceConstants.ACCOUNT_NO -> {
-            fixedConfigurationList.add(new FixedConfiguration(ServiceConstants.DEBIT_ACCOUNT_NO, fixedConfiguration.getDescription(), fixedConfiguration.isMandatory(), fixedConfiguration.getStartIndex(), fixedConfiguration.getEndIndex(), "D", fixedConfiguration.getFieldAlias(), fixedConfiguration.getFieldInfo()));
-            fixedConfigurationList.add(new FixedConfiguration(ServiceConstants.CREDIT_ACCOUNT_NO, fixedConfiguration.getDescription(), fixedConfiguration.isMandatory(), fixedConfiguration.getStartIndex(), fixedConfiguration.getEndIndex(), "C", fixedConfiguration.getFieldAlias(), fixedConfiguration.getFieldInfo()));
-          }
-          case ServiceConstants.BRANCH_CODE_OR_IFSC_CODE -> {
-              fixedConfigurationList.add(new FixedConfiguration(ServiceConstants.DEBIT_BRANCH_CODE, fixedConfiguration.getDescription(), fixedConfiguration.isMandatory(), fixedConfiguration.getStartIndex(), fixedConfiguration.getEndIndex(), "D", fixedConfiguration.getFieldAlias(), fixedConfiguration.getFieldInfo()));
-              fixedConfigurationList.add(new FixedConfiguration(ServiceConstants.CREDIT_BRANCH_CODE, fixedConfiguration.getDescription(), fixedConfiguration.isMandatory(), fixedConfiguration.getStartIndex(), fixedConfiguration.getEndIndex(), "C", fixedConfiguration.getFieldAlias(), fixedConfiguration.getFieldInfo()));
-          }
-          case ServiceConstants.PURPOSE_OF_TRANSACTION ->
-                  fixedConfigurationList.add(new FixedConfiguration(ServiceConstants.DESCRIPTION, fixedConfiguration.getDescription(), fixedConfiguration.isMandatory(), fixedConfiguration.getStartIndex(), fixedConfiguration.getEndIndex(), fixedConfiguration.getFieldType(), fixedConfiguration.getFieldAlias(), fixedConfiguration.getFieldInfo()));
-          case ServiceConstants.PAYMENT_IDENTIFIER ->
-                  fixedConfigurationList.add(new FixedConfiguration(ServiceConstants.NEW_PAYMENT_IDENTIFIER, fixedConfiguration.getDescription(), fixedConfiguration.isMandatory(), fixedConfiguration.getStartIndex(), fixedConfiguration.getEndIndex(), fixedConfiguration.getFieldType(), fixedConfiguration.getFieldAlias(), fixedConfiguration.getFieldInfo()));
-          default -> fixedConfigurationList.add(fixedConfiguration);
-        }
-      } else if (fixedConfiguration.getFieldName().contains(ServiceConstants.OUTREF) && StringUtils.hasText(fixedConfiguration.getFieldType()) && StringUtils.hasText(fixedConfiguration.getFieldAlias()) && StringUtils.hasText(fixedConfiguration.getFieldName())
-             && fixedConfiguration.getStartIndex() > 0 && fixedConfiguration.getEndIndex() > 0) {
-        fixedConfigurationList.add(fixedConfiguration);
-      } else {
-        throw new ValidationException(StatusConstants.YBMFC001, "");
-      }
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.util.StringUtils;
+import java.util.ArrayList;
+import java.util.List;
+
+class FixedConfigurationServiceTest {
+
+    private FixedConfigurationService service;
+    private SaveFileConfigurationRequest request;
+    
+    @BeforeEach
+    void setUp() {
+        service = new FixedConfigurationService();
+        request = new SaveFileConfigurationRequest();
     }
-    saveFileConfigurationRequest.setFixedConfigurations(fixedConfigurationList);
-    logger.info("setFixedConfigurationDetails  method end");
-  }
+
+    @Test
+    void testSetFixedConfigurationDetails_AccountNo() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            ServiceConstants.ACCOUNT_NO, 
+            "Account Number", 
+            true, 
+            10, 
+            20, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        service.setFixedConfigurationDetails(request);
+        
+        List<FixedConfiguration> result = request.getFixedConfigurations();
+        assertEquals(2, result.size());
+        assertEquals(ServiceConstants.DEBIT_ACCOUNT_NO, result.get(0).getFieldName());
+        assertEquals(ServiceConstants.CREDIT_ACCOUNT_NO, result.get(1).getFieldName());
+        assertEquals(9, result.get(0).getStartIndex()); // verify index adjustment
+        assertEquals(19, result.get(0).getEndIndex());
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_BranchCode() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            ServiceConstants.BRANCH_CODE_OR_IFSC_CODE, 
+            "Branch Code", 
+            false, 
+            5, 
+            10, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        service.setFixedConfigurationDetails(request);
+        
+        List<FixedConfiguration> result = request.getFixedConfigurations();
+        assertEquals(2, result.size());
+        assertEquals(ServiceConstants.DEBIT_BRANCH_CODE, result.get(0).getFieldName());
+        assertEquals(ServiceConstants.CREDIT_BRANCH_CODE, result.get(1).getFieldName());
+        assertEquals(4, result.get(0).getStartIndex());
+        assertEquals(9, result.get(0).getEndIndex());
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_PurposeOfTransaction() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            ServiceConstants.PURPOSE_OF_TRANSACTION, 
+            "Purpose", 
+            true, 
+            15, 
+            30, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        service.setFixedConfigurationDetails(request);
+        
+        List<FixedConfiguration> result = request.getFixedConfigurations();
+        assertEquals(1, result.size());
+        assertEquals(ServiceConstants.DESCRIPTION, result.get(0).getFieldName());
+        assertEquals(14, result.get(0).getStartIndex());
+        assertEquals(29, result.get(0).getEndIndex());
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_PaymentIdentifier() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            ServiceConstants.PAYMENT_IDENTIFIER, 
+            "Payment ID", 
+            false, 
+            1, 
+            5, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        service.setFixedConfigurationDetails(request);
+        
+        List<FixedConfiguration> result = request.getFixedConfigurations();
+        assertEquals(1, result.size());
+        assertEquals(ServiceConstants.NEW_PAYMENT_IDENTIFIER, result.get(0).getFieldName());
+        assertEquals(0, result.get(0).getStartIndex());
+        assertEquals(4, result.get(0).getEndIndex());
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_DefaultCase() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            "OTHER_FIELD", 
+            "Other Field", 
+            true, 
+            20, 
+            25, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        service.setFixedConfigurationDetails(request);
+        
+        List<FixedConfiguration> result = request.getFixedConfigurations();
+        assertEquals(1, result.size());
+        assertEquals("OTHER_FIELD", result.get(0).getFieldName());
+        assertEquals(19, result.get(0).getStartIndex());
+        assertEquals(24, result.get(0).getEndIndex());
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_OutrefCase() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            "OUTREF_SOMETHING", 
+            "Outref Field", 
+            true, 
+            10, 
+            15, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        service.setFixedConfigurationDetails(request);
+        
+        List<FixedConfiguration> result = request.getFixedConfigurations();
+        assertEquals(1, result.size());
+        assertEquals("OUTREF_SOMETHING", result.get(0).getFieldName());
+        assertEquals(10, result.get(0).getStartIndex()); // no index adjustment for OUTREF
+        assertEquals(15, result.get(0).getEndIndex());
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_ValidationException_MissingFieldName() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            "", // empty field name
+            "Description", 
+            true, 
+            10, 
+            20, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        assertThrows(ValidationException.class, () -> {
+            service.setFixedConfigurationDetails(request);
+        });
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_ValidationException_InvalidIndices() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            "FIELD_NAME", 
+            "Description", 
+            true, 
+            0, // invalid start index
+            20, 
+            "String", 
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        assertThrows(ValidationException.class, () -> {
+            service.setFixedConfigurationDetails(request);
+        });
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_ValidationException_OutrefMissingFieldType() {
+        List<FixedConfiguration> inputConfigs = new ArrayList<>();
+        inputConfigs.add(new FixedConfiguration(
+            "OUTREF_FIELD", 
+            "Description", 
+            true, 
+            10, 
+            20, 
+            "", // missing field type for OUTREF
+            "alias", 
+            "info"
+        ));
+        
+        request.setFixedConfigurations(inputConfigs);
+        assertThrows(ValidationException.class, () -> {
+            service.setFixedConfigurationDetails(request);
+        });
+    }
+
+    @Test
+    void testSetFixedConfigurationDetails_EmptyList() {
+        request.setFixedConfigurations(new ArrayList<>());
+        service.setFixedConfigurationDetails(request);
+        assertTrue(request.getFixedConfigurations().isEmpty());
+    }
+}
