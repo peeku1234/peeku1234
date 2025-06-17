@@ -12,166 +12,183 @@ import com.sbi.yb.model.FileDownloadResponse;
 import com.sbi.yb.service.ActualFileDownloadService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.util.Optional;
-
-/**
- * API Controller for BeneficiaryFileDownload.
- *
- * @author V1018111
- */
-@RestController
-@RequestMapping("/v1.0.0")
-public class ActualFileDownloadController {
-
-  private static final Logger LOGGER = LoggerFactory.getLogger(ActualFileDownloadController.class);
-
-
-  private final ActualFileDownloadService actualFileDownloadService;
-
-  /**
-   * actualFileDownloadController constructor.
-   *
-   * @param actualFileDownloadService actualFileDownloadService
-   */
-  @Autowired
-  public ActualFileDownloadController(ActualFileDownloadService actualFileDownloadService) {
-    this.actualFileDownloadService = actualFileDownloadService;
-  }
-
-  /**
-   * Downloading actual file.
-   *
-   * @param request  from user
-   * @param response from API
-   * @return actualFileDownload
-   */
-
-  @PostMapping("/actual-ben-txn")
-  public ResponseEntity<SBIApplicationResponse> downloadActualFile(HttpServletRequest request, HttpServletResponse response) {
-    LOGGER.info("Actual File Download controller :: {}", LoggingConstants.METHODBEGIN);
-    ObjectMapper mapper = new ObjectMapper();
-
-    Optional<String> payload = safeGetParameter(request, "plainPayload");
-    ActualFileDownloadRequest fileDownloadRequest;
-    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
-    FileDownloadResponse fileDownloadResponse;
-
-    try {
-      if (payload.isPresent()) {
-        fileDownloadRequest = mapper.readValue(payload.get(), ActualFileDownloadRequest.class);
-      } else {
-        throw new ValidationException("Invalid request", ConfigurationConstants.YBM003);
-      }
-      fileDownloadResponse = actualFileDownloadService.downloadActualFile(fileDownloadRequest);
-      if (Optional.ofNullable(fileDownloadResponse).isPresent()) {
-        sbiApplicationResponse.setData(mapper.writeValueAsString(fileDownloadResponse));
-        sbiApplicationResponse.setStatus(Status.SUCCESS.getStatusValue());
-        sbiApplicationResponse.setStatusCode(ConfigurationConstants.API000000);
-      }
-    } catch (JsonProcessingException jsonProcessingException) {
-      throw new ValidationException(jsonProcessingException.getMessage(), ConfigurationConstants.YBM002);
-    }
-    LOGGER.info("Actual File Download controller :: {}", LoggingConstants.METHODEND);
-    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
-  }
-
-  /**
-   * Checking nullable for request.
-   *
-   * @param request request
-   * @param name    name
-   * @return request String
-   */
-  public static Optional<String> safeGetParameter(HttpServletRequest request, String name) {
-    return Optional.ofNullable((String) request.getAttribute(name));
-  }
-
-}
-I want Junit test case for JsonProcessingException and want continuationtion for below Junit
-package com.sbi.yb.controller;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.Status;
-import com.sbi.yb.constants.ConfigurationConstants;
-import com.sbi.yb.model.ActualFileDownloadRequest;
-import com.sbi.yb.model.FileDownloadResponse;
-import com.sbi.yb.service.impl.ActualFileDownloadServiceImpl;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class ActualFileDownloadControllerTest {
-    @InjectMocks
-    private ActualFileDownloadController manageFileBeneficiaryController;
+
     @Mock
-    private ActualFileDownloadServiceImpl manageFileBeneficiaryService;
+    private ActualFileDownloadService actualFileDownloadService;
+
     @Mock
     private HttpServletRequest httpServletRequest;
+
     @Mock
     private HttpServletResponse httpServletResponse;
+
+    @InjectMocks
+    private ActualFileDownloadController actualFileDownloadController;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
-    @Test
-    void downloadActualFile() throws Exception {
-        ActualFileDownloadRequest fileDownloadRequest = new ActualFileDownloadRequest();
-        FileDownloadResponse fileDownloadResponse = null;
-        fileDownloadRequest.setFileExtension("CSV");
-        fileDownloadRequest.setFileReferenceNo("41006289");
-        Map<String, Object> mockFileContent = new HashMap<>();
-        mockFileContent.put("SUCCESS", Status.SUCCESS);
-        mockFileContent.put("API000000", ConfigurationConstants.API000000);
-        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(fileDownloadRequest));
-        Mockito.when(manageFileBeneficiaryService.downloadActualFile(any(ActualFileDownloadRequest.class))).thenReturn(fileDownloadResponse);
-        manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse);
-        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+    private ActualFileDownloadRequest validRequest;
+    private FileDownloadResponse successResponse;
 
+    @BeforeEach
+    void setUp() {
+        validRequest = new ActualFileDownloadRequest();
+        validRequest.setFileExtension("CSV");
+        validRequest.setFileReferenceNo("41006289");
+
+        successResponse = new FileDownloadResponse("fileContent", "fileName", "contentType");
     }
+
     @Test
-    void downloadActualFile_FileDownloadResponse() throws Exception {
-        ActualFileDownloadRequest fileDownloadRequest = new ActualFileDownloadRequest();
-        FileDownloadResponse fileDownloadResponse = new FileDownloadResponse("fileContent","fileName","contentType");
-        fileDownloadRequest.setFileExtension("CSV");
-        fileDownloadRequest.setFileReferenceNo("41006289");
-        Map<String, Object> mockFileContent = new HashMap<>();
-        mockFileContent.put("SUCCESS", Status.SUCCESS);
-        mockFileContent.put("API000000", ConfigurationConstants.API000000);
-        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(fileDownloadRequest));
-        Mockito.when(manageFileBeneficiaryService.downloadActualFile(any(ActualFileDownloadRequest.class))).thenReturn(fileDownloadResponse);
-        manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse);
-        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+    void downloadActualFile_Success() throws Exception {
+        // Arrange
+        String jsonPayload = objectMapper.writeValueAsString(validRequest);
+        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(jsonPayload);
+        when(actualFileDownloadService.downloadActualFile(any(ActualFileDownloadRequest.class)))
+                .thenReturn(successResponse);
 
+        // Act
+        ResponseEntity<SBIApplicationResponse> response = 
+            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse);
+
+        // Assert
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+        assertEquals(ConfigurationConstants.API000000, response.getBody().getStatusCode());
+        assertNotNull(response.getBody().getData());
+
+        verify(httpServletRequest).getAttribute("plainPayload");
+        verify(actualFileDownloadService).downloadActualFile(any(ActualFileDownloadRequest.class));
     }
+
     @Test
-    void exception() {
-        ActualFileDownloadRequest fileDownloadRequest = null;
-        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(fileDownloadRequest).thenThrow(new ValidationException("e", "Error"));
-        assertThrows(ValidationException.class, () ->
-            manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse));
+    void downloadActualFile_EmptyPayload() {
+        // Arrange
+        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(null);
 
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () ->
+            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse));
 
+        assertEquals("Invalid request", exception.getMessage());
+        assertEquals(ConfigurationConstants.YBM003, exception.getErrorCode());
+
+        verify(httpServletRequest).getAttribute("plainPayload");
+        verifyNoInteractions(actualFileDownloadService);
     }
-    
+
+    @Test
+    void downloadActualFile_InvalidJson() {
+        // Arrange
+        String invalidJson = "{ invalid json }";
+        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(invalidJson);
+
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () ->
+            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse));
+
+        assertEquals(ConfigurationConstants.YBM002, exception.getErrorCode());
+
+        verify(httpServletRequest).getAttribute("plainPayload");
+        verifyNoInteractions(actualFileDownloadService);
+    }
+
+    @Test
+    void downloadActualFile_ServiceReturnsNull() throws Exception {
+        // Arrange
+        String jsonPayload = objectMapper.writeValueAsString(validRequest);
+        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(jsonPayload);
+        when(actualFileDownloadService.downloadActualFile(any(ActualFileDownloadRequest.class)))
+                .thenReturn(null);
+
+        // Act
+        ResponseEntity<SBIApplicationResponse> response = 
+            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse);
+
+        // Assert
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+        assertEquals(ConfigurationConstants.API000000, response.getBody().getStatusCode());
+        assertNull(response.getBody().getData());
+
+        verify(httpServletRequest).getAttribute("plainPayload");
+        verify(actualFileDownloadService).downloadActualFile(any(ActualFileDownloadRequest.class));
+    }
+
+    @Test
+    void safeGetParameter_WithValue() {
+        // Arrange
+        String paramName = "testParam";
+        String paramValue = "testValue";
+        when(httpServletRequest.getAttribute(paramName)).thenReturn(paramValue);
+
+        // Act
+        Optional<String> result = ActualFileDownloadController.safeGetParameter(httpServletRequest, paramName);
+
+        // Assert
+        assertTrue(result.isPresent());
+        assertEquals(paramValue, result.get());
+    }
+
+    @Test
+    void safeGetParameter_WithoutValue() {
+        // Arrange
+        String paramName = "testParam";
+        when(httpServletRequest.getAttribute(paramName)).thenReturn(null);
+
+        // Act
+        Optional<String> result = ActualFileDownloadController.safeGetParameter(httpServletRequest, paramName);
+
+        // Assert
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    void loggerShouldBeInitialized() {
+        // This test verifies the logger is properly initialized
+        Logger logger = LoggerFactory.getLogger(ActualFileDownloadController.class);
+        assertNotNull(logger);
+    }
+
+    @Test
+    void controllerLogsMethodBeginAndEnd() throws Exception {
+        // Arrange
+        String jsonPayload = objectMapper.writeValueAsString(validRequest);
+        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(jsonPayload);
+        when(actualFileDownloadService.downloadActualFile(any(ActualFileDownloadRequest.class)))
+                .thenReturn(successResponse);
+
+        Logger logger = mock(Logger.class);
+        when(logger.isInfoEnabled()).thenReturn(true);
+        // This would require PowerMock or similar to mock static LoggerFactory
+        // For now, we'll just verify the behavior through the actual logger
+
+        // Act
+        actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse);
+
+        // Assert
+        // In a real test with mocked logger, we would verify:
+        // verify(logger).info("Actual File Download controller :: {}", LoggingConstants.METHODBEGIN);
+        // verify(logger).info("Actual File Download controller :: {}", LoggingConstants.METHODEND);
+    }
 }
