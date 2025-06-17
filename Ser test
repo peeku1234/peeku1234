@@ -1,151 +1,201 @@
+package com.sbi.yb.service.impl;
+
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.constants.ConfigurationConstants;
+import com.sbi.yb.constants.LoggingConstants;
+import com.sbi.yb.model.ActualFileDownloadRequest;
+import com.sbi.yb.model.FileDownloadResponse;
+import com.sbi.yb.model.FileMasterConfig;
+import com.sbi.yb.repository.ActualFileDownloadDao;
+import com.sbi.yb.service.ActualFileDownloadService;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Base64;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.junit.jupiter.api.Test;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.slf4j.event.Level;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
 
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.junit.jupiter.api.Assertions.*;
+/**
+ * ServiceImpl for BeneficiaryFileDownload.
+ *
+ * @author V1018111
+ */
+@Service
+public class ActualFileDownloadServiceImpl implements ActualFileDownloadService {
 
-@ExtendWith(MockitoExtension.class)
-public class CoreInterfaceImplLoggerTest {
+  private static final Logger LOGGER = LoggerFactory.getLogger(ActualFileDownloadServiceImpl.class);
+  private final ActualFileDownloadDao actualFileDownloadDao;
 
-    @Mock
-    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-    
-    @Mock
-    private JdbcTemplate jdbcTemplate;
-    
-    @InjectMocks
-    private CoreInterfaceImpl coreInterface;
-    
-    @Mock
-    private Logger logger;
+  /**
+   * ServiceImpl Constructor.
+   *
+   * @param actualFileDownloadDao manageFileBeneficiaryDao
+   * @param compositeFilePath compositeFilePath
+   * @param nonCompositeFilePath nonCompositeFilePath
+   * @param fileExtensionTxt fileExtensionTxt
+   * @param fileExtensionXml fileExtensionXml
+   */
+  @Autowired
+  public ActualFileDownloadServiceImpl(ActualFileDownloadDao actualFileDownloadDao, @Value("${path.NON_COMPOSITE}") String nonCompositeFilePath, @Value("${path.COMPOSITE}") String compositeFilePath, @Value("${FILE_EXT_TXT}") String fileExtensionTxt, @Value("${FILE_EXT_XML}") String fileExtensionXml) {
+    this.actualFileDownloadDao = actualFileDownloadDao;
+    this.nonCompositeFilePath = nonCompositeFilePath;
+    this.compositeFilePath = compositeFilePath;
+    this.fileExtensionTxt = fileExtensionTxt;
+    this.fileExtensionXml = fileExtensionXml;
+  }
 
-    @Test
-    public void testFindCoreResponseData_logsDebugWhenEnabled() {
-        // Setup
-        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(new ArrayList<>());
-        
-        // Replace logger with mock
-        Logger originalLogger = LoggerFactory.getLogger(CoreInterfaceImpl.class);
-        try {
-            // This requires PowerMock or similar to mock static LoggerFactory
-            // For now, we'll assume the logger is properly set up
-            
-            // Enable debug logging for this test
-            when(logger.isDebugEnabled()).thenReturn(true);
-            
-            // Test
-            String txnId = "123";
-            coreInterface.findCoreResponseData(txnId);
-            
-            // Verify debug logs were called
-            // This would need a proper logger mock verification
-            // verify(logger).debug("txnID :" + txnId);
-            // verify(logger).debug(eq("coreResponseDataList :"), any());
-        } finally {
-            // Restore original logger
-            // LoggerFactory.getLogger(CoreInterfaceImpl.class) = originalLogger;
-        }
+  /**
+   * Getting ActualFileDownload with encoded data.
+   */
+  @Value("${path.NON_COMPOSITE}")
+  private final String nonCompositeFilePath;
+  @Value("${path.COMPOSITE}")
+  private final String compositeFilePath;
+  @Value("${FILE_EXT_TXT}")
+  private final String fileExtensionTxt;
+  @Value("${FILE_EXT_XML}")
+  private final String fileExtensionXml;
+
+  /**
+   * Downloading actual file.
+   *
+   * @param actualFileDownloadRequest from user
+   * @return actualFileDownload response
+   */
+  @Override
+  public FileDownloadResponse downloadActualFile(ActualFileDownloadRequest actualFileDownloadRequest) {
+    LOGGER.info("downloadActualFile service :: {}", LoggingConstants.METHODBEGIN);
+    File downloadFile;
+    byte[] byteData;
+    String encodeData;
+    FileMasterConfig fileMasterConfig;
+    String fileReferenceNo = actualFileDownloadRequest.getFileReferenceNo();
+    String fileExtension = actualFileDownloadRequest.getFileExtension();
+    FileDownloadResponse fileDownloadResponse;
+    String fileName = fileReferenceNo + ConfigurationConstants.XML_EXTENSION;
+    fileMasterConfig = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
+    if (Optional.ofNullable(fileMasterConfig).isPresent()) {
+      String fileType = fileMasterConfig.getFileType();
+      LOGGER.info("FileType :: {}", fileType);
+      String filePath = fileType.equalsIgnoreCase("COMPOSITE_BEN") ? compositeFilePath : nonCompositeFilePath;
+      LOGGER.info("FilePath :: {}", filePath);
+      downloadFile = new File(filePath + fileName);
+      try (FileInputStream inputStream = new FileInputStream(downloadFile.toString())) {
+        byteData = inputStream.readAllBytes();
+      } catch (IOException exception) {
+        throw new TechnicalException(exception.getMessage(), ConfigurationConstants.YBM003);
+      }
+      encodeData = Base64.getEncoder().encodeToString(byteData);
+      LOGGER.info("Encoded the actual file of file Configuration {}", encodeData);
+      if (fileExtension.equalsIgnoreCase("txt")) {
+        fileName = fileReferenceNo + "." + fileExtensionTxt;
+      } else {
+        fileName = fileReferenceNo + "." + fileExtensionXml;
+      }
+      fileDownloadResponse = new FileDownloadResponse(encodeData, fileName, String.valueOf(MediaType.TEXT_PLAIN));
+    } else {
+      throw new TechnicalException("Requested data not present in DB", ConfigurationConstants.YBM003);
     }
+    LOGGER.info("downloadActualFile service :: {}", LoggingConstants.METHODEND);
+    return fileDownloadResponse;
+  }
 
-    @Test
-    public void testFindCoreRequestData_logsDebugWhenEnabled() {
-        // Setup
-        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(new ArrayList<>());
-        
-        // Enable debug logging for this test
-        when(logger.isDebugEnabled()).thenReturn(true);
-        
-        // Test
-        String txnId = "456";
-        coreInterface.findCoreRequestData(txnId);
-        
-        // Verify debug logs were called
-        // verify(logger).debug("txnID :" + txnId);
-        // verify(logger).debug(eq("coreRequestDataList :"), any());
-    }
-
-    @Test
-    public void testFindCoreRequestDataWithBankCode_logsInfo() {
-        // Setup
-        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class))).thenReturn(new ArrayList<>());
-        
-        // Test
-        String txnId = "789";
-        String bankCode = "SBI";
-        coreInterface.findCoreRequestData(txnId, bankCode);
-        
-        // Verify info log was called
-        // verify(logger).info("TXNNO :" + txnId + " " + "bankCode :" + bankCode);
-    }
-
-    @Test
-    public void testGetCoreServerDatas_logsErrorOnDataAccessException() throws Exception {
-        // Setup
-        when(namedParameterJdbcTemplate.getJdbcTemplate()).thenReturn(jdbcTemplate);
-        when(jdbcTemplate.queryForList(anyString(), any(Object[].class)))
-            .thenThrow(new DataAccessException("Test exception") {});
-        
-        // Test
-        String txnId = "123";
-        String type = "req";
-        List result = coreInterface.getCoreServerDatas(txnId, type);
-        
-        // Verify error log was called
-        // verify(logger).error(eq("DataAccessException :"), any(DataAccessException.class));
-        assertNull(result);
-    }
 }
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.Appender;
+I Want Junit to cover all lines only exception part was not covered from the below Junit testcases
+
+package com.sbi.yb.service;
+
+
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.model.ActualFileDownloadRequest;
+import com.sbi.yb.model.FileDownloadResponse;
+import com.sbi.yb.model.FileMasterConfig;
+import com.sbi.yb.repository.ActualFileDownloadDao;
+import com.sbi.yb.service.impl.ActualFileDownloadServiceImpl;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.slf4j.LoggerFactory;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.*;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Base64;
 
-public class CoreInterfaceImplLogbackTest {
-    
-    private Appender<ILoggingEvent> mockAppender;
-    private Logger coreInterfaceLogger;
-    
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class ActualFileDownloadServiceImplTest {
+
+    @InjectMocks
+    private ActualFileDownloadServiceImpl manageFileBeneficiaryService;
+    @Mock
+    private ActualFileDownloadDao manageFileBeneficiaryDao;
+
+    private String testFileReferenceNo = "41006289";
+    private String testFileName = "testfile.xml";
+    private String testFileContent = "Test file content";
+    ActualFileDownloadRequest request = new ActualFileDownloadRequest();
+    FileMasterConfig fileConfig = new FileMasterConfig();
+
     @BeforeEach
-    public void setup() {
-        mockAppender = mock(Appender.class);
-        coreInterfaceLogger = (Logger) LoggerFactory.getLogger(CoreInterfaceImpl.class);
-        coreInterfaceLogger.addAppender(mockAppender);
+    void setUp() throws IOException {
+        request = new ActualFileDownloadRequest();
+        request.setFileReferenceNo(testFileReferenceNo);
+        request.setFileExtension("xml");
+        fileConfig = new FileMasterConfig();
+        fileConfig.setSno("41006289");
+        fileConfig.setFileType("COMPOSITE_BEN");
+        fileConfig.setFileName(testFileName);
+        String tempDir = System.getProperty("java.io.tmpdir");
+        ReflectionTestUtils.setField(manageFileBeneficiaryService, "compositeFilePath", tempDir);
+        ReflectionTestUtils.setField(manageFileBeneficiaryService, "nonCompositeFilePath", tempDir);
+        ReflectionTestUtils.setField(manageFileBeneficiaryService, "fileExtensionTxt", "txt");
+        ReflectionTestUtils.setField(manageFileBeneficiaryService, "fileExtensionXml", "xml");
+        Path testFilePath = Path.of(tempDir, testFileReferenceNo + ".xml");
+        Files.write(testFilePath, testFileContent.getBytes());
     }
-    
+
     @Test
-    public void testDebugLogging() {
-        // Set logger level to DEBUG
-        coreInterfaceLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
-        
-        // Call method that should log
-        // coreInterface.findCoreResponseData("123");
-        
-        // Verify logging
-        ArgumentCaptor<ILoggingEvent> argumentCaptor = ArgumentCaptor.forClass(ILoggingEvent.class);
-        verify(mockAppender).doAppend(argumentCaptor.capture());
-        
-        ILoggingEvent loggingEvent = argumentCaptor.getValue();
-        assertEquals(ch.qos.logback.classic.Level.DEBUG, loggingEvent.getLevel());
-        assertTrue(loggingEvent.getFormattedMessage().contains("txnID :123"));
+    void downloadActualFile_Success() throws Exception {
+        Mockito.when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
+        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
+        Assertions.assertEquals(testFileReferenceNo + ".xml", "41006289.xml");
+        String expectedContent = Base64.getEncoder().encodeToString(testFileContent.getBytes());
+        Assertions.assertEquals(expectedContent, response.fileContent());
+        assertNotNull(response);
+//        Files.deleteIfExists(Path.of(System.getProperty("java.io.tmpdir"), testFileReferenceNo + ".xml"));
+    }
+
+    @Test
+    void downloadActualFile_FileNotFound() {
+        request.setFileReferenceNo("41006289");
+        fileConfig.setSno("123");
+        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(null);
+        assertThrows(TechnicalException.class,
+                () -> manageFileBeneficiaryService.downloadActualFile(request));
+    }
+
+    @Test
+    void downloadActualFile_txt() throws Exception {
+        request.setFileExtension("txt");
+        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
+        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
+        Assertions.assertEquals(testFileReferenceNo + ".txt", "41006289.txt");
+        Files.deleteIfExists(Path.of(System.getProperty("java.io.tmpdir"), testFileReferenceNo + ".xml"));
     }
 }
