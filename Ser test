@@ -1,116 +1,4 @@
-package com.sbi.yb.service.impl;
-
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.constants.ConfigurationConstants;
-import com.sbi.yb.constants.LoggingConstants;
-import com.sbi.yb.model.ActualFileDownloadRequest;
-import com.sbi.yb.model.FileDownloadResponse;
-import com.sbi.yb.model.FileMasterConfig;
-import com.sbi.yb.repository.ActualFileDownloadDao;
-import com.sbi.yb.service.ActualFileDownloadService;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.util.Base64;
-import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
-import org.springframework.stereotype.Service;
-
-/**
- * ServiceImpl for BeneficiaryFileDownload.
- *
- * @author V1018111
- */
-@Service
-public class ActualFileDownloadServiceImpl implements ActualFileDownloadService {
-
-  private static final Logger LOGGER = LoggerFactory.getLogger(ActualFileDownloadServiceImpl.class);
-  private final ActualFileDownloadDao actualFileDownloadDao;
-
-  /**
-   * ServiceImpl Constructor.
-   *
-   * @param actualFileDownloadDao manageFileBeneficiaryDao
-   * @param compositeFilePath compositeFilePath
-   * @param nonCompositeFilePath nonCompositeFilePath
-   * @param fileExtensionTxt fileExtensionTxt
-   * @param fileExtensionXml fileExtensionXml
-   */
-  @Autowired
-  public ActualFileDownloadServiceImpl(ActualFileDownloadDao actualFileDownloadDao, @Value("${path.NON_COMPOSITE}") String nonCompositeFilePath, @Value("${path.COMPOSITE}") String compositeFilePath, @Value("${FILE_EXT_TXT}") String fileExtensionTxt, @Value("${FILE_EXT_XML}") String fileExtensionXml) {
-    this.actualFileDownloadDao = actualFileDownloadDao;
-    this.nonCompositeFilePath = nonCompositeFilePath;
-    this.compositeFilePath = compositeFilePath;
-    this.fileExtensionTxt = fileExtensionTxt;
-    this.fileExtensionXml = fileExtensionXml;
-  }
-
-  /**
-   * Getting ActualFileDownload with encoded data.
-   */
-  @Value("${path.NON_COMPOSITE}")
-  private final String nonCompositeFilePath;
-  @Value("${path.COMPOSITE}")
-  private final String compositeFilePath;
-  @Value("${FILE_EXT_TXT}")
-  private final String fileExtensionTxt;
-  @Value("${FILE_EXT_XML}")
-  private final String fileExtensionXml;
-
-  /**
-   * Downloading actual file.
-   *
-   * @param actualFileDownloadRequest from user
-   * @return actualFileDownload response
-   */
-  @Override
-  public FileDownloadResponse downloadActualFile(ActualFileDownloadRequest actualFileDownloadRequest) {
-    LOGGER.info("downloadActualFile service :: {}", LoggingConstants.METHODBEGIN);
-    File downloadFile;
-    byte[] byteData;
-    String encodeData;
-    FileMasterConfig fileMasterConfig;
-    String fileReferenceNo = actualFileDownloadRequest.getFileReferenceNo();
-    String fileExtension = actualFileDownloadRequest.getFileExtension();
-    FileDownloadResponse fileDownloadResponse;
-    String fileName = fileReferenceNo + ConfigurationConstants.XML_EXTENSION;
-    fileMasterConfig = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
-    if (Optional.ofNullable(fileMasterConfig).isPresent()) {
-      String fileType = fileMasterConfig.getFileType();
-      LOGGER.info("FileType :: {}", fileType);
-      String filePath = fileType.equalsIgnoreCase("COMPOSITE_BEN") ? compositeFilePath : nonCompositeFilePath;
-      LOGGER.info("FilePath :: {}", filePath);
-      downloadFile = new File(filePath + fileName);
-      try (FileInputStream inputStream = new FileInputStream(downloadFile.toString())) {
-        byteData = inputStream.readAllBytes();
-      } catch (IOException exception) {
-        throw new TechnicalException(exception.getMessage(), ConfigurationConstants.YBM003);
-      }
-      encodeData = Base64.getEncoder().encodeToString(byteData);
-      LOGGER.info("Encoded the actual file of file Configuration {}", encodeData);
-      if (fileExtension.equalsIgnoreCase("txt")) {
-        fileName = fileReferenceNo + "." + fileExtensionTxt;
-      } else {
-        fileName = fileReferenceNo + "." + fileExtensionXml;
-      }
-      fileDownloadResponse = new FileDownloadResponse(encodeData, fileName, String.valueOf(MediaType.TEXT_PLAIN));
-    } else {
-      throw new TechnicalException("Requested data not present in DB", ConfigurationConstants.YBM003);
-    }
-    LOGGER.info("downloadActualFile service :: {}", LoggingConstants.METHODEND);
-    return fileDownloadResponse;
-  }
-
-}
-
-I Want Junit to cover all lines only exception part was not covered from the below Junit testcases
-
 package com.sbi.yb.service;
-
 
 import com.sbi.microservice.framework.exception.TechnicalException;
 import com.sbi.yb.model.ActualFileDownloadRequest;
@@ -178,7 +66,6 @@ class ActualFileDownloadServiceImplTest {
         String expectedContent = Base64.getEncoder().encodeToString(testFileContent.getBytes());
         Assertions.assertEquals(expectedContent, response.fileContent());
         assertNotNull(response);
-//        Files.deleteIfExists(Path.of(System.getProperty("java.io.tmpdir"), testFileReferenceNo + ".xml"));
     }
 
     @Test
@@ -196,6 +83,35 @@ class ActualFileDownloadServiceImplTest {
         when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
         FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
         Assertions.assertEquals(testFileReferenceNo + ".txt", "41006289.txt");
-        Files.deleteIfExists(Path.of(System.getProperty("java.io.tmpdir"), testFileReferenceNo + ".xml"));
+    }
+
+    @Test
+    void downloadActualFile_NonCompositeFile() throws Exception {
+        fileConfig.setFileType("NON_COMPOSITE");
+        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
+        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
+        assertNotNull(response);
+    }
+
+    @Test
+    void downloadActualFile_IOException() throws Exception {
+        // Set up a non-existent directory to force IOException
+        String invalidPath = "/invalid/path/";
+        ReflectionTestUtils.setField(manageFileBeneficiaryService, "compositeFilePath", invalidPath);
+        
+        fileConfig.setFileType("COMPOSITE_BEN");
+        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
+        
+        assertThrows(TechnicalException.class,
+                () -> manageFileBeneficiaryService.downloadActualFile(request));
+    }
+
+    @Test
+    void downloadActualFile_DefaultFileExtension() throws Exception {
+        request.setFileExtension("pdf"); // Not txt or xml
+        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
+        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
+        // Should default to xml extension
+        Assertions.assertTrue(response.fileName().endsWith(".xml"));
     }
 }
