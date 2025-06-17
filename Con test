@@ -1,75 +1,6 @@
-package com.sbi.yb.repository.impl;
-
-import com.sbi.microservice.framework.constant.ErrorCodes;
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.constants.LoggingConstants;
-import com.sbi.yb.constants.QueryConstants;
-import com.sbi.yb.model.ActualFileDownloadRequest;
-import com.sbi.yb.model.FileMasterConfig;
-import com.sbi.yb.repository.ActualFileDownloadDao;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.BeanPropertyRowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
-
-/**
- * Fetching file details from DB.
- *
- * @author V1018111
- * @version 1.0
- * @since 2025
- */
-@Repository
-public class ActualFileDownloadDaoImpl implements ActualFileDownloadDao {
-
-  /**
-   * Logger is for to print messages in logs.
-   */
-  private static final Logger LOGGER = LoggerFactory.getLogger(ActualFileDownloadDaoImpl.class);
-
-  private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-
-  /**
-   * Autowiring the JDBC Template.
-   */
-  @Autowired
-  public ActualFileDownloadDaoImpl(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
-    this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
-  }
-
-  /**
-   * Fetching file details from DB.
-   *
-   * @param fileDownloadRequest from user
-   * @return the boolean value
-   */
-  @Override
-  public FileMasterConfig getFileDetails(ActualFileDownloadRequest fileDownloadRequest) {
-    LOGGER.info("getFileDetailsStart :: {}", LoggingConstants.METHODBEGIN);
-    String fileReferenceNo = fileDownloadRequest.getFileReferenceNo();
-    FileMasterConfig fileMasterConfig;
-    try {
-      MapSqlParameterSource params = new MapSqlParameterSource();
-      params.addValue("filereferenceno", fileReferenceNo);
-      fileMasterConfig = namedParameterJdbcTemplate.queryForObject(QueryConstants.DOWNLOAD_BENEFICIARY_FILES, params, new BeanPropertyRowMapper<>(FileMasterConfig.class));
-      LOGGER.info("List of FileConfiguration :: {}", fileMasterConfig);
-    } catch (DataAccessException dataAccessException) {
-      throw new TechnicalException(dataAccessException.getMessage(), ErrorCodes.DB_ACCESS_FAILURE);
-    }
-    LOGGER.info("getFileDetailsEnd :: {}", LoggingConstants.METHODEND);
-    return fileMasterConfig;
-  }
-
-}
-
-I want Junit test case for DataAccessException and want continuationtion for below Junit
 package com.sbi.yb.repository;
 
-
+import com.sbi.microservice.framework.constant.ErrorCodes;
 import com.sbi.microservice.framework.exception.TechnicalException;
 import com.sbi.yb.model.ActualFileDownloadRequest;
 import com.sbi.yb.model.FileMasterConfig;
@@ -88,8 +19,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -97,28 +27,116 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ActualFileDownloadDaoImplTest {
 
-  @InjectMocks
-  ActualFileDownloadDaoImpl manageFileBeneficiaryDao;
+    @InjectMocks
+    ActualFileDownloadDaoImpl actualFileDownloadDao;
 
-  @Mock
-  NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+    @Mock
+    NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
-  ActualFileDownloadRequest actualFileDownloadRequest = new ActualFileDownloadRequest();
-  FileMasterConfig fileMasterConfig = new FileMasterConfig();
+    ActualFileDownloadRequest actualFileDownloadRequest;
+    FileMasterConfig fileMasterConfig;
 
-  @BeforeEach
-  void setUp() {
-    actualFileDownloadRequest.setFileReferenceNo("41006289");
-  }
+    @BeforeEach
+    void setUp() {
+        actualFileDownloadRequest = new ActualFileDownloadRequest();
+        actualFileDownloadRequest.setFileReferenceNo("41006289");
+        
+        fileMasterConfig = new FileMasterConfig();
+        fileMasterConfig.setFileReferenceNo("41006289");
+        fileMasterConfig.setFileName("testfile.pdf");
+    }
 
-  @Test
-  void getFileDetailsTest() {
-    Mockito.when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class))).thenReturn(fileMasterConfig);
-    fileMasterConfig = manageFileBeneficiaryDao.getFileDetails(actualFileDownloadRequest);
-    Mockito.verify(namedParameterJdbcTemplate, Mockito.times(0)).query(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
-    Assertions.assertEquals("41006289", actualFileDownloadRequest.getFileReferenceNo());
-    assertNotNull(fileMasterConfig);
-  }
+    @Test
+    void getFileDetailsTest_Success() {
+        // Mock the JDBC call
+        when(namedParameterJdbcTemplate.queryForObject(
+                anyString(), 
+                any(MapSqlParameterSource.class), 
+                any(BeanPropertyRowMapper.class)))
+            .thenReturn(fileMasterConfig);
 
+        // Call the method
+        FileMasterConfig result = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
+
+        // Verify the results
+        assertNotNull(result);
+        assertEquals("41006289", result.getFileReferenceNo());
+        assertEquals("testfile.pdf", result.getFileName());
+        
+        // Verify the JDBC call was made
+        verify(namedParameterJdbcTemplate, times(1))
+            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
+    }
+
+    @Test
+    void getFileDetailsTest_DataAccessException() {
+        // Mock the JDBC call to throw exception
+        when(namedParameterJdbcTemplate.queryForObject(
+                anyString(), 
+                any(MapSqlParameterSource.class), 
+                any(BeanPropertyRowMapper.class)))
+            .thenThrow(new DataAccessException("Database connection failed") {});
+
+        // Verify that TechnicalException is thrown
+        TechnicalException exception = assertThrows(TechnicalException.class, 
+            () -> actualFileDownloadDao.getFileDetails(actualFileDownloadRequest));
+
+        // Verify exception details
+        assertEquals("Database connection failed", exception.getMessage());
+        assertEquals(ErrorCodes.DB_ACCESS_FAILURE, exception.getErrorCode());
+        
+        // Verify the JDBC call was made
+        verify(namedParameterJdbcTemplate, times(1))
+            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
+    }
+
+    @Test
+    void getFileDetailsTest_NullRequest() {
+        assertThrows(NullPointerException.class, 
+            () -> actualFileDownloadDao.getFileDetails(null));
+    }
+
+    @Test
+    void getFileDetailsTest_EmptyFileReference() {
+        // Prepare test data
+        ActualFileDownloadRequest request = new ActualFileDownloadRequest();
+        request.setFileReferenceNo("");
+        
+        // Mock the JDBC call to return null
+        when(namedParameterJdbcTemplate.queryForObject(
+                anyString(), 
+                any(MapSqlParameterSource.class), 
+                any(BeanPropertyRowMapper.class)))
+            .thenReturn(null);
+
+        // Call the method
+        FileMasterConfig result = actualFileDownloadDao.getFileDetails(request);
+
+        // Verify results
+        assertNull(result);
+        
+        // Verify the JDBC call was made
+        verify(namedParameterJdbcTemplate, times(1))
+            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
+    }
+
+    @Test
+    void getFileDetailsTest_NoResultsFound() {
+        // Mock the JDBC call to return null (no results)
+        when(namedParameterJdbcTemplate.queryForObject(
+                anyString(), 
+                any(MapSqlParameterSource.class), 
+                any(BeanPropertyRowMapper.class)))
+            .thenReturn(null);
+
+        // Call the method
+        FileMasterConfig result = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
+
+        // Verify results
+        assertNull(result);
+        
+        // Verify the JDBC call was made
+        verify(namedParameterJdbcTemplate, times(1))
+            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
+    }
 }
-
