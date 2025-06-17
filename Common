@@ -1,231 +1,177 @@
-import static org.junit.jupiter.api.Assertions.*;
-import org.junit.jupiter.api.BeforeEach;
+package com.sbi.yb.controller;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.SBIApplicationResponse;
+import com.sbi.microservice.framework.model.Status;
+import com.sbi.yb.constants.ConfigurationConstants;
+import com.sbi.yb.constants.LoggingConstants;
+import com.sbi.yb.model.ActualFileDownloadRequest;
+import com.sbi.yb.model.FileDownloadResponse;
+import com.sbi.yb.service.ActualFileDownloadService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Optional;
+
+/**
+ * API Controller for BeneficiaryFileDownload.
+ *
+ * @author V1018111
+ */
+@RestController
+@RequestMapping("/v1.0.0")
+public class ActualFileDownloadController {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(ActualFileDownloadController.class);
+
+
+  private final ActualFileDownloadService actualFileDownloadService;
+
+  /**
+   * actualFileDownloadController constructor.
+   *
+   * @param actualFileDownloadService actualFileDownloadService
+   */
+  @Autowired
+  public ActualFileDownloadController(ActualFileDownloadService actualFileDownloadService) {
+    this.actualFileDownloadService = actualFileDownloadService;
+  }
+
+  /**
+   * Downloading actual file.
+   *
+   * @param request  from user
+   * @param response from API
+   * @return actualFileDownload
+   */
+
+  @PostMapping("/actual-ben-txn")
+  public ResponseEntity<SBIApplicationResponse> downloadActualFile(HttpServletRequest request, HttpServletResponse response) {
+    LOGGER.info("Actual File Download controller :: {}", LoggingConstants.METHODBEGIN);
+    ObjectMapper mapper = new ObjectMapper();
+
+    Optional<String> payload = safeGetParameter(request, "plainPayload");
+    ActualFileDownloadRequest fileDownloadRequest;
+    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
+    FileDownloadResponse fileDownloadResponse;
+
+    try {
+      if (payload.isPresent()) {
+        fileDownloadRequest = mapper.readValue(payload.get(), ActualFileDownloadRequest.class);
+      } else {
+        throw new ValidationException("Invalid request", ConfigurationConstants.YBM003);
+      }
+      fileDownloadResponse = actualFileDownloadService.downloadActualFile(fileDownloadRequest);
+      if (Optional.ofNullable(fileDownloadResponse).isPresent()) {
+        sbiApplicationResponse.setData(mapper.writeValueAsString(fileDownloadResponse));
+        sbiApplicationResponse.setStatus(Status.SUCCESS.getStatusValue());
+        sbiApplicationResponse.setStatusCode(ConfigurationConstants.API000000);
+      }
+    } catch (JsonProcessingException jsonProcessingException) {
+      throw new ValidationException(jsonProcessingException.getMessage(), ConfigurationConstants.YBM002);
+    }
+    LOGGER.info("Actual File Download controller :: {}", LoggingConstants.METHODEND);
+    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
+  }
+
+  /**
+   * Checking nullable for request.
+   *
+   * @param request request
+   * @param name    name
+   * @return request String
+   */
+  public static Optional<String> safeGetParameter(HttpServletRequest request, String name) {
+    return Optional.ofNullable((String) request.getAttribute(name));
+  }
+
+}
+I want Junit test case for JsonProcessingException and want continuationtion for below Junit
+package com.sbi.yb.controller;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.Status;
+import com.sbi.yb.constants.ConfigurationConstants;
+import com.sbi.yb.model.ActualFileDownloadRequest;
+import com.sbi.yb.model.FileDownloadResponse;
+import com.sbi.yb.service.impl.ActualFileDownloadServiceImpl;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
-import org.springframework.util.StringUtils;
-import java.util.ArrayList;
-import java.util.List;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-class FixedConfigurationServiceTest {
+import java.util.HashMap;
+import java.util.Map;
 
-    private FixedConfigurationService service;
-    private SaveFileConfigurationRequest request;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+
+@ExtendWith(MockitoExtension.class)
+class ActualFileDownloadControllerTest {
+    @InjectMocks
+    private ActualFileDownloadController manageFileBeneficiaryController;
+    @Mock
+    private ActualFileDownloadServiceImpl manageFileBeneficiaryService;
+    @Mock
+    private HttpServletRequest httpServletRequest;
+    @Mock
+    private HttpServletResponse httpServletResponse;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Test
+    void downloadActualFile() throws Exception {
+        ActualFileDownloadRequest fileDownloadRequest = new ActualFileDownloadRequest();
+        FileDownloadResponse fileDownloadResponse = null;
+        fileDownloadRequest.setFileExtension("CSV");
+        fileDownloadRequest.setFileReferenceNo("41006289");
+        Map<String, Object> mockFileContent = new HashMap<>();
+        mockFileContent.put("SUCCESS", Status.SUCCESS);
+        mockFileContent.put("API000000", ConfigurationConstants.API000000);
+        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(fileDownloadRequest));
+        Mockito.when(manageFileBeneficiaryService.downloadActualFile(any(ActualFileDownloadRequest.class))).thenReturn(fileDownloadResponse);
+        manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse);
+        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+
+    }
+    @Test
+    void downloadActualFile_FileDownloadResponse() throws Exception {
+        ActualFileDownloadRequest fileDownloadRequest = new ActualFileDownloadRequest();
+        FileDownloadResponse fileDownloadResponse = new FileDownloadResponse("fileContent","fileName","contentType");
+        fileDownloadRequest.setFileExtension("CSV");
+        fileDownloadRequest.setFileReferenceNo("41006289");
+        Map<String, Object> mockFileContent = new HashMap<>();
+        mockFileContent.put("SUCCESS", Status.SUCCESS);
+        mockFileContent.put("API000000", ConfigurationConstants.API000000);
+        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(objectMapper.writeValueAsString(fileDownloadRequest));
+        Mockito.when(manageFileBeneficiaryService.downloadActualFile(any(ActualFileDownloadRequest.class))).thenReturn(fileDownloadResponse);
+        manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse);
+        Mockito.verify(httpServletRequest).getAttribute("plainPayload");
+
+    }
+    @Test
+    void exception() {
+        ActualFileDownloadRequest fileDownloadRequest = null;
+        Mockito.when(httpServletRequest.getAttribute("plainPayload")).thenReturn(fileDownloadRequest).thenThrow(new ValidationException("e", "Error"));
+        assertThrows(ValidationException.class, () ->
+            manageFileBeneficiaryController.downloadActualFile(httpServletRequest, httpServletResponse));
+
+
+    }
     
-    @BeforeEach
-    void setUp() {
-        service = new FixedConfigurationService();
-        request = new SaveFileConfigurationRequest();
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_AccountNo() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            ServiceConstants.ACCOUNT_NO, 
-            "Account Number", 
-            true, 
-            10, 
-            20, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        service.setFixedConfigurationDetails(request);
-        
-        List<FixedConfiguration> result = request.getFixedConfigurations();
-        assertEquals(2, result.size());
-        assertEquals(ServiceConstants.DEBIT_ACCOUNT_NO, result.get(0).getFieldName());
-        assertEquals(ServiceConstants.CREDIT_ACCOUNT_NO, result.get(1).getFieldName());
-        assertEquals(9, result.get(0).getStartIndex()); // verify index adjustment
-        assertEquals(19, result.get(0).getEndIndex());
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_BranchCode() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            ServiceConstants.BRANCH_CODE_OR_IFSC_CODE, 
-            "Branch Code", 
-            false, 
-            5, 
-            10, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        service.setFixedConfigurationDetails(request);
-        
-        List<FixedConfiguration> result = request.getFixedConfigurations();
-        assertEquals(2, result.size());
-        assertEquals(ServiceConstants.DEBIT_BRANCH_CODE, result.get(0).getFieldName());
-        assertEquals(ServiceConstants.CREDIT_BRANCH_CODE, result.get(1).getFieldName());
-        assertEquals(4, result.get(0).getStartIndex());
-        assertEquals(9, result.get(0).getEndIndex());
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_PurposeOfTransaction() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            ServiceConstants.PURPOSE_OF_TRANSACTION, 
-            "Purpose", 
-            true, 
-            15, 
-            30, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        service.setFixedConfigurationDetails(request);
-        
-        List<FixedConfiguration> result = request.getFixedConfigurations();
-        assertEquals(1, result.size());
-        assertEquals(ServiceConstants.DESCRIPTION, result.get(0).getFieldName());
-        assertEquals(14, result.get(0).getStartIndex());
-        assertEquals(29, result.get(0).getEndIndex());
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_PaymentIdentifier() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            ServiceConstants.PAYMENT_IDENTIFIER, 
-            "Payment ID", 
-            false, 
-            1, 
-            5, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        service.setFixedConfigurationDetails(request);
-        
-        List<FixedConfiguration> result = request.getFixedConfigurations();
-        assertEquals(1, result.size());
-        assertEquals(ServiceConstants.NEW_PAYMENT_IDENTIFIER, result.get(0).getFieldName());
-        assertEquals(0, result.get(0).getStartIndex());
-        assertEquals(4, result.get(0).getEndIndex());
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_DefaultCase() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            "OTHER_FIELD", 
-            "Other Field", 
-            true, 
-            20, 
-            25, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        service.setFixedConfigurationDetails(request);
-        
-        List<FixedConfiguration> result = request.getFixedConfigurations();
-        assertEquals(1, result.size());
-        assertEquals("OTHER_FIELD", result.get(0).getFieldName());
-        assertEquals(19, result.get(0).getStartIndex());
-        assertEquals(24, result.get(0).getEndIndex());
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_OutrefCase() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            "OUTREF_SOMETHING", 
-            "Outref Field", 
-            true, 
-            10, 
-            15, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        service.setFixedConfigurationDetails(request);
-        
-        List<FixedConfiguration> result = request.getFixedConfigurations();
-        assertEquals(1, result.size());
-        assertEquals("OUTREF_SOMETHING", result.get(0).getFieldName());
-        assertEquals(10, result.get(0).getStartIndex()); // no index adjustment for OUTREF
-        assertEquals(15, result.get(0).getEndIndex());
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_ValidationException_MissingFieldName() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            "", // empty field name
-            "Description", 
-            true, 
-            10, 
-            20, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        assertThrows(ValidationException.class, () -> {
-            service.setFixedConfigurationDetails(request);
-        });
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_ValidationException_InvalidIndices() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            "FIELD_NAME", 
-            "Description", 
-            true, 
-            0, // invalid start index
-            20, 
-            "String", 
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        assertThrows(ValidationException.class, () -> {
-            service.setFixedConfigurationDetails(request);
-        });
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_ValidationException_OutrefMissingFieldType() {
-        List<FixedConfiguration> inputConfigs = new ArrayList<>();
-        inputConfigs.add(new FixedConfiguration(
-            "OUTREF_FIELD", 
-            "Description", 
-            true, 
-            10, 
-            20, 
-            "", // missing field type for OUTREF
-            "alias", 
-            "info"
-        ));
-        
-        request.setFixedConfigurations(inputConfigs);
-        assertThrows(ValidationException.class, () -> {
-            service.setFixedConfigurationDetails(request);
-        });
-    }
-
-    @Test
-    void testSetFixedConfigurationDetails_EmptyList() {
-        request.setFixedConfigurations(new ArrayList<>());
-        service.setFixedConfigurationDetails(request);
-        assertTrue(request.getFixedConfigurations().isEmpty());
-    }
 }
