@@ -1,194 +1,409 @@
-package com.sbi.yb.controller;
+package com.sbi.yb.repository.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.SBIApplicationResponse;
-import com.sbi.microservice.framework.model.Status;
-import com.sbi.yb.constants.ConfigurationConstants;
-import com.sbi.yb.constants.LoggingConstants;
-import com.sbi.yb.model.ActualFileDownloadRequest;
-import com.sbi.yb.model.FileDownloadResponse;
-import com.sbi.yb.service.ActualFileDownloadService;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import com.sbi.yb.constants.QueryConstants;
+import com.sbi.yb.model.Beneficiary;
+import com.sbi.yb.model.BeneficiaryDetails;
+import com.sbi.yb.model.BeneficiaryFile;
+import com.sbi.yb.model.BeneficiaryFileRequest;
+import com.sbi.yb.repository.ManageFileBeneficiaryDao;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.stereotype.Repository;
 
-import java.util.Optional;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static com.sbi.yb.constants.QueryConstants.*;
+import static com.sbi.yb.constants.UtilConstants.*;
 
-@ExtendWith(MockitoExtension.class)
-class ActualFileDownloadControllerTest {
 
-    @Mock
-    private ActualFileDownloadService actualFileDownloadService;
+/*
+ * @author V1017263
+ * @version 1.0
+ */
 
-    @Mock
-    private HttpServletRequest httpServletRequest;
 
-    @Mock
-    private HttpServletResponse httpServletResponse;
+@Repository
+public class ManageFileBeneficiaryDaoImpl implements ManageFileBeneficiaryDao {
 
-    @InjectMocks
-    private ActualFileDownloadController actualFileDownloadController;
+  private static final Logger logger = LoggerFactory.getLogger(ManageFileBeneficiaryDaoImpl.class);
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private ActualFileDownloadRequest validRequest;
-    private FileDownloadResponse successResponse;
+  private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
-    @BeforeEach
-    void setUp() {
-        validRequest = new ActualFileDownloadRequest();
-        validRequest.setFileExtension("CSV");
-        validRequest.setFileReferenceNo("41006289");
+  public ManageFileBeneficiaryDaoImpl(final NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
+    this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
+  }
 
-        successResponse = new FileDownloadResponse("fileContent", "fileName", "contentType");
+
+  @Override
+  public List<BeneficiaryFile> getBeneFiles(
+          BeneficiaryFileRequest request, AtomicInteger totalCount) {
+    MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("corpId", request.getCorporateAlias())
+            .addValue("offset", (request.getPageNo() - 1) * request.getPageSize())
+            .addValue("limit", request.getPageNo() * request.getPageSize())
+            .addValue("tabName", request.getTabName());
+
+    String searchCondition = "";
+    if (request.getSearchBy() != null && request.getSearchBy().length() >= 3) {
+      searchCondition = "AND (a.SNO LIKE :searchValue OR "
+              + "LOWER(a.ADDITIONAL_FIELD6) LIKE LOWER(:searchValue)) ";
+      params.addValue("searchValue", "%" + request.getSearchBy() + "%");
     }
 
-    @Test
-    void downloadActualFile_Success() throws Exception {
-        // Arrange
-        String jsonPayload = objectMapper.writeValueAsString(validRequest);
-        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(jsonPayload);
-        when(actualFileDownloadService.downloadActualFile(any(ActualFileDownloadRequest.class)))
-                .thenReturn(successResponse);
-
-        // Act
-        ResponseEntity<SBIApplicationResponse> response = 
-            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse);
-
-        // Assert
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
-        assertEquals(ConfigurationConstants.API000000, response.getBody().getStatusCode());
-        assertNotNull(response.getBody().getData());
-
-        verify(httpServletRequest).getAttribute("plainPayload");
-        verify(actualFileDownloadService).downloadActualFile(any(ActualFileDownloadRequest.class));
+    String uploaderCondition = "";
+    if (request.getFilterBy() != null && request.getFilterBy().containsKey("uploader")) {
+      uploaderCondition = "AND a.USERNAME = :username ";
+      params.addValue("username", request.getFilterBy().get("uploader"));
     }
 
-    @Test
-    void downloadActualFile_EmptyPayload() {
-        // Arrange
-        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(null);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, () ->
-            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse));
-
-        assertEquals("Invalid request", exception.getMessage());
-        assertEquals(ConfigurationConstants.YBM003, exception.getErrorCode());
-
-        verify(httpServletRequest).getAttribute("plainPayload");
-        verifyNoInteractions(actualFileDownloadService);
+    String uploadStatusFilter = "";
+    if (request.getFilterBy() != null && request.getFilterBy().containsKey("uploadStatus")) {
+      uploadStatusFilter = " AND br.uploadStatus = :uploadStatus";
+      params.addValue("uploadStatus", request.getFilterBy().get("uploadStatus"));
     }
 
-    @Test
-    void downloadActualFile_InvalidJson() {
-        // Arrange
-        String invalidJson = "{ invalid json }";
-        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(invalidJson);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, () ->
-            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse));
-
-        assertEquals(ConfigurationConstants.YBM002, exception.getErrorCode());
-
-        verify(httpServletRequest).getAttribute("plainPayload");
-        verifyNoInteractions(actualFileDownloadService);
+    String approvalStatusFilter = "";
+    if (request.getFilterBy() != null && request.getFilterBy().containsKey("approvalStatus")) {
+      approvalStatusFilter = " AND br.approvalStatus = :approvalStatus";
+      params.addValue("approvalStatus", request.getFilterBy().get("approvalStatus"));
     }
 
-    @Test
-    void downloadActualFile_ServiceReturnsNull() throws Exception {
-        // Arrange
-        String jsonPayload = objectMapper.writeValueAsString(validRequest);
-        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(jsonPayload);
-        when(actualFileDownloadService.downloadActualFile(any(ActualFileDownloadRequest.class)))
-                .thenReturn(null);
-
-        // Act
-        ResponseEntity<SBIApplicationResponse> response = 
-            actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse);
-
-        // Assert
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
-        assertEquals(ConfigurationConstants.API000000, response.getBody().getStatusCode());
-        assertNull(response.getBody().getData());
-
-        verify(httpServletRequest).getAttribute("plainPayload");
-        verify(actualFileDownloadService).downloadActualFile(any(ActualFileDownloadRequest.class));
+    String fileTypeFilter = "";
+    if (request.getFilterBy() != null && request.getFilterBy().containsKey("fileType")) {
+      fileTypeFilter = " AND br.fileType = :fileType";
+      params.addValue("fileType", request.getFilterBy().get("fileType"));
     }
 
-    @Test
-    void safeGetParameter_WithValue() {
-        // Arrange
-        String paramName = "testParam";
-        String paramValue = "testValue";
-        when(httpServletRequest.getAttribute(paramName)).thenReturn(paramValue);
+    String paginatedQuery = GET_FILE_LIST
+            .replace("{searchCondition}", searchCondition)
+            .replace("{uploaderCondition}", uploaderCondition)
+            .replace("{paginationCondition}", "WHERE rn > :offset AND rn <= :limit")
+            .replace("{uploadStatusFilter}", uploadStatusFilter)
+            .replace("{approvalStatusFilter}", approvalStatusFilter)
+            .replace("{fileTypeFilter}", fileTypeFilter);
 
-        // Act
-        Optional<String> result = ActualFileDownloadController.safeGetParameter(httpServletRequest, paramName);
+    String countQuery = "SELECT COUNT(*) FROM ("
+            + GET_FILE_LIST
+            .replace("{searchCondition}", searchCondition)
+            .replace("{uploaderCondition}", uploaderCondition)
+            .replace("{paginationCondition}", "")
+            .replace("{uploadStatusFilter}", uploadStatusFilter)
+            .replace("{approvalStatusFilter}", approvalStatusFilter)
+            .replace("{fileTypeFilter}", fileTypeFilter)
+            + ") total";
 
-        // Assert
-        assertTrue(result.isPresent());
-        assertEquals(paramValue, result.get());
+    totalCount.set(namedParameterJdbcTemplate.queryForObject(countQuery, params, Integer.class));
+
+    return namedParameterJdbcTemplate.query(paginatedQuery, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryFileRowMapper());
+  }
+
+  @Override
+  public BeneficiaryDetails getFileDetails(String corpId, String fileRefNo) {
+    logger.info("getFileDetails() STARTS");
+    Map<String, Object> params = new HashMap<>();
+    params.put("corpId", corpId);
+    params.put(FILE_REFERENCE_NO, fileRefNo);
+    params.put("fileType", ACC_BENE_FILE_TYPES);
+
+    logger.info("getFileDetails() ENDS");
+
+    return namedParameterJdbcTemplate.queryForObject(FETCH_UPLOADED_FILE_DETAILS,
+            params, new ManageFileBeneficiaryDaoImpl.BeneficiaryDetailsRowMapper());
+  }
+
+  @Override
+  public Map<String, Integer> getBeneficiaryCounts(String fileRefNo) {
+    Map<String, Object> result = namedParameterJdbcTemplate.queryForMap(
+            GET_FILE_DETAILS_COUNT,
+            Collections.singletonMap("fileRefNo", fileRefNo)
+    );
+
+    Map<String, Integer> countMap = new HashMap<>();
+    countMap.put(BENEFICIARY_COUNT, ((Number) result.get(BENEFICIARY_COUNT)).intValue());
+    countMap.put(APPROVED_COUNT, ((Number) result.get(APPROVED_COUNT)).intValue());
+    countMap.put(REJECTED_COUNT, ((Number) result.get(REJECTED_COUNT)).intValue());
+    countMap.put(PENDING_COUNT, ((Number) result.get(PENDING_COUNT)).intValue());
+    countMap.put(VALIDATION_FAILURE_COUNT,
+            ((Number) result.get(VALIDATION_FAILURE_COUNT)).intValue());
+
+    return countMap;
+  }
+
+  @Override
+  public List<Beneficiary> getAllBeneficiaries(String fileRefNo) {
+    Map<String, Object> params = new HashMap<>();
+    params.put(FILE_REFERENCE_NO, fileRefNo);
+    return namedParameterJdbcTemplate.query(
+            COMBINED_WITH_STATUS, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+  }
+
+  @Override
+  public List<Beneficiary> getBeneficiariesByStatus(String fileRefNo, String status) {
+    Map<String, Object> params = new HashMap<>();
+    params.put(FILE_REFERENCE_NO, fileRefNo);
+
+    return switch (status.toUpperCase()) {
+      case "APPROVED" -> namedParameterJdbcTemplate.query(
+              APPROVED_FILE_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+      case "REJECTED" -> namedParameterJdbcTemplate.query(
+              REJECTED_FILE_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+      case "FAILURE" -> namedParameterJdbcTemplate.query(
+              FAILURE_FILE_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+      case "PENDING" -> namedParameterJdbcTemplate.query(
+              SELECT_PENDING_FILES, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+      default -> Collections.emptyList();
+    };
+  }
+
+  @Override
+  public Map<String, Integer> getActionTypeCounts(String fileReferenceNo) {
+    Map<String, Integer> actionCounts = new HashMap<>();
+
+    MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue(FILE_REFERENCE_NO, fileReferenceNo);
+
+    Map<String, Object> result = namedParameterJdbcTemplate
+            .queryForMap(SELECT_COUNT_BY_ACTION_TYPE, params);
+
+    // Map results to action counts
+    actionCounts.put(SAME_BANK_ADD, result.get(SAME_BANK_ADD) != null
+            ? ((Number) result.get(SAME_BANK_ADD)).intValue() : 0);
+    actionCounts.put(OTHER_BANK_ADD, result.get(OTHER_BANK_ADD) != null
+            ? ((Number) result.get(OTHER_BANK_ADD)).intValue() : 0);
+    actionCounts.put(SAME_BANK_DELETE, result.get(SAME_BANK_DELETE) != null
+            ? ((Number) result.get(SAME_BANK_DELETE)).intValue() : 0);
+    actionCounts.put(OTHER_BANK_DELETE, result.get(OTHER_BANK_DELETE) != null
+            ? ((Number) result.get(OTHER_BANK_DELETE)).intValue() : 0);
+
+    return actionCounts;
+  }
+
+
+  @Override
+  public Map<String, Integer> getActionTypeCountsByStatus(String fileReferenceNo, String status) {
+
+    String action = switch (status.toUpperCase()) {
+      case "APPROVED" -> "Approved";
+      case "REJECTED" -> "Rejected";
+      case "PENDING" -> "Pending";
+      case "FAILURE" -> "Failure";
+      default -> status;
+    };
+
+    MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue(FILE_REFERENCE_NO, fileReferenceNo)
+            .addValue("status", action);
+
+    return namedParameterJdbcTemplate.queryForObject(
+            SELECT_ACTION_TYPE_BY_STATUS,
+            params,
+            (rs, rowNum) -> {
+              Map<String, Integer> actionCounts = new HashMap<>();
+              actionCounts.put(SAME_BANK_ADD, rs.getInt(SAME_BANK_ADD));
+              actionCounts.put(SAME_BANK_DELETE, rs.getInt(SAME_BANK_DELETE));
+              actionCounts.put(OTHER_BANK_ADD, rs.getInt(OTHER_BANK_ADD));
+              actionCounts.put(OTHER_BANK_DELETE, rs.getInt(OTHER_BANK_DELETE));
+              return actionCounts;
+            });
+  }
+
+  public List<Beneficiary> getBeneficiariesByTypeAction(
+          String fileName, String accountNumber, String code,
+          String benTypeAction, String fileRefNo) {
+    Map<String, Object> params = new HashMap<>();
+    params.put(FILE_REFERENCE_NO, fileRefNo);
+    params.put("fileName", fileName);
+    params.put("actNo", accountNumber);
+    params.put("code", code);
+
+    if (benTypeAction.equalsIgnoreCase(SAME_BANK_ADD_BENE)) {
+      return namedParameterJdbcTemplate.query(
+              SELECT_3P_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_ADD_BENE)) {
+      return namedParameterJdbcTemplate.query(
+              SELECT_IBTP_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+    } else if (benTypeAction.equalsIgnoreCase(SAME_BANK_DELETE_BENE)) {
+      return namedParameterJdbcTemplate.query(
+              SELECT_D3P_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_DELETE_BENE)) {
+      return namedParameterJdbcTemplate.query(
+              SELECT_DIBTP_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+    }
+    return List.of();
+  }
+
+  @Override
+  public List<Beneficiary> getBeneficiariesByTypeActionOnFailure(
+          String fileName, String accountNumber, String code,
+          String benTypeAction, String fileRefNo) {
+    Map<String, Object> params = new HashMap<>();
+    params.put(FILE_REFERENCE_NO, fileRefNo);
+    params.put("fileName", fileName);
+    params.put("actNo", accountNumber);
+    params.put("code", code);
+    if (benTypeAction.equalsIgnoreCase(SAME_BANK_ADD_BENE)) {
+      params.put("action", "A");
+      params.put("type", "S");
+    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_ADD_BENE)) {
+      params.put("action", "A");
+      params.put("type", "O");
+    } else if (benTypeAction.equalsIgnoreCase(SAME_BANK_DELETE_BENE)) {
+      params.put("action", "D");
+      params.put("type", "S");
+    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_DELETE_BENE)) {
+      params.put("action", "D");
+      params.put("type", "O");
     }
 
-    @Test
-    void safeGetParameter_WithoutValue() {
-        // Arrange
-        String paramName = "testParam";
-        when(httpServletRequest.getAttribute(paramName)).thenReturn(null);
+    return namedParameterJdbcTemplate.query(
+            FAILURE_FILE_LIST_BY_ACTION, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
+  }
 
-        // Act
-        Optional<String> result = ActualFileDownloadController.safeGetParameter(httpServletRequest, paramName);
+  @Override
+  public List<String> getUploaderList(String corporateId, String userName) {
+    Map<String, Object> params = new HashMap<>();
+    params.put("corpId", corporateId);
+    params.put("userName", userName);
 
-        // Assert
-        assertFalse(result.isPresent());
+    return namedParameterJdbcTemplate.queryForList(GET_UPLOADER_NAMES, params, String.class);
+
+  }
+
+
+  public static class BeneficiaryFileRowMapper implements RowMapper<BeneficiaryFile> {
+
+    public BeneficiaryFile mapRow(ResultSet rs, int index) throws SQLException {
+      BeneficiaryFile beneficiaryFile = new BeneficiaryFile();
+
+      beneficiaryFile.setFileReferenceNo(rs.getString("fileRefNo"));
+      beneficiaryFile.setFileName(rs.getString("fileName"));
+      beneficiaryFile.setFileType(rs.getString("fileType"));  // Static value
+      beneficiaryFile.setUploadedOn(rs.getString("fileUploadedDate"));
+      beneficiaryFile.setUploadedBy(rs.getString("username"));
+      beneficiaryFile.setUploadStatus(rs.getString("uploadStatus"));
+      beneficiaryFile.setApprovalStatus(rs.getString("approvalStatus"));
+      beneficiaryFile.setApprovedBy(rs.getString("approvedBy"));
+      beneficiaryFile.setApprovedOn(rs.getString("approvedOn"));
+
+      // Set counts
+      Map<String, Integer> countMap = new HashMap<>();
+      countMap.put(BENEFICIARY_COUNT, rs.getInt("benCount"));
+      countMap.put(APPROVED_COUNT, rs.getInt("approvedCount"));
+      countMap.put(REJECTED_COUNT, rs.getInt("rejectedCount"));
+      countMap.put(PENDING_COUNT, rs.getInt("pendingCount"));
+      countMap.put(VALIDATION_FAILURE_COUNT, rs.getInt("failureCount"));
+      beneficiaryFile.setBeneficiaryStatusCount(countMap);
+
+      return beneficiaryFile;
     }
+  }
 
-    @Test
-    void loggerShouldBeInitialized() {
-        // This test verifies the logger is properly initialized
-        Logger logger = LoggerFactory.getLogger(ActualFileDownloadController.class);
-        assertNotNull(logger);
+  public static class BeneficiaryRowMapper implements RowMapper<Beneficiary> {
+
+    public Beneficiary mapRow(ResultSet rs, int index) throws SQLException {
+      Beneficiary beneficiary = new Beneficiary();
+      beneficiary.setOid(rs.getString("OID"));
+      beneficiary.setAccountNumber(rs.getString("ACCOUNTNO"));
+      beneficiary.setIfscCode(rs.getString("IFSCCODE"));
+      beneficiary.setName(rs.getString("NAME"));
+      beneficiary.setComments(rs.getString("COMMENTS"));
+      beneficiary.setCode(rs.getString("CODE"));
+      beneficiary.setAction(rs.getString("ACTION"));
+      beneficiary.setType(rs.getString("TYPE"));
+      beneficiary.setStatus(rs.getString("STATUS"));
+      return beneficiary;
     }
+  }
 
-    @Test
-    void controllerLogsMethodBeginAndEnd() throws Exception {
-        // Arrange
-        String jsonPayload = objectMapper.writeValueAsString(validRequest);
-        when(httpServletRequest.getAttribute("plainPayload")).thenReturn(jsonPayload);
-        when(actualFileDownloadService.downloadActualFile(any(ActualFileDownloadRequest.class)))
-                .thenReturn(successResponse);
+  public static class BeneficiaryDetailsRowMapper implements RowMapper<BeneficiaryDetails> {
 
-        Logger logger = mock(Logger.class);
-        when(logger.isInfoEnabled()).thenReturn(true);
-        // This would require PowerMock or similar to mock static LoggerFactory
-        // For now, we'll just verify the behavior through the actual logger
-
-        // Act
-        actualFileDownloadController.downloadActualFile(httpServletRequest, httpServletResponse);
-
-        // Assert
-        // In a real test with mocked logger, we would verify:
-        // verify(logger).info("Actual File Download controller :: {}", LoggingConstants.METHODBEGIN);
-        // verify(logger).info("Actual File Download controller :: {}", LoggingConstants.METHODEND);
+    public BeneficiaryDetails mapRow(ResultSet rs, int index) throws SQLException {
+      BeneficiaryDetails beneficiaryDetails = new BeneficiaryDetails();
+      beneficiaryDetails.setFileReferenceNo(rs.getString("FILEREFNO"));
+      beneficiaryDetails.setFileName(rs.getString("FILENAME"));
+      beneficiaryDetails.setUploadedOn(rs.getString("FILEUPLOADEDDATE"));
+      beneficiaryDetails.setUploadedBy(rs.getString("USERNAME"));
+      beneficiaryDetails.setUploadStatus(rs.getString("UPLOADSTATUS"));
+      beneficiaryDetails.setFileType(rs.getString("FILETYPE"));
+      return beneficiaryDetails;
     }
+  }
+
+  /**
+   * @param query      SQL query
+   * @param parameters parameters for query
+   * @return int affected row count
+   */
+
+  @Override
+  public int update(String query, SqlParameterSource parameters) {
+    logger.info("Update - Query : {} || SqlParameter : {}", query, parameters);
+    return namedParameterJdbcTemplate.update(query, parameters);
+  }
+
+  /**
+   * @param query           SQL query
+   * @param batchParameters parameter array for query
+   * @return int affected row count
+   */
+  @Override
+  public int[] batchUpdate(String query, SqlParameterSource[] batchParameters) {
+    logger.info("Batch update - Query : {} || SqlParameter : {}", query, batchParameters);
+    return namedParameterJdbcTemplate.batchUpdate(query, batchParameters);
+  }
+
+
+  @Override
+  public String getValueFromNameValueMasterByNameAndStatus(String name) {
+    return namedParameterJdbcTemplate.queryForObject(QueryConstants.GET_VALUE_FROM_NAME_VALUE_MASTER_BY_NAME,
+            new MapSqlParameterSource().addValue("name", name).addValue("status", 1),
+            String.class);
+  }
+
+  public void validateAndSaveToWACReferenceStatus(String sno) {
+
+    int misBeneCount;
+
+    logger.info("File Name received for MIS validation: {}", sno);
+
+    misBeneCount = Optional.ofNullable(namedParameterJdbcTemplate.queryForObject(MIS_TOTAL_COUNT,
+            new MapSqlParameterSource().addValue(FILENAME, sno), Integer.class)).orElse(0);
+    logger.info("Total count for File Name : {} is {} ", sno, misBeneCount);
+    if (misBeneCount > 0) {
+      int processedBeneCount;
+      int failureBeneCount;
+      int insertCount;
+
+      processedBeneCount = Optional.ofNullable(namedParameterJdbcTemplate.queryForObject(MIS_SUCCESS_COUNT,
+              new MapSqlParameterSource().addValue(FILENAME, sno), Integer.class)).orElse(0);
+      failureBeneCount = Optional.ofNullable(namedParameterJdbcTemplate.queryForObject(MIS_FAILURE_COUNT,
+              new MapSqlParameterSource().addValue(FILENAME, sno), Integer.class)).orElse(0);
+
+      logger.info("Total success, rejected & deleted count : {}", processedBeneCount);
+      logger.info("Total failure count : {}", failureBeneCount);
+
+      if (misBeneCount == Integer.sum(processedBeneCount, failureBeneCount)) {
+
+        logger.info("Counts matched : Total count of beneficiary {}. Total success & Failure count --> {}." +
+                "WAC insert initiated", misBeneCount, Integer.sum(processedBeneCount, failureBeneCount));
+        logger.info("INSERT INTO WAC_REFERENCE_STATUS(REFERENCE_NO,WORKFLOW_ID,STEP_ID,LAST_EVENT,LAST_EVENT_RESULT,RUN_NO,ERROR_CODE,CREATION_TIME) VALUES ('{}', 'beneficiary_processor','beneficiary_acknowledge_file','beneficiary_acknowledge_file','recovery',null,null,sysdate)", sno);
+
+        insertCount = update(SAVE_WAC_REFERENCE_STATUS, new MapSqlParameterSource().addValue("sno", sno));
+        logger.info("Saved to WAC_REFERENCE_STATUS - Inserted Row count : {}", insertCount);
+
+      } else {
+        logger.info("File: {} is not fully authorized", sno);
+      }
+    } else {
+      logger.info("File count is ZERO");
+    }
+  }
+
 }
