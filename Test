@@ -1,122 +1,513 @@
-package com.sbi.microservice.framework.repository;
+```java
+package com.sbi.yb.repository.impl;
 
-import java.sql.Types;
-import java.util.List;
-import java.util.Optional;
-
+import com.sbi.yb.constants.QueryConstants;
+import com.sbi.yb.model.Beneficiary;
+import com.sbi.yb.model.BeneficiaryDetails;
+import com.sbi.yb.model.BeneficiaryFile;
+import com.sbi.yb.model.BeneficiaryFileRequest;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
-import com.sbi.microservice.framework.model.Channel;
-import com.sbi.microservice.framework.model.Endpoint;
-import com.sbi.microservice.framework.model.Service;
-/**
- *@author RX001020040
- */
-@Repository
-public class ServiceDAOImpl extends BaseDAO implements ServiceDAO {
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
-	public ServiceDAOImpl(NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
-		super(namedParameterJdbcTemplate);
-	}
+import static com.sbi.yb.constants.UtilConstants.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-	@Override
-	public List<Endpoint> getServiceEndpointList(String serviceId) {
-		String sql="SELECT B.SERVICE_ID, A.SERVICE_NAME, B.ENDPOINT_ID, B.ENDPOINT_NAME, B.DESCRIPTION, B.STATUS, B.HAS_REQUEST_BODY, IS_ENCRYPTED, METHOD_TYPE, HAS_PATH_PARAMS, B.CATEGORY  FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE B.SERVICE_ID=:serviceId AND A.SERVICE_ID=B.SERVICE_ID";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("serviceId", serviceId);
-        
-        RowMapper<Endpoint> rowMapper= (rs, rowNum) -> new Endpoint(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),rs.getString(5),rs.getString(6),rs.getBoolean(7),rs.getBoolean(8),rs.getString(9),rs.getBoolean(10),rs.getString(11));
-        
-		return namedParameterJdbcTemplate.query(sql, params,rowMapper);
-	}
+@ExtendWith(MockitoExtension.class)
+class ManageFileBeneficiaryDaoImplTest {
 
-	@Override
-	public Optional<Service> getServiceDetails(String serviceName) {
-		String sql="SELECT A.SERVICE_ID, A.SERVICE_NAME, A.SERVICE_TYPE,A.SERVICE_DESCRIPTION, A.ENV_DOMAIN, A.VERSION, A.ENCRYPTION_ALGO, A.HASH_ALGO, A.RSA_ALGO, A.RSA_KEY_PATH, A.CHARGES_AGGREGATOR, A.CHARGES_CORPORATE, A.STATUS FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE SERVICE_NAME=:serviceName AND A.SERVICE_ID=B.SERVICE_ID";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("serviceName", serviceName);
-        RowMapper<Service> rowMapper= (rs, rowNum) -> new Service(
-        		rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10), rs.getInt(11), rs.getInt(12), rs.getString(13), 
-        		getChannelList(rs.getString(1)),getServiceEndpointList(rs.getString(1)));
-        
-		return namedParameterJdbcTemplate.query(sql, params,rowMapper).stream().findFirst();
-	}
+    @Mock
+    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
-	@Override
-	public Optional<Endpoint> getServiceEndpointDetails(String serviceId, String endPointName) {
-		String sql="SELECT B.SERVICE_ID, A.SERVICE_NAME, B.ENDPOINT_ID, B.ENDPOINT_NAME, B.DESCRIPTION, B.STATUS, B.HAS_REQUEST_BODY, IS_ENCRYPTED, METHOD_TYPE, HAS_PATH_PARAMS, B.CATEGORY  FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE B.SERVICE_ID=:serviceId AND A.SERVICE_ID=B.SERVICE_ID AND B.ENDPOINT_NAME=:endpointName";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("serviceId", serviceId);
-        params.addValue("endpointName", endPointName);
-        
-        RowMapper<Endpoint> rowMapper= (rs, rowNum) -> new Endpoint(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),rs.getString(5),rs.getString(6),rs.getBoolean(7),rs.getBoolean(8),rs.getString(9),rs.getBoolean(10),rs.getString(11));
-        
-		return namedParameterJdbcTemplate.query(sql, params,rowMapper).stream().findFirst();
+    @InjectMocks
+    private ManageFileBeneficiaryDaoImpl manageFileBeneficiaryDao;
 
-	}
+    private BeneficiaryFileRequest request;
+    private AtomicInteger totalCount;
 
-	@Override
-	public List<Channel> getChannelList(String serviceId) {
-		String sql="SELECT B.SERVICE_ID, A.CHANNEL_ID, A.CHANNEL_NAME, A.STATUS FROM SBI_CHANNEL_MASTER A, SBI_SERVICE_CHANNEL_MAPPING B WHERE B.SERVICE_ID=:serviceId AND A.CHANNEL_ID=B.CHANNEL_ID";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("serviceId", serviceId);
-        
-        RowMapper<Channel> rowMapper= (rs, rowNum) -> new Channel(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4));
-        
-		return namedParameterJdbcTemplate.query(sql, params,rowMapper);
+    @BeforeEach
+    void setUp() {
+        request = new BeneficiaryFileRequest();
+        request.setCorporateAlias("CORP123");
+        request.setPageNo(1);
+        request.setPageSize(10);
+        request.setTabName("testTab");
+        totalCount = new AtomicInteger(0);
+    }
 
-	}
+    @Test
+    void getBeneFiles_WithSearchCondition() {
+        request.setSearchBy("test");
+        Map<String, String> filterBy = new HashMap<>();
+        filterBy.put("uploader", "user1");
+        filterBy.put("uploadStatus", "UPLOADED");
+        filterBy.put("approvalStatus", "APPROVED");
+        filterBy.put("fileType", "TYPE1");
+        request.setFilterBy(filterBy);
 
-	@Override
-	public List<Channel> getChannelServiceMappingList(String channelId) {
-		//String sql="SELECT B.SERVICE_ID, A.CHANNEL_ID, A.CHANNEL_NAME, A.STATUS FROM SBI_CHANNEL_MASTER A, SBI_SERVICE_CHANNEL_MAPPING B WHERE B.SERVICE_ID=:serviceId AND A.CHANNEL_ID=B.CHANNEL_ID";
-		String sql="SELECT B.SERVICE_ID, A.CHANNEL_ID, A.CHANNEL_NAME, A.STATUS FROM SBI_CHANNEL_MASTER A, SBI_SERVICE_CHANNEL_MAPPING B WHERE B.SERVICE_ID=:serviceId AND A.CHANNEL_ID=B.CHANNEL_ID";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("channelId", channelId);
-        
-        RowMapper<Channel> rowMapper= (rs, rowNum) -> new Channel(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4));
-        
-		return namedParameterJdbcTemplate.query(sql, params,rowMapper);
-	}
+        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
+                .thenReturn(5);
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(Collections.singletonList(new BeneficiaryFile()));
 
-	@Override
-	public Optional<Endpoint> getEndpointDetails(String serviceId,String endpointUrl) {
-		String sql="SELECT B.SERVICE_ID, A.SERVICE_NAME, B.ENDPOINT_ID, B.ENDPOINT_NAME, B.DESCRIPTION, B.STATUS, B.HAS_REQUEST_BODY, IS_ENCRYPTED, METHOD_TYPE, HAS_PATH_PARAMS, B.CATEGORY  FROM SBI_SERVICE_REGISTRY A, SBI_SERVICE_ENDPOINT_DETAILS B WHERE B.SERVICE_ID=:serviceId AND A.SERVICE_ID=B.SERVICE_ID AND B.API_URL=:endpointUrl";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-		params.addValue("serviceId", serviceId);
-		params.addValue("endpointUrl", endpointUrl);
+        List<BeneficiaryFile> result = manageFileBeneficiaryDao.getBeneFiles(request, totalCount);
 
-		RowMapper<Endpoint> rowMapper= (rs, rowNum) -> new Endpoint(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),rs.getString(5),rs.getString(6),rs.getBoolean(7),rs.getBoolean(8),rs.getString(9),rs.getBoolean(10) ,rs.getString(11));
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals(5, totalCount.get());
+    }
 
-		return namedParameterJdbcTemplate.query(sql, params,rowMapper).stream().findFirst();
+    @Test
+    void getBeneFiles_WithoutFilters() {
+        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
+                .thenReturn(2);
+        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(Collections.singletonList(new BeneficiaryFile()));
 
-	}
+        List<BeneficiaryFile> result = manageFileBeneficiaryDao.getBeneFiles(request, totalCount);
 
-	@Override
-	public int getRBACCount(Optional<String> userName, int corpType, int userRole, String serviceId, String endpointId) {
-		
-		int mappedUserRole=userRole;
-		if(userRole==8) { // ONLY FOR CORPORATE USER
-			MapSqlParameterSource params = new MapSqlParameterSource();
-			params.addValue("userName", userName.get(), Types.VARCHAR);
-			mappedUserRole=namedParameterJdbcTemplate.queryForObject("SELECT to_number(nvl(DECODE(MAX(ACCESS_LEVEL),5,81,6,82,7,83),8)) MAPPED_ROLE "
-					+ " FROM SBI_CUSTOMER_ACCOUNT_MAP WHERE USER_NAME=:userName AND ACCOUNT_NATURE=0 AND STATUS=1", params, Integer.class);
-		}
-		
-		String sql="SELECT count(1) from SBI_SRV_ENDPOINT_RBAC B WHERE B.SERVICE_ID=:serviceId AND B.ENDPOINT_ID=:endpointId and (CORP_TYPE=:corpType OR CORP_TYPE=-1) and (USER_ROLE=:userRole OR USER_ROLE=:mappedUserRole OR USER_ROLE=-1)";
-		MapSqlParameterSource params = new MapSqlParameterSource();
-		params.addValue("serviceId", serviceId);
-		params.addValue("endpointId", endpointId);
-		params.addValue("corpType", corpType);
-		params.addValue("mappedUserRole", mappedUserRole);
-		params.addValue("userRole", userRole);
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals(2, totalCount.get());
+    }
 
+    @Test
+    void getFileDetails() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("FILEREFNO")).thenReturn("REF123");
+        when(mockResultSet.getString("FILENAME")).thenReturn("test.txt");
+        when(mockResultSet.getString("FILEUPLOADEDDATE")).thenReturn("2023-01-01");
+        when(mockResultSet.getString("USERNAME")).thenReturn("user1");
+        when(mockResultSet.getString("UPLOADSTATUS")).thenReturn("UPLOADED");
+        when(mockResultSet.getString("FILETYPE")).thenReturn("TYPE1");
 
-		Integer mappedCount = namedParameterJdbcTemplate.queryForObject(sql, params, Integer.class);
-		return mappedCount;
-	}
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.FETCH_UPLOADED_FILE_DETAILS),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<BeneficiaryDetails> mapper = invocation.getArgument(2);
+                    return mapper.mapRow(mockResultSet, 1);
+                });
 
-}
+        BeneficiaryDetails result = manageFileBeneficiaryDao.getFileDetails("CORP123", "REF123");
+
+        assertNotNull(result);
+        assertEquals("REF123", result.getFileReferenceNo());
+        assertEquals("test.txt", result.getFileName());
+    }
+
+    @Test
+    void getBeneficiaryCounts() {
+        Map<String, Object> mockResult = new HashMap<>();
+        mockResult.put(BENEFICIARY_COUNT, 10);
+        mockResult.put(APPROVED_COUNT, 5);
+        mockResult.put(REJECTED_COUNT, 2);
+        mockResult.put(PENDING_COUNT, 3);
+        mockResult.put(VALIDATION_FAILURE_COUNT, 0);
+
+        when(namedParameterJdbcTemplate.queryForMap(
+                eq(QueryConstants.GET_FILE_DETAILS_COUNT),
+                anyMap()))
+                .thenReturn(mockResult);
+
+        Map<String, Integer> result = manageFileBeneficiaryDao.getBeneficiaryCounts("REF123");
+
+        assertEquals(5, result.size());
+        assertEquals(10, result.get(BENEFICIARY_COUNT));
+        assertEquals(5, result.get(APPROVED_COUNT));
+    }
+
+    @Test
+    void getAllBeneficiaries() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+        when(mockResultSet.getString("ACCOUNTNO")).thenReturn("ACC123");
+        when(mockResultSet.getString("IFSCCODE")).thenReturn("IFSC123");
+        when(mockResultSet.getString("NAME")).thenReturn("Test Name");
+        when(mockResultSet.getString("COMMENTS")).thenReturn("Test Comment");
+        when(mockResultSet.getString("CODE")).thenReturn("CODE123");
+        when(mockResultSet.getString("ACTION")).thenReturn("A");
+        when(mockResultSet.getString("TYPE")).thenReturn("S");
+        when(mockResultSet.getString("STATUS")).thenReturn("APPROVED");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.COMBINED_WITH_STATUS),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getAllBeneficiaries("REF123");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("OID123", result.get(0).getOid());
+    }
+
+    @Test
+    void getBeneficiariesByStatus_Approved() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.APPROVED_FILE_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "APPROVED");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByStatus_Rejected() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.REJECTED_FILE_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "REJECTED");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByStatus_Failure() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.FAILURE_FILE_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "FAILURE");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByStatus_Pending() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.SELECT_PENDING_FILES),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "PENDING");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByStatus_Default() {
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "UNKNOWN");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void getActionTypeCounts() {
+        Map<String, Object> mockResult = new HashMap<>();
+        mockResult.put(SAME_BANK_ADD, 5);
+        mockResult.put(OTHER_BANK_ADD, 3);
+        mockResult.put(SAME_BANK_DELETE, 2);
+        mockResult.put(OTHER_BANK_DELETE, 1);
+
+        when(namedParameterJdbcTemplate.queryForMap(
+                eq(QueryConstants.SELECT_COUNT_BY_ACTION_TYPE),
+                any(MapSqlParameterSource.class)))
+                .thenReturn(mockResult);
+
+        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCounts("REF123");
+
+        assertEquals(4, result.size());
+        assertEquals(5, result.get(SAME_BANK_ADD));
+        assertEquals(3, result.get(OTHER_BANK_ADD));
+    }
+
+    @Test
+    void getActionTypeCountsByStatus_Approved() {
+        Map<String, Integer> mockResult = new HashMap<>();
+        mockResult.put(SAME_BANK_ADD, 5);
+        mockResult.put(OTHER_BANK_ADD, 3);
+        mockResult.put(SAME_BANK_DELETE, 2);
+        mockResult.put(OTHER_BANK_DELETE, 1);
+
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.SELECT_ACTION_TYPE_BY_STATUS),
+                any(MapSqlParameterSource.class),
+                any()))
+                .thenReturn(mockResult);
+
+        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCountsByStatus("REF123", "APPROVED");
+
+        assertEquals(4, result.size());
+        assertEquals(5, result.get(SAME_BANK_ADD));
+    }
+
+    @Test
+    void getActionTypeCountsByStatus_Rejected() {
+        Map<String, Integer> mockResult = new HashMap<>();
+        mockResult.put(SAME_BANK_ADD, 0);
+        mockResult.put(OTHER_BANK_ADD, 1);
+        mockResult.put(SAME_BANK_DELETE, 2);
+        mockResult.put(OTHER_BANK_DELETE, 3);
+
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.SELECT_ACTION_TYPE_BY_STATUS),
+                any(MapSqlParameterSource.class),
+                any()))
+                .thenReturn(mockResult);
+
+        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCountsByStatus("REF123", "REJECTED");
+
+        assertEquals(4, result.size());
+        assertEquals(0, result.get(SAME_BANK_ADD));
+    }
+
+    @Test
+    void getBeneficiariesByTypeAction_SameBankAdd() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.SELECT_3P_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
+                "test.txt", "ACC123", "CODE123", SAME_BANK_ADD_BENE, "REF123");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByTypeAction_OtherBankAdd() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.SELECT_IBTP_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
+                "test.txt", "ACC123", "CODE123", OTHER_BANK_ADD_BENE, "REF123");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByTypeAction_SameBankDelete() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.SELECT_D3P_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
+                "test.txt", "ACC123", "CODE123", SAME_BANK_DELETE_BENE, "REF123");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByTypeAction_OtherBankDelete() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.SELECT_DIBTP_LIST),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
+                "test.txt", "ACC123", "CODE123", OTHER_BANK_DELETE_BENE, "REF123");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getBeneficiariesByTypeAction_Default() {
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
+                "test.txt", "ACC123", "CODE123", "UNKNOWN", "REF123");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void getBeneficiariesByTypeActionOnFailure() throws SQLException {
+        ResultSet mockResultSet = mock(ResultSet.class);
+        when(mockResultSet.getString("OID")).thenReturn("OID123");
+
+        when(namedParameterJdbcTemplate.query(
+                eq(QueryConstants.FAILURE_FILE_LIST_BY_ACTION),
+                anyMap(),
+                any(RowMapper.class)))
+                .thenAnswer(invocation -> {
+                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
+                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
+                });
+
+        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeActionOnFailure(
+                "test.txt", "ACC123", "CODE123", SAME_BANK_ADD_BENE, "REF123");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void getUploaderList() {
+        when(namedParameterJdbcTemplate.queryForList(
+                eq(QueryConstants.GET_UPLOADER_NAMES),
+                anyMap(),
+                eq(String.class)))
+                .thenReturn(Collections.singletonList("user1"));
+
+        List<String> result = manageFileBeneficiaryDao.getUploaderList("CORP123", "user1");
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("user1", result.get(0));
+    }
+
+    @Test
+    void update() {
+        when(namedParameterJdbcTemplate.update(anyString(), any(SqlParameterSource.class)))
+                .thenReturn(1);
+
+        int result = manageFileBeneficiaryDao.update("UPDATE TEST SET VAL=1", new MapSqlParameterSource());
+
+        assertEquals(1, result);
+    }
+
+    @Test
+    void batchUpdate() {
+        when(namedParameterJdbcTemplate.batchUpdate(anyString(), any(SqlParameterSource[].class)))
+                .thenReturn(new int[]{1, 1});
+
+        int[] result = manageFileBeneficiaryDao.batchUpdate(
+                "UPDATE TEST SET VAL=1", 
+                new SqlParameterSource[]{new MapSqlParameterSource(), new MapSqlParameterSource()});
+
+        assertEquals(2, result.length);
+        assertEquals(1, result[0]);
+    }
+
+    @Test
+    void getValueFromNameValueMasterByNameAndStatus() {
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.GET_VALUE_FROM_NAME_VALUE_MASTER_BY_NAME),
+                any(MapSqlParameterSource.class),
+                eq(String.class)))
+                .thenReturn("TEST_VALUE");
+
+        String result = manageFileBeneficiaryDao.getValueFromNameValueMasterByNameAndStatus("TEST_NAME");
+
+        assertEquals("TEST_VALUE", result);
+    }
+
+    @Test
+    void validateAndSaveToWACReferenceStatus_CountsMatch() {
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.MIS_TOTAL_COUNT),
+                any(MapSqlParameterSource.class),
+                eq(Integer.class)))
+                .thenReturn(10);
+
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.MIS_SUCCESS_COUNT),
+                any(MapSqlParameterSource.class),
+                eq(Integer.class)))
+                .thenReturn(7);
+
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.MIS_FAILURE_COUNT),
+                any(MapSqlParameterSource.class),
+                eq(Integer.class)))
+                .thenReturn(3);
+
+        when(namedParameterJdbcTemplate.update(
+                eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
+                any(MapSqlParameterSource.class)))
+                .thenReturn(1);
+
+        manageFileBeneficiaryDao.validateAndSaveToWACReferenceStatus("SNO123");
+
+        verify(namedParameterJdbcTemplate, times(1)).update(
+                eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
+                any(MapSqlParameterSource.class));
+    }
+
+    @Test
+    void validateAndSaveToWACReferenceStatus_CountsDontMatch() {
+        when(namedParameterJdbcTemplate.queryForObject(
+                eq(QueryConstants.MIS_TOTAL_COUNT),
+                any(MapSqlParamet
