@@ -1,513 +1,269 @@
-```java
-package com.sbi.yb.repository.impl;
+package com.sbi.yb.controller;
 
-import com.sbi.yb.constants.QueryConstants;
-import com.sbi.yb.model.Beneficiary;
-import com.sbi.yb.model.BeneficiaryDetails;
-import com.sbi.yb.model.BeneficiaryFile;
-import com.sbi.yb.model.BeneficiaryFileRequest;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.CommonRequestPayload;
+import com.sbi.microservice.framework.model.SBIApplicationResponse;
+import com.sbi.microservice.framework.model.Status;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import com.sbi.yb.constants.ManageBeneStatusCode;
+import com.sbi.yb.constants.UtilConstants;
+import com.sbi.yb.model.*;
+import com.sbi.yb.service.ManageFileBeneficiaryService;
+import com.sbi.yb.util.ManageBeneficiaryUtil;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.*;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.sbi.yb.constants.UtilConstants.*;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static com.sbi.yb.util.ManageBeneficiaryUtil.getBeneTypeAndAction;
+import static com.sbi.yb.util.ManageBeneficiaryUtil.safeGetParameter;
 
-@ExtendWith(MockitoExtension.class)
-class ManageFileBeneficiaryDaoImplTest {
+/*
+ * This class {@code ManageFileBeneficiaryController} includes methods to manage beneficiaries(for file based)
+ * @author V1017263
+ */
 
-    @Mock
-    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+@RestController
+public class ManageFileBeneficiaryController {
 
-    @InjectMocks
-    private ManageFileBeneficiaryDaoImpl manageFileBeneficiaryDao;
+  private static final Logger logger = LoggerFactory.getLogger(ManageFileBeneficiaryController.class);
 
-    private BeneficiaryFileRequest request;
-    private AtomicInteger totalCount;
+  private ManageFileBeneficiaryService manageFileBeneficiaryService;
 
-    @BeforeEach
-    void setUp() {
-        request = new BeneficiaryFileRequest();
-        request.setCorporateAlias("CORP123");
-        request.setPageNo(1);
-        request.setPageSize(10);
-        request.setTabName("testTab");
-        totalCount = new AtomicInteger(0);
+  private final FrameworkUtils frameworkUtils;
+
+  public ManageFileBeneficiaryController(ManageFileBeneficiaryService manageFileBeneficiaryService, FrameworkUtils frameworkUtils) {
+    this.manageFileBeneficiaryService = manageFileBeneficiaryService;
+    this.frameworkUtils = frameworkUtils;
+  }
+
+  // For total count records
+  AtomicInteger totalCount = new AtomicInteger(0);
+
+  /*
+   * This method is to take action such as approval or rejection on beneficiaries
+   * @param httpServletRequest
+   * @param httpServletResponse
+   * @return ResponseEntity<SBIApplicationResponse>
+   */
+
+  @PostMapping(value = "/getFiles")
+  public ResponseEntity<SBIApplicationResponse> getBeneficiaryFiles(
+          HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) throws JsonProcessingException {
+
+
+    ObjectMapper mapper = new ObjectMapper();
+
+    Optional<String> plainPayload = safeGetParameter(httpServletRequest, "plainPayload");
+
+    logger.info("plainPayload : {}", plainPayload);
+
+    BeneficiaryFileRequest beneficiaryFileRequest;
+
+    SBIApplicationResponse applicationResponse = new SBIApplicationResponse();
+
+    try {
+            /*
+            Deserializing JSON content
+             */
+      beneficiaryFileRequest = (BeneficiaryFileRequest) ManageBeneficiaryUtil.toObject(plainPayload.orElseThrow(() ->
+              new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request")), BeneficiaryFileRequest.class);
+
+    } catch (JsonProcessingException jsonProcessingException) {
+      logger.info("Request could not be parsed as JSON.");
+      throw new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request");
     }
 
-    @Test
-    void getBeneFiles_WithSearchCondition() {
-        request.setSearchBy("test");
-        Map<String, String> filterBy = new HashMap<>();
-        filterBy.put("uploader", "user1");
-        filterBy.put("uploadStatus", "UPLOADED");
-        filterBy.put("approvalStatus", "APPROVED");
-        filterBy.put("fileType", "TYPE1");
-        request.setFilterBy(filterBy);
+    plainPayload.ifPresent(payload -> logger.info("plainPayload: {}", payload));
 
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(5);
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.singletonList(new BeneficiaryFile()));
+    logger.info("Get Beneficiary File request : {}", beneficiaryFileRequest);
 
-        List<BeneficiaryFile> result = manageFileBeneficiaryDao.getBeneFiles(request, totalCount);
+    if (Optional.ofNullable(beneficiaryFileRequest).isPresent()) {
 
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals(5, totalCount.get());
+      UploaderResponse uploaderResponse = manageFileBeneficiaryService
+              .getUploaderList(beneficiaryFileRequest);
+
+      if ((beneficiaryFileRequest.getTabName().equals(UtilConstants.APPROVE_TAB)
+              && !uploaderResponse.getUploaders().isEmpty())
+              || (beneficiaryFileRequest.getTabName().equals(UtilConstants.APPROVE_STATUS_TAB))
+              || (beneficiaryFileRequest.getTabName().equals(UtilConstants.UPLOAD_TAB))
+              || (beneficiaryFileRequest.getTabName().equals(UtilConstants.UPLOAD_STATUS_TAB))
+
+      ) {
+        List<BeneficiaryFile> files = manageFileBeneficiaryService
+                .getFileListByTab(beneficiaryFileRequest, totalCount);
+
+        GetFilesResponse getFilesResponse = new GetFilesResponse(files, totalCount.get());
+        applicationResponse.setData(mapper.writeValueAsString(getFilesResponse));
+
+      } else {
+        applicationResponse.setData(mapper.writeValueAsString("No data found."));
+      }
+
+      applicationResponse.setStatus(Status.SUCCESS.getStatusValue());
+      applicationResponse.setStatusCode(ManageBeneStatusCode.API000000);
+    }
+    logger.info("Get Beneficiary File response : {}", applicationResponse);
+    return ResponseEntity.ok(applicationResponse);
+  }
+
+  @PostMapping(value = "/getFileDetails")
+  public ResponseEntity<SBIApplicationResponse> getBeneficiaryDetails(
+          HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) throws JsonProcessingException {
+
+
+    ObjectMapper mapper = new ObjectMapper();
+
+    Optional<String> plainPayload = safeGetParameter(httpServletRequest, "plainPayload");
+
+    logger.info("plainPayload : {}", plainPayload);
+
+    BeneficiaryDetailsRequest beneficiaryDetailsRequest;
+
+    SBIApplicationResponse applicationResponse = new SBIApplicationResponse();
+
+    try {
+            /*
+            Deserializing JSON content
+             */
+      beneficiaryDetailsRequest = (BeneficiaryDetailsRequest) ManageBeneficiaryUtil.toObject(plainPayload.orElseThrow(() ->
+              new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request")), BeneficiaryDetailsRequest.class);
+
+    } catch (JsonProcessingException jsonProcessingException) {
+      logger.info("Request could not be parsed as JSON.");
+      throw new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request");
     }
 
-    @Test
-    void getBeneFiles_WithoutFilters() {
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(2);
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(Collections.singletonList(new BeneficiaryFile()));
+    plainPayload.ifPresent(payload -> logger.info("plainPayload: {}", payload));
+    logger.info("Get Beneficiary Details request : {}", beneficiaryDetailsRequest);
 
-        List<BeneficiaryFile> result = manageFileBeneficiaryDao.getBeneFiles(request, totalCount);
+    if (Optional.ofNullable(beneficiaryDetailsRequest).isPresent()) {
 
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals(2, totalCount.get());
+      BeneficiaryDetails beneficiaryDetails = manageFileBeneficiaryService
+              .getFileDetailsByTab(beneficiaryDetailsRequest, totalCount);
+
+      int count = totalCount.get();
+
+      GetDetailsResponse getDetailsResponse = new GetDetailsResponse(beneficiaryDetails, count);
+
+      applicationResponse.setData(mapper.writeValueAsString(getDetailsResponse));
+      applicationResponse.setStatus(Status.SUCCESS.getStatusValue());
+      applicationResponse.setStatusCode(ManageBeneStatusCode.API000000);
+    }
+    logger.info("GetBeneficiaryDetails response : {}", applicationResponse);
+    return new ResponseEntity<>(applicationResponse, HttpStatus.OK);
+  }
+
+  @PostMapping(value = "/getUploaders")
+  public ResponseEntity<SBIApplicationResponse> getUploader(
+          HttpServletRequest request, HttpServletResponse response) throws JsonProcessingException {
+    ObjectMapper mapper = new ObjectMapper();
+
+    Optional<String> plainPayload = safeGetParameter(request, "plainPayload");
+
+    CommonRequestPayload uploaderRequest = new CommonRequestPayload();
+
+    SBIApplicationResponse applicationResponse = new SBIApplicationResponse();
+
+    try {
+            /*
+            Deserializing JSON content
+             */
+      uploaderRequest = (CommonRequestPayload) ManageBeneficiaryUtil.toObject(plainPayload.orElseThrow(() ->
+              new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request")), CommonRequestPayload.class);
+
+    } catch (JsonProcessingException jsonProcessingException) {
+      logger.info("Request could not be parsed as JSON.");
+      throw new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request");
     }
 
-    @Test
-    void getFileDetails() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("FILEREFNO")).thenReturn("REF123");
-        when(mockResultSet.getString("FILENAME")).thenReturn("test.txt");
-        when(mockResultSet.getString("FILEUPLOADEDDATE")).thenReturn("2023-01-01");
-        when(mockResultSet.getString("USERNAME")).thenReturn("user1");
-        when(mockResultSet.getString("UPLOADSTATUS")).thenReturn("UPLOADED");
-        when(mockResultSet.getString("FILETYPE")).thenReturn("TYPE1");
+    plainPayload.ifPresent(payload -> logger.info("plainPayload: {}", payload));
+    logger.info("Get Uploader List request : {}", uploaderRequest);
 
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.FETCH_UPLOADED_FILE_DETAILS),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<BeneficiaryDetails> mapper = invocation.getArgument(2);
-                    return mapper.mapRow(mockResultSet, 1);
-                });
+    if (Optional.ofNullable(uploaderRequest).isPresent()) {
 
-        BeneficiaryDetails result = manageFileBeneficiaryDao.getFileDetails("CORP123", "REF123");
+      UploaderResponse uploaderResponse = manageFileBeneficiaryService
+              .getUploaderList(uploaderRequest);
 
-        assertNotNull(result);
-        assertEquals("REF123", result.getFileReferenceNo());
-        assertEquals("test.txt", result.getFileName());
+      GetUploaderResponse getUploaderResponse = new GetUploaderResponse(uploaderResponse);
+
+      applicationResponse.setData(mapper.writeValueAsString(getUploaderResponse));
+      applicationResponse.setStatus(Status.SUCCESS.getStatusValue());
+      applicationResponse.setStatusCode(ManageBeneStatusCode.API000000);
+
+    }
+    logger.info("getUploader response : {}", applicationResponse);
+    return new ResponseEntity<>(applicationResponse, HttpStatus.OK);
+  }
+
+
+  @PostMapping(value = "/approveReject")
+  public ResponseEntity<SBIApplicationResponse> approveOrRejectBeneficiary(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) {
+    logger.info("approveOrRejectBeneficiary - starts");
+
+    Optional<String> plainPayload = safeGetParameter(httpServletRequest, "plainPayload");
+
+    logger.info("plainPayload : {}", plainPayload);
+
+    ApproveRejectBeneRequest approveRejectBeneRequest = null;
+    ApproveRejectBeneResponse approveRejectBeneResponse;
+    int approvedOrRejectedCount = 0;
+    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
+
+    try {
+            /*
+            Deserializing JSON content
+             */
+      approveRejectBeneRequest = (ApproveRejectBeneRequest) ManageBeneficiaryUtil.toObject(plainPayload.orElseThrow(() ->
+              new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request")), ApproveRejectBeneRequest.class);
+
+    } catch (JsonProcessingException jsonProcessingException) {
+      logger.info("Request could not be parsed as JSON.");
+      throw new ValidationException(ManageBeneStatusCode.INVALID_REQUEST, "Invalid Request");
     }
 
-    @Test
-    void getBeneficiaryCounts() {
-        Map<String, Object> mockResult = new HashMap<>();
-        mockResult.put(BENEFICIARY_COUNT, 10);
-        mockResult.put(APPROVED_COUNT, 5);
-        mockResult.put(REJECTED_COUNT, 2);
-        mockResult.put(PENDING_COUNT, 3);
-        mockResult.put(VALIDATION_FAILURE_COUNT, 0);
+    plainPayload.ifPresent(payload -> logger.info("plainPayload: {}", payload));
+    logger.info("Approve or reject beneficiaries request : {}", approveRejectBeneRequest);
 
-        when(namedParameterJdbcTemplate.queryForMap(
-                eq(QueryConstants.GET_FILE_DETAILS_COUNT),
-                anyMap()))
-                .thenReturn(mockResult);
+    if (Optional.ofNullable(approveRejectBeneRequest).isPresent() && Objects.nonNull(approveRejectBeneRequest.getIsApproved())) {
 
-        Map<String, Integer> result = manageFileBeneficiaryDao.getBeneficiaryCounts("REF123");
+      //To Do
+      //before approval or rejection check whether user has access to take action on bene
+      // Cooling period approval & rejection method
+      //check last mod time updated in DB
+      //rejectionReason
+      if (Boolean.TRUE.equals(approveRejectBeneRequest.getIsApproved())) {
+        logger.info("Approval process starts");
+        //Approve
+        approvedOrRejectedCount = manageFileBeneficiaryService.approveBeneficiary(approveRejectBeneRequest);
+      } else if (Boolean.FALSE.equals(approveRejectBeneRequest.getIsApproved())) {
+        logger.info("Rejection process starts");
+        //Reject
+        approvedOrRejectedCount = manageFileBeneficiaryService.rejectBeneficiary(approveRejectBeneRequest);
+      }
 
-        assertEquals(5, result.size());
-        assertEquals(10, result.get(BENEFICIARY_COUNT));
-        assertEquals(5, result.get(APPROVED_COUNT));
+      approveRejectBeneResponse = new ApproveRejectBeneResponse(approveRejectBeneRequest.getFileReferenceNo(),
+              approveRejectBeneRequest.getFileName(), getBeneTypeAndAction(approveRejectBeneRequest.getBeneTypeAction()),
+              approvedOrRejectedCount, Boolean.FALSE.equals(approveRejectBeneRequest.getIsApproved()) ?
+              approveRejectBeneRequest.getComments() : "");
+
+      sbiApplicationResponse = ManageBeneficiaryUtil.buildSuccessResponse(approveRejectBeneResponse,
+              ManageBeneStatusCode.APPROVE_OR_REJECT_SUCCESS);
     }
+    logger.info("approveOrRejectBeneficiary - response : {}", sbiApplicationResponse);
 
-    @Test
-    void getAllBeneficiaries() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-        when(mockResultSet.getString("ACCOUNTNO")).thenReturn("ACC123");
-        when(mockResultSet.getString("IFSCCODE")).thenReturn("IFSC123");
-        when(mockResultSet.getString("NAME")).thenReturn("Test Name");
-        when(mockResultSet.getString("COMMENTS")).thenReturn("Test Comment");
-        when(mockResultSet.getString("CODE")).thenReturn("CODE123");
-        when(mockResultSet.getString("ACTION")).thenReturn("A");
-        when(mockResultSet.getString("TYPE")).thenReturn("S");
-        when(mockResultSet.getString("STATUS")).thenReturn("APPROVED");
+    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
+  }
 
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.COMBINED_WITH_STATUS),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getAllBeneficiaries("REF123");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("OID123", result.get(0).getOid());
-    }
-
-    @Test
-    void getBeneficiariesByStatus_Approved() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.APPROVED_FILE_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "APPROVED");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByStatus_Rejected() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.REJECTED_FILE_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "REJECTED");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByStatus_Failure() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.FAILURE_FILE_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "FAILURE");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByStatus_Pending() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.SELECT_PENDING_FILES),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "PENDING");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByStatus_Default() {
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", "UNKNOWN");
-
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void getActionTypeCounts() {
-        Map<String, Object> mockResult = new HashMap<>();
-        mockResult.put(SAME_BANK_ADD, 5);
-        mockResult.put(OTHER_BANK_ADD, 3);
-        mockResult.put(SAME_BANK_DELETE, 2);
-        mockResult.put(OTHER_BANK_DELETE, 1);
-
-        when(namedParameterJdbcTemplate.queryForMap(
-                eq(QueryConstants.SELECT_COUNT_BY_ACTION_TYPE),
-                any(MapSqlParameterSource.class)))
-                .thenReturn(mockResult);
-
-        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCounts("REF123");
-
-        assertEquals(4, result.size());
-        assertEquals(5, result.get(SAME_BANK_ADD));
-        assertEquals(3, result.get(OTHER_BANK_ADD));
-    }
-
-    @Test
-    void getActionTypeCountsByStatus_Approved() {
-        Map<String, Integer> mockResult = new HashMap<>();
-        mockResult.put(SAME_BANK_ADD, 5);
-        mockResult.put(OTHER_BANK_ADD, 3);
-        mockResult.put(SAME_BANK_DELETE, 2);
-        mockResult.put(OTHER_BANK_DELETE, 1);
-
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.SELECT_ACTION_TYPE_BY_STATUS),
-                any(MapSqlParameterSource.class),
-                any()))
-                .thenReturn(mockResult);
-
-        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCountsByStatus("REF123", "APPROVED");
-
-        assertEquals(4, result.size());
-        assertEquals(5, result.get(SAME_BANK_ADD));
-    }
-
-    @Test
-    void getActionTypeCountsByStatus_Rejected() {
-        Map<String, Integer> mockResult = new HashMap<>();
-        mockResult.put(SAME_BANK_ADD, 0);
-        mockResult.put(OTHER_BANK_ADD, 1);
-        mockResult.put(SAME_BANK_DELETE, 2);
-        mockResult.put(OTHER_BANK_DELETE, 3);
-
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.SELECT_ACTION_TYPE_BY_STATUS),
-                any(MapSqlParameterSource.class),
-                any()))
-                .thenReturn(mockResult);
-
-        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCountsByStatus("REF123", "REJECTED");
-
-        assertEquals(4, result.size());
-        assertEquals(0, result.get(SAME_BANK_ADD));
-    }
-
-    @Test
-    void getBeneficiariesByTypeAction_SameBankAdd() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.SELECT_3P_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", SAME_BANK_ADD_BENE, "REF123");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByTypeAction_OtherBankAdd() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.SELECT_IBTP_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", OTHER_BANK_ADD_BENE, "REF123");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByTypeAction_SameBankDelete() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.SELECT_D3P_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", SAME_BANK_DELETE_BENE, "REF123");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByTypeAction_OtherBankDelete() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.SELECT_DIBTP_LIST),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", OTHER_BANK_DELETE_BENE, "REF123");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getBeneficiariesByTypeAction_Default() {
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", "UNKNOWN", "REF123");
-
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void getBeneficiariesByTypeActionOnFailure() throws SQLException {
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.FAILURE_FILE_LIST_BY_ACTION),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
-
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeActionOnFailure(
-                "test.txt", "ACC123", "CODE123", SAME_BANK_ADD_BENE, "REF123");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void getUploaderList() {
-        when(namedParameterJdbcTemplate.queryForList(
-                eq(QueryConstants.GET_UPLOADER_NAMES),
-                anyMap(),
-                eq(String.class)))
-                .thenReturn(Collections.singletonList("user1"));
-
-        List<String> result = manageFileBeneficiaryDao.getUploaderList("CORP123", "user1");
-
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("user1", result.get(0));
-    }
-
-    @Test
-    void update() {
-        when(namedParameterJdbcTemplate.update(anyString(), any(SqlParameterSource.class)))
-                .thenReturn(1);
-
-        int result = manageFileBeneficiaryDao.update("UPDATE TEST SET VAL=1", new MapSqlParameterSource());
-
-        assertEquals(1, result);
-    }
-
-    @Test
-    void batchUpdate() {
-        when(namedParameterJdbcTemplate.batchUpdate(anyString(), any(SqlParameterSource[].class)))
-                .thenReturn(new int[]{1, 1});
-
-        int[] result = manageFileBeneficiaryDao.batchUpdate(
-                "UPDATE TEST SET VAL=1", 
-                new SqlParameterSource[]{new MapSqlParameterSource(), new MapSqlParameterSource()});
-
-        assertEquals(2, result.length);
-        assertEquals(1, result[0]);
-    }
-
-    @Test
-    void getValueFromNameValueMasterByNameAndStatus() {
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.GET_VALUE_FROM_NAME_VALUE_MASTER_BY_NAME),
-                any(MapSqlParameterSource.class),
-                eq(String.class)))
-                .thenReturn("TEST_VALUE");
-
-        String result = manageFileBeneficiaryDao.getValueFromNameValueMasterByNameAndStatus("TEST_NAME");
-
-        assertEquals("TEST_VALUE", result);
-    }
-
-    @Test
-    void validateAndSaveToWACReferenceStatus_CountsMatch() {
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.MIS_TOTAL_COUNT),
-                any(MapSqlParameterSource.class),
-                eq(Integer.class)))
-                .thenReturn(10);
-
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.MIS_SUCCESS_COUNT),
-                any(MapSqlParameterSource.class),
-                eq(Integer.class)))
-                .thenReturn(7);
-
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.MIS_FAILURE_COUNT),
-                any(MapSqlParameterSource.class),
-                eq(Integer.class)))
-                .thenReturn(3);
-
-        when(namedParameterJdbcTemplate.update(
-                eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
-                any(MapSqlParameterSource.class)))
-                .thenReturn(1);
-
-        manageFileBeneficiaryDao.validateAndSaveToWACReferenceStatus("SNO123");
-
-        verify(namedParameterJdbcTemplate, times(1)).update(
-                eq(QueryConstants.SAVE_WAC_REFERENCE_STATUS),
-                any(MapSqlParameterSource.class));
-    }
-
-    @Test
-    void validateAndSaveToWACReferenceStatus_CountsDontMatch() {
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.MIS_TOTAL_COUNT),
-                any(MapSqlParamet
+}
