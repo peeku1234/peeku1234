@@ -1,25 +1,42 @@
-package com.sbi.yb.repository.impl;
+package com.sbi.yb.service.impl;
 
-import com.sbi.yb.constants.QueryConstants;
-import com.sbi.yb.model.Beneficiary;
-import com.sbi.yb.model.BeneficiaryDetails;
-import com.sbi.yb.model.BeneficiaryFile;
-import com.sbi.yb.model.BeneficiaryFileRequest;
+import com.sbi.microservice.framework.constant.ErrorCodes;
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.constants.ManageBeneStatusCode;
+import com.sbi.yb.model.*;
 import com.sbi.yb.repository.ManageFileBeneficiaryDao;
+import com.sbi.yb.service.ManageFileBeneficiaryService;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.CommonRequestPayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.RowMapper;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Service;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.sbi.yb.constants.QueryConstants.*;
+import static com.sbi.yb.constants.ManageBeneStatusCode.*;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_3P_BY_OID;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_D3P_BY_OID_BEN;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_D3P_BY_OID_COMPBEN;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_D3P_BY_TYPE_BEN;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_D3P_BY_TYPE_COMPBEN;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_DIBTP_BY_OID;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_DIBTP_BY_TYPE;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_OR_REJECT_3P_BY_TYPE;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_OR_REJECT_IBTP_BY_OID;
+import static com.sbi.yb.constants.QueryConstants.APPROVE_OR_REJECT_IBTP_BY_TYPE;
+import static com.sbi.yb.constants.QueryConstants.REJECT_3P_BY_OID;
+import static com.sbi.yb.constants.QueryConstants.REJECT_D3P_BY_OID_BEN;
+import static com.sbi.yb.constants.QueryConstants.REJECT_D3P_BY_OID_COMPBEN;
+import static com.sbi.yb.constants.QueryConstants.REJECT_D3P_BY_TYPE_BEN;
+import static com.sbi.yb.constants.QueryConstants.REJECT_D3P_BY_TYPE_COMPBEN;
+import static com.sbi.yb.constants.QueryConstants.REJECT_DIBTP_BY_OID;
+import static com.sbi.yb.constants.QueryConstants.REJECT_DIBTP_BY_TYPE;
+import static com.sbi.yb.constants.QueryConstants.SAVE_WAC_AUDIT_TRAIL;
 import static com.sbi.yb.constants.UtilConstants.*;
 
 
@@ -29,381 +46,612 @@ import static com.sbi.yb.constants.UtilConstants.*;
  */
 
 
-@Repository
-public class ManageFileBeneficiaryDaoImpl implements ManageFileBeneficiaryDao {
+@Service
+public class ManageFileBeneficiaryServiceImpl implements ManageFileBeneficiaryService {
 
-  private static final Logger logger = LoggerFactory.getLogger(ManageFileBeneficiaryDaoImpl.class);
+  private static final Logger logger = LoggerFactory.getLogger(ManageFileBeneficiaryServiceImpl.class);
 
-  private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+  private final ManageFileBeneficiaryDao manageFileBeneficiaryDaoImpl;
 
-  public ManageFileBeneficiaryDaoImpl(final NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
-    this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
+  public ManageFileBeneficiaryServiceImpl(final ManageFileBeneficiaryDao manageFileBeneficiaryDao) {
+    this.manageFileBeneficiaryDaoImpl = manageFileBeneficiaryDao;
   }
 
+  /*
+   * This method is to approve beneficiaries
+   * @param approveRejectBeneRequest
+   * @return int number of records updated
+   */
 
   @Override
-  public List<BeneficiaryFile> getBeneFiles(
+  public List<BeneficiaryFile> getFileListByTab(
           BeneficiaryFileRequest request, AtomicInteger totalCount) {
-    MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue("corpId", request.getCorporateAlias())
-            .addValue("offset", (request.getPageNo() - 1) * request.getPageSize())
-            .addValue("limit", request.getPageNo() * request.getPageSize())
-            .addValue("tabName", request.getTabName());
-
-    String searchCondition = "";
-    if (request.getSearchBy() != null && request.getSearchBy().length() >= 3) {
-      searchCondition = "AND (a.SNO LIKE :searchValue OR "
-              + "LOWER(a.ADDITIONAL_FIELD6) LIKE LOWER(:searchValue)) ";
-      params.addValue("searchValue", "%" + request.getSearchBy() + "%");
+    List<BeneficiaryFile> beneficiaryFiles;
+    try {
+      logger.info("Fetching files by tab: {}", request.getTabName());
+      beneficiaryFiles = manageFileBeneficiaryDaoImpl.getBeneFiles(request, totalCount);
+    } catch (DataAccessException dataAccessException) {
+      logger.info("Data access exception occurred while fetching beneficiary list");
+      throw new TechnicalException(dataAccessException.getMessage(), ErrorCodes.DB_ACCESS_FAILURE);
     }
-
-    String uploaderCondition = "";
-    if (request.getFilterBy() != null && request.getFilterBy().containsKey("uploader")) {
-      uploaderCondition = "AND a.USERNAME = :username ";
-      params.addValue("username", request.getFilterBy().get("uploader"));
-    }
-
-    String uploadStatusFilter = "";
-    if (request.getFilterBy() != null && request.getFilterBy().containsKey("uploadStatus")) {
-      uploadStatusFilter = " AND br.uploadStatus = :uploadStatus";
-      params.addValue("uploadStatus", request.getFilterBy().get("uploadStatus"));
-    }
-
-    String approvalStatusFilter = "";
-    if (request.getFilterBy() != null && request.getFilterBy().containsKey("approvalStatus")) {
-      approvalStatusFilter = " AND br.approvalStatus = :approvalStatus";
-      params.addValue("approvalStatus", request.getFilterBy().get("approvalStatus"));
-    }
-
-    String fileTypeFilter = "";
-    if (request.getFilterBy() != null && request.getFilterBy().containsKey("fileType")) {
-      fileTypeFilter = " AND br.fileType = :fileType";
-      params.addValue("fileType", request.getFilterBy().get("fileType"));
-    }
-
-    String paginatedQuery = GET_FILE_LIST
-            .replace("{searchCondition}", searchCondition)
-            .replace("{uploaderCondition}", uploaderCondition)
-            .replace("{paginationCondition}", "WHERE rn > :offset AND rn <= :limit")
-            .replace("{uploadStatusFilter}", uploadStatusFilter)
-            .replace("{approvalStatusFilter}", approvalStatusFilter)
-            .replace("{fileTypeFilter}", fileTypeFilter);
-
-    String countQuery = "SELECT COUNT(*) FROM ("
-            + GET_FILE_LIST
-            .replace("{searchCondition}", searchCondition)
-            .replace("{uploaderCondition}", uploaderCondition)
-            .replace("{paginationCondition}", "")
-            .replace("{uploadStatusFilter}", uploadStatusFilter)
-            .replace("{approvalStatusFilter}", approvalStatusFilter)
-            .replace("{fileTypeFilter}", fileTypeFilter)
-            + ") total";
-
-    totalCount.set(namedParameterJdbcTemplate.queryForObject(countQuery, params, Integer.class));
-
-    return namedParameterJdbcTemplate.query(paginatedQuery, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryFileRowMapper());
+    return beneficiaryFiles;
   }
 
-  @Override
-  public BeneficiaryDetails getFileDetails(String corpId, String fileRefNo) {
-    logger.info("getFileDetails() STARTS");
-    Map<String, Object> params = new HashMap<>();
-    params.put("corpId", corpId);
-    params.put(FILE_REFERENCE_NO, fileRefNo);
-    params.put("fileType", ACC_BENE_FILE_TYPES);
+  public BeneficiaryDetails getFileDetailsByTab(
+          BeneficiaryDetailsRequest request, AtomicInteger totalCount) {
+    BeneficiaryDetails beneficiaryDetails;
+    try {
+      logger.info("Inside the ManageFileBeneficiaryListServiceImpl "
+              + "getFileDetailsByTab STARTS");
 
-    logger.info("getFileDetails() ENDS");
+      String corporateId = request.getCorporateAlias();
 
-    return namedParameterJdbcTemplate.queryForObject(FETCH_UPLOADED_FILE_DETAILS,
-            params, new ManageFileBeneficiaryDaoImpl.BeneficiaryDetailsRowMapper());
-  }
-
-  @Override
-  public Map<String, Integer> getBeneficiaryCounts(String fileRefNo) {
-    Map<String, Object> result = namedParameterJdbcTemplate.queryForMap(
-            GET_FILE_DETAILS_COUNT,
-            Collections.singletonMap("fileRefNo", fileRefNo)
-    );
-
-    Map<String, Integer> countMap = new HashMap<>();
-    countMap.put(BENEFICIARY_COUNT, ((Number) result.get(BENEFICIARY_COUNT)).intValue());
-    countMap.put(APPROVED_COUNT, ((Number) result.get(APPROVED_COUNT)).intValue());
-    countMap.put(REJECTED_COUNT, ((Number) result.get(REJECTED_COUNT)).intValue());
-    countMap.put(PENDING_COUNT, ((Number) result.get(PENDING_COUNT)).intValue());
-    countMap.put(VALIDATION_FAILURE_COUNT,
-            ((Number) result.get(VALIDATION_FAILURE_COUNT)).intValue());
-
-    return countMap;
-  }
-
-  @Override
-  public List<Beneficiary> getAllBeneficiaries(String fileRefNo) {
-    Map<String, Object> params = new HashMap<>();
-    params.put(FILE_REFERENCE_NO, fileRefNo);
-    return namedParameterJdbcTemplate.query(
-            COMBINED_WITH_STATUS, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-  }
-
-  @Override
-  public List<Beneficiary> getBeneficiariesByStatus(String fileRefNo, String status) {
-    Map<String, Object> params = new HashMap<>();
-    params.put(FILE_REFERENCE_NO, fileRefNo);
-
-    return switch (status.toUpperCase()) {
-      case "APPROVED" -> namedParameterJdbcTemplate.query(
-              APPROVED_FILE_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-      case "REJECTED" -> namedParameterJdbcTemplate.query(
-              REJECTED_FILE_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-      case "FAILURE" -> namedParameterJdbcTemplate.query(
-              FAILURE_FILE_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-      case "PENDING" -> namedParameterJdbcTemplate.query(
-              SELECT_PENDING_FILES, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-      default -> Collections.emptyList();
-    };
-  }
-
-  @Override
-  public Map<String, Integer> getActionTypeCounts(String fileReferenceNo) {
-    Map<String, Integer> actionCounts = new HashMap<>();
-
-    MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue(FILE_REFERENCE_NO, fileReferenceNo);
-
-    Map<String, Object> result = namedParameterJdbcTemplate
-            .queryForMap(SELECT_COUNT_BY_ACTION_TYPE, params);
-
-    // Map results to action counts
-    actionCounts.put(SAME_BANK_ADD, result.get(SAME_BANK_ADD) != null
-            ? ((Number) result.get(SAME_BANK_ADD)).intValue() : 0);
-    actionCounts.put(OTHER_BANK_ADD, result.get(OTHER_BANK_ADD) != null
-            ? ((Number) result.get(OTHER_BANK_ADD)).intValue() : 0);
-    actionCounts.put(SAME_BANK_DELETE, result.get(SAME_BANK_DELETE) != null
-            ? ((Number) result.get(SAME_BANK_DELETE)).intValue() : 0);
-    actionCounts.put(OTHER_BANK_DELETE, result.get(OTHER_BANK_DELETE) != null
-            ? ((Number) result.get(OTHER_BANK_DELETE)).intValue() : 0);
-
-    return actionCounts;
-  }
-
-
-  @Override
-  public Map<String, Integer> getActionTypeCountsByStatus(String fileReferenceNo, String status) {
-
-    String action = switch (status.toUpperCase()) {
-      case "APPROVED" -> "Approved";
-      case "REJECTED" -> "Rejected";
-      case "PENDING" -> "Pending";
-      case "FAILURE" -> "Failure";
-      default -> status;
-    };
-
-    MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue(FILE_REFERENCE_NO, fileReferenceNo)
-            .addValue("status", action);
-
-    return namedParameterJdbcTemplate.queryForObject(
-            SELECT_ACTION_TYPE_BY_STATUS,
-            params,
-            (rs, rowNum) -> {
-              Map<String, Integer> actionCounts = new HashMap<>();
-              actionCounts.put(SAME_BANK_ADD, rs.getInt(SAME_BANK_ADD));
-              actionCounts.put(SAME_BANK_DELETE, rs.getInt(SAME_BANK_DELETE));
-              actionCounts.put(OTHER_BANK_ADD, rs.getInt(OTHER_BANK_ADD));
-              actionCounts.put(OTHER_BANK_DELETE, rs.getInt(OTHER_BANK_DELETE));
-              return actionCounts;
-            });
-  }
-
-  public List<Beneficiary> getBeneficiariesByTypeAction(
-          String fileName, String accountNumber, String code,
-          String benTypeAction, String fileRefNo) {
-    Map<String, Object> params = new HashMap<>();
-    params.put(FILE_REFERENCE_NO, fileRefNo);
-    params.put("fileName", fileName);
-    params.put("actNo", accountNumber);
-    params.put("code", code);
-
-    if (benTypeAction.equalsIgnoreCase(SAME_BANK_ADD_BENE)) {
-      return namedParameterJdbcTemplate.query(
-              SELECT_3P_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_ADD_BENE)) {
-      return namedParameterJdbcTemplate.query(
-              SELECT_IBTP_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-    } else if (benTypeAction.equalsIgnoreCase(SAME_BANK_DELETE_BENE)) {
-      return namedParameterJdbcTemplate.query(
-              SELECT_D3P_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_DELETE_BENE)) {
-      return namedParameterJdbcTemplate.query(
-              SELECT_DIBTP_LIST, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-    }
-    return List.of();
-  }
-
-  @Override
-  public List<Beneficiary> getBeneficiariesByTypeActionOnFailure(
-          String fileName, String accountNumber, String code,
-          String benTypeAction, String fileRefNo) {
-    Map<String, Object> params = new HashMap<>();
-    params.put(FILE_REFERENCE_NO, fileRefNo);
-    params.put("fileName", fileName);
-    params.put("actNo", accountNumber);
-    params.put("code", code);
-    if (benTypeAction.equalsIgnoreCase(SAME_BANK_ADD_BENE)) {
-      params.put("action", "A");
-      params.put("type", "S");
-    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_ADD_BENE)) {
-      params.put("action", "A");
-      params.put("type", "O");
-    } else if (benTypeAction.equalsIgnoreCase(SAME_BANK_DELETE_BENE)) {
-      params.put("action", "D");
-      params.put("type", "S");
-    } else if (benTypeAction.equalsIgnoreCase(OTHER_BANK_DELETE_BENE)) {
-      params.put("action", "D");
-      params.put("type", "O");
-    }
-
-    return namedParameterJdbcTemplate.query(
-            FAILURE_FILE_LIST_BY_ACTION, params, new ManageFileBeneficiaryDaoImpl.BeneficiaryRowMapper());
-  }
-
-  @Override
-  public List<String> getUploaderList(String corporateId, String userName) {
-    Map<String, Object> params = new HashMap<>();
-    params.put("corpId", corporateId);
-    params.put("userName", userName);
-
-    return namedParameterJdbcTemplate.queryForList(GET_UPLOADER_NAMES, params, String.class);
-
-  }
-
-
-  public static class BeneficiaryFileRowMapper implements RowMapper<BeneficiaryFile> {
-
-    public BeneficiaryFile mapRow(ResultSet rs, int index) throws SQLException {
-      BeneficiaryFile beneficiaryFile = new BeneficiaryFile();
-
-      beneficiaryFile.setFileReferenceNo(rs.getString("fileRefNo"));
-      beneficiaryFile.setFileName(rs.getString("fileName"));
-      beneficiaryFile.setFileType(rs.getString("fileType"));  // Static value
-      beneficiaryFile.setUploadedOn(rs.getString("fileUploadedDate"));
-      beneficiaryFile.setUploadedBy(rs.getString("username"));
-      beneficiaryFile.setUploadStatus(rs.getString("uploadStatus"));
-      beneficiaryFile.setApprovalStatus(rs.getString("approvalStatus"));
-      beneficiaryFile.setApprovedBy(rs.getString("approvedBy"));
-      beneficiaryFile.setApprovedOn(rs.getString("approvedOn"));
-
-      // Set counts
-      Map<String, Integer> countMap = new HashMap<>();
-      countMap.put(BENEFICIARY_COUNT, rs.getInt("benCount"));
-      countMap.put(APPROVED_COUNT, rs.getInt("approvedCount"));
-      countMap.put(REJECTED_COUNT, rs.getInt("rejectedCount"));
-      countMap.put(PENDING_COUNT, rs.getInt("pendingCount"));
-      countMap.put(VALIDATION_FAILURE_COUNT, rs.getInt("failureCount"));
-      beneficiaryFile.setBeneficiaryStatusCount(countMap);
-
-      return beneficiaryFile;
-    }
-  }
-
-  public static class BeneficiaryRowMapper implements RowMapper<Beneficiary> {
-
-    public Beneficiary mapRow(ResultSet rs, int index) throws SQLException {
-      Beneficiary beneficiary = new Beneficiary();
-      beneficiary.setOid(rs.getString("OID"));
-      beneficiary.setAccountNumber(rs.getString("ACCOUNTNO"));
-      beneficiary.setIfscCode(rs.getString("IFSCCODE"));
-      beneficiary.setName(rs.getString("NAME"));
-      beneficiary.setComments(rs.getString("COMMENTS"));
-      beneficiary.setCode(rs.getString("CODE"));
-      beneficiary.setAction(rs.getString("ACTION"));
-      beneficiary.setType(rs.getString("TYPE"));
-      beneficiary.setStatus(rs.getString("STATUS"));
-      return beneficiary;
-    }
-  }
-
-  public static class BeneficiaryDetailsRowMapper implements RowMapper<BeneficiaryDetails> {
-
-    public BeneficiaryDetails mapRow(ResultSet rs, int index) throws SQLException {
-      BeneficiaryDetails beneficiaryDetails = new BeneficiaryDetails();
-      beneficiaryDetails.setFileReferenceNo(rs.getString("FILEREFNO"));
-      beneficiaryDetails.setFileName(rs.getString("FILENAME"));
-      beneficiaryDetails.setUploadedOn(rs.getString("FILEUPLOADEDDATE"));
-      beneficiaryDetails.setUploadedBy(rs.getString("USERNAME"));
-      beneficiaryDetails.setUploadStatus(rs.getString("UPLOADSTATUS"));
-      beneficiaryDetails.setFileType(rs.getString("FILETYPE"));
-      return beneficiaryDetails;
-    }
-  }
-
-  /**
-   * @param query      SQL query
-   * @param parameters parameters for query
-   * @return int affected row count
-   */
-
-  @Override
-  public int update(String query, SqlParameterSource parameters) {
-    logger.info("Update - Query : {} || SqlParameter : {}", query, parameters);
-    return namedParameterJdbcTemplate.update(query, parameters);
-  }
-
-  /**
-   * @param query           SQL query
-   * @param batchParameters parameter array for query
-   * @return int affected row count
-   */
-  @Override
-  public int[] batchUpdate(String query, SqlParameterSource[] batchParameters) {
-    logger.info("Batch update - Query : {} || SqlParameter : {}", query, batchParameters);
-    return namedParameterJdbcTemplate.batchUpdate(query, batchParameters);
-  }
-
-
-  @Override
-  public String getValueFromNameValueMasterByNameAndStatus(String name) {
-    return namedParameterJdbcTemplate.queryForObject(QueryConstants.GET_VALUE_FROM_NAME_VALUE_MASTER_BY_NAME,
-            new MapSqlParameterSource().addValue("name", name).addValue("status", 1),
-            String.class);
-  }
-
-  public void validateAndSaveToWACReferenceStatus(String sno) {
-
-    int misBeneCount;
-
-    logger.info("File Name received for MIS validation: {}", sno);
-
-    misBeneCount = Optional.ofNullable(namedParameterJdbcTemplate.queryForObject(MIS_TOTAL_COUNT,
-            new MapSqlParameterSource().addValue(FILENAME, sno), Integer.class)).orElse(0);
-    logger.info("Total count for File Name : {} is {} ", sno, misBeneCount);
-    if (misBeneCount > 0) {
-      int processedBeneCount;
-      int failureBeneCount;
-      int insertCount;
-
-      processedBeneCount = Optional.ofNullable(namedParameterJdbcTemplate.queryForObject(MIS_SUCCESS_COUNT,
-              new MapSqlParameterSource().addValue(FILENAME, sno), Integer.class)).orElse(0);
-      failureBeneCount = Optional.ofNullable(namedParameterJdbcTemplate.queryForObject(MIS_FAILURE_COUNT,
-              new MapSqlParameterSource().addValue(FILENAME, sno), Integer.class)).orElse(0);
-
-      logger.info("Total success, rejected & deleted count : {}", processedBeneCount);
-      logger.info("Total failure count : {}", failureBeneCount);
-
-      if (misBeneCount == Integer.sum(processedBeneCount, failureBeneCount)) {
-
-        logger.info("Counts matched : Total count of beneficiary {}. Total success & Failure count --> {}." +
-                "WAC insert initiated", misBeneCount, Integer.sum(processedBeneCount, failureBeneCount));
-        logger.info("INSERT INTO WAC_REFERENCE_STATUS(REFERENCE_NO,WORKFLOW_ID,STEP_ID,LAST_EVENT,LAST_EVENT_RESULT,RUN_NO,ERROR_CODE,CREATION_TIME) VALUES ('{}', 'beneficiary_processor','beneficiary_acknowledge_file','beneficiary_acknowledge_file','recovery',null,null,sysdate)", sno);
-
-        insertCount = update(SAVE_WAC_REFERENCE_STATUS, new MapSqlParameterSource().addValue("sno", sno));
-        logger.info("Saved to WAC_REFERENCE_STATUS - Inserted Row count : {}", insertCount);
-
-      } else {
-        logger.info("File: {} is not fully authorized", sno);
+      if (!TAB_NAMES.contains(request.getTabName())) {
+        throw new IllegalArgumentException("Invalid tab name: " + request.getTabName());
       }
+
+      // Get data from DAO
+      beneficiaryDetails = manageFileBeneficiaryDaoImpl.getFileDetails(corporateId, request.getFileReferenceNo());
+      logger.info("Inside the ManageFileBeneficiaryListServiceImpl getFileDetailsByTab ENDS");
+    } catch (DataAccessException dataAccessException) {
+      logger.info("Data access exception occurred while fetching beneficiary details");
+      throw new TechnicalException(dataAccessException.getMessage(), ErrorCodes.DB_ACCESS_FAILURE);
+    }
+    // GET BENE DATA
+    return getBeneficiaryDetails(beneficiaryDetails, request, totalCount);
+  }
+
+
+  private BeneficiaryDetails getBeneficiaryDetails(
+          BeneficiaryDetails detail, BeneficiaryDetailsRequest request, AtomicInteger totalCount) {
+    try {
+      // Get beneficiaries based on status
+      List<Beneficiary> beneficiaries = getBeneficiaries(detail.getFileReferenceNo(),
+              request.getStatus());
+
+      if (request.getBenTypeAction() != null && Objects.equals(request.getStatus(), "Failure")) {
+        beneficiaries = setTypeActionBeneficiariesOnFailure(beneficiaries,
+                request.getBenTypeAction(), request.getFileReferenceNo());
+      } else if (request.getBenTypeAction() != null) {
+        beneficiaries = setTypeActionBeneficiaries(beneficiaries,
+                request.getBenTypeAction(), request.getFileReferenceNo());
+      }
+
+      // searchBy if 3 or more characters
+      String searchBy = request.getSearchBy();
+      if (searchBy != null && searchBy.trim().length() >= 3) {
+        String searchLower = searchBy.trim().toLowerCase();
+        beneficiaries = beneficiaries.stream().filter(b -> b.getName() != null && b.getName().toLowerCase().contains(searchLower) || b.getAccountNumber() != null && b.getAccountNumber().toLowerCase().contains(searchLower))
+                .toList();
+      }
+
+      // Store total count
+      totalCount.set(beneficiaries.size());
+
+      setCountsAndStatus(detail, request.getStatus());
+
+      List<Beneficiary> paginateResults = paginateResult(request, beneficiaries);
+
+      detail.setBeneficiaries(paginateResults);
+    } catch (DataAccessException dataAccessException) {
+      logger.info("Data access exception occurred while fetching beneficiary details");
+      throw new TechnicalException(dataAccessException.getMessage(), ErrorCodes.DB_ACCESS_FAILURE);
+    }
+    return detail;
+  }
+
+
+  private List<Beneficiary> getBeneficiaries(String fileRefNo, String status) {
+    if (Objects.equals(status, "All")) {
+      return manageFileBeneficiaryDaoImpl.getAllBeneficiaries(fileRefNo);
     } else {
-      logger.info("File count is ZERO");
+      return manageFileBeneficiaryDaoImpl.getBeneficiariesByStatus(fileRefNo, status);
     }
   }
+
+  private void setCountsAndStatus(BeneficiaryDetails detail, String status) {
+    // Get counts from DAO
+    Map<String, Integer> totalCounts = manageFileBeneficiaryDaoImpl
+            .getBeneficiaryCounts(detail.getFileReferenceNo());
+
+    // Set counts
+    detail.setBeneficiaryStatusCount(totalCounts);
+    // Set count summary
+    if (Objects.equals(status, "All")) {
+      Map<String, Integer> actionTypeCounts = manageFileBeneficiaryDaoImpl
+              .getActionTypeCounts(detail.getFileReferenceNo());
+      detail.setCountSummary(getBeneficiaryRequestTypes(actionTypeCounts));
+    } else {
+      Map<String, Integer> actionTypeCountsByStatus = manageFileBeneficiaryDaoImpl
+              .getActionTypeCountsByStatus(detail.getFileReferenceNo(), status);
+      detail.setCountSummary(getBeneficiaryRequestTypes(actionTypeCountsByStatus));
+    }
+
+    // Set approval status
+    detail.setApprovalStatus(determineApprovalStatus(
+            totalCounts.getOrDefault(BENEFICIARY_COUNT, 0),
+            totalCounts.getOrDefault(APPROVED_COUNT, 0),
+            totalCounts.getOrDefault(REJECTED_COUNT, 0),
+            totalCounts.getOrDefault(PENDING_COUNT, 0)));
+  }
+
+  private List<Beneficiary> paginateResult(
+          BeneficiaryDetailsRequest request, List<Beneficiary> beneficiaries) {
+    int start = (request.getPageNo() - 1) * request.getPageSize();
+    int end = Math.min(start + request.getPageSize(), beneficiaries.size());
+    return start >= beneficiaries.size() ? Collections.emptyList()
+            : beneficiaries.subList(start, end);
+  }
+
+  private List<Beneficiary> setTypeActionBeneficiariesOnFailure(
+          List<Beneficiary> beneficiaries, String benTypeAction, String fileRefNo) {
+    List<Beneficiary> result = new ArrayList<>();
+    for (Beneficiary beneficiary : beneficiaries) {
+      List<Beneficiary> actionBeneficiaries = manageFileBeneficiaryDaoImpl
+              .getBeneficiariesByTypeActionOnFailure(
+                      beneficiary.getName(), beneficiary.getAccountNumber(),
+                      beneficiary.getCode(), benTypeAction, fileRefNo);
+      result.addAll(actionBeneficiaries);
+    }
+    return result;
+  }
+
+  private List<Beneficiary> setTypeActionBeneficiaries(List<Beneficiary> beneficiaries,
+                                                       String benTypeAction, String fileRefNo) {
+    List<Beneficiary> result = new ArrayList<>();
+    for (Beneficiary beneficiary : beneficiaries) {
+      List<Beneficiary> actionBeneficiaries = manageFileBeneficiaryDaoImpl
+              .getBeneficiariesByTypeAction(beneficiary.getName(), beneficiary.getAccountNumber(),
+                      beneficiary.getCode(), benTypeAction, fileRefNo);
+      result.addAll(actionBeneficiaries);
+    }
+    return result;
+  }
+
+  public UploaderResponse getUploaderList(CommonRequestPayload request) {
+    logger.info("Inside the ManageFileBeneficiaryListServiceImpl getUploaderList STARTS");
+
+    String corporateId = request.getCorporateAlias();
+    List<String> uploaderList;
+    // Get data from DAO
+    uploaderList = manageFileBeneficiaryDaoImpl.getUploaderList(corporateId, request.getUserName());
+
+    UploaderResponse uploaderResponse = new UploaderResponse();
+
+    uploaderResponse.setUploaders(uploaderList);
+    logger.info("Inside the ManageFileBeneficiaryListServiceImpl "
+            + "getUploaderList ENDS");
+    // GET UPLOADER NAMES
+    return uploaderResponse;
+  }
+
+  private String determineApprovalStatus(int total, int approved, int rejected, int pending) {
+    if (approved == total && total > 0) {
+      return "Approved";
+    }
+    if (rejected == total && total > 0) {
+      return "Rejected";
+    }
+    if (approved > 0 || rejected > 0) {
+      return "Partially Approved";
+    }
+    if (pending > 0) {
+      return "Pending";
+    }
+    return "-";
+  }
+
+  private List<BeneficiaryRequestType> getBeneficiaryRequestTypes(
+          Map<String, Integer> countingMap) {
+    return List.of(new BeneficiaryRequestType(SAME, ADD, countingMap
+                    .getOrDefault(SAME_BANK_ADD, 0)),
+            new BeneficiaryRequestType(SAME, DELETE, countingMap
+                    .getOrDefault(SAME_BANK_DELETE, 0)),
+            new BeneficiaryRequestType(OTHER, ADD, countingMap
+                    .getOrDefault(OTHER_BANK_ADD, 0)),
+            new BeneficiaryRequestType(OTHER, DELETE, countingMap
+                    .getOrDefault(OTHER_BANK_DELETE, 0)));
+  }
+
+
+  @Override
+  public int approveBeneficiary(ApproveRejectBeneRequest approveRejectBeneRequest) {
+
+    int approvedCount = 0;
+    try {
+      /*
+       * Get corporate user cooling limit
+       */
+      int coolingPeriod = Integer.parseInt(Optional.ofNullable(manageFileBeneficiaryDaoImpl.getValueFromNameValueMasterByNameAndStatus(CORPORATE_USER_COOLING_LIMIT))
+              .orElseThrow(() -> new ValidationException(INVALID_COOLING_PERIOD, "")));
+      logger.info("Cooling period limit for corporate user is {}", coolingPeriod);
+      /*
+       * if approval/Rejection requested on 'type & action'
+       */
+      if (approveRejectBeneRequest.getBeneActionLevel() == ACTION_BY_TYPE_ACTION) {
+        logger.info("Approval requested for all beneficiaries in a category");
+        if (ZERO == coolingPeriod)
+          approvedCount = approveBeneficiaryByTypeAction(approveRejectBeneRequest);
+        else
+          approvedCount = approveBeneficiaryByTypeActionWithCoolingPeriod(approveRejectBeneRequest);
+      }
+      /*
+       * if 1 or more beneficiaries selected for approval
+       */
+      else if (approveRejectBeneRequest.getBeneActionLevel() == ACTION_BY_BENEFICIARY) {
+        logger.info("Approval requested in beneficiary level");
+        if (ZERO == coolingPeriod)
+          approvedCount = approveBeneficiaryByOid(approveRejectBeneRequest);
+        else
+          approvedCount = approveBeneficiaryByOidWithCoolingPeriod(approveRejectBeneRequest);
+
+      }
+      manageFileBeneficiaryDaoImpl.validateAndSaveToWACReferenceStatus(approveRejectBeneRequest.getFileReferenceNo());
+    } catch (NumberFormatException numberFormatException) {
+      logger.info("Not able to parse cooling period value");
+      throw new ValidationException(INVALID_COOLING_PERIOD, "Invalid corporate user cooling period");
+    } catch (DataAccessException dataAccessException) {
+      logger.info("Data access exception occurred while approving beneficiary");
+      throw new TechnicalException(dataAccessException.getMessage(), ErrorCodes.DB_ACCESS_FAILURE);
+    }
+    return approvedCount;
+  }
+
+  private int approveBeneficiaryByOidWithCoolingPeriod(ApproveRejectBeneRequest approveRejectBeneRequest) {
+    return ZERO;
+  }
+
+  /**
+   * This method is to reject beneficiaries
+   *
+   * @param approveRejectBeneRequest
+   * @return int number of records updated
+   */
+  @Override
+  public int rejectBeneficiary(ApproveRejectBeneRequest approveRejectBeneRequest) {
+
+    int rejectedCount = 0;
+    try {
+      /*
+       * if rejection requested on 'type & action'
+       * ('type & action' : same bank add, same bank delete, other bank add, other bank delete)
+       */
+      if (approveRejectBeneRequest.getBeneActionLevel() == ACTION_BY_TYPE_ACTION) {
+        logger.info("Rejection requested for all beneficiaries in a category");
+        rejectedCount = rejectBeneficiaryByTypeAction(approveRejectBeneRequest);
+      }
+
+      /*
+       * if 1 or more beneficiaries selected for rejection
+       */
+      else if (approveRejectBeneRequest.getBeneActionLevel() == ACTION_BY_BENEFICIARY) {
+        logger.info("Rejection requested in beneficiary level");
+        rejectedCount = rejectBeneficiaryByOid(approveRejectBeneRequest);
+      }
+    } catch (DataAccessException dataAccessException) {
+      logger.info("Data access exception occurred while rejecting beneficiary");
+      throw new TechnicalException(dataAccessException.getMessage(), ErrorCodes.DB_ACCESS_FAILURE);
+    }
+    return rejectedCount;
+  }
+
+  /**
+   * @param approveRejectBeneRequest
+   * @return int number of beneficiaries approved
+   */
+  public int approveBeneficiaryByTypeAction(ApproveRejectBeneRequest approveRejectBeneRequest) {
+    logger.info("approveBeneficiaryByTypeAction() - ApproveRejectBeneRequest : {}", approveRejectBeneRequest);
+    int approvedCount = switch (approveRejectBeneRequest.getBeneTypeAction()) {
+      case SAME_BANK_ADD_BENE -> {
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                .addValue(STATUS, 1)
+                .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+        logger.info("Same Bank-Add approval - TYPE");
+        yield manageFileBeneficiaryDaoImpl.update(APPROVE_OR_REJECT_3P_BY_TYPE, parameters);
+      }
+      case OTHER_BANK_ADD_BENE -> {
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                .addValue(STATUS, ACTIVE)
+                .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+        logger.info("Other Bank-Add approval - TYPE");
+        yield manageFileBeneficiaryDaoImpl.update(APPROVE_OR_REJECT_IBTP_BY_TYPE, parameters);
+      }
+      case SAME_BANK_DELETE_BENE -> {
+        if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType())) {
+          SqlParameterSource parameters = new MapSqlParameterSource()
+                  .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                  .addValue(STATUS, 3)
+                  .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                  .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+          logger.info("Same Bank-Delete approval - COMPOSITE - TYPE");
+          yield manageFileBeneficiaryDaoImpl.update(APPROVE_D3P_BY_TYPE_COMPBEN, parameters);
+        } else {
+          SqlParameterSource parameters = new MapSqlParameterSource()
+                  .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                  .addValue(STATUS, APPROVED)
+                  .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                  .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+          logger.info("Same Bank-Delete approval - NON-COMPOSITE - TYPE");
+          yield manageFileBeneficiaryDaoImpl.update(APPROVE_D3P_BY_TYPE_BEN, parameters);
+        }
+      }
+      case OTHER_BANK_DELETE_BENE -> {
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                .addValue(STATUS, INACTIVE)
+                .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+        logger.info("Other Bank-Delete approval - TYPE");
+        yield manageFileBeneficiaryDaoImpl.update(APPROVE_DIBTP_BY_TYPE, parameters);
+      }
+      default -> throw new ValidationException(INVALID_TYPE_ACTION, "Invalid beneficiary type & action");
+    };
+    logger.info("Total beneficiary records approved is {} for file type {}", approvedCount, approveRejectBeneRequest.getBeneTypeAction());
+    if (approvedCount <= 0) {
+      throw new ValidationException(ManageBeneStatusCode.NO_RECORDS_TO_APPROVE, "No beneficiary found to approve");
+    }
+    if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType()))
+      manageFileBeneficiaryDaoImpl.validateAndSaveToWACReferenceStatus(approveRejectBeneRequest.getFileReferenceNo());
+    return approvedCount;
+  }
+
+  /**
+   * @param approveRejectBeneRequest
+   * @return int number of beneficiaries approved
+   */
+  public int approveBeneficiaryByOid(ApproveRejectBeneRequest approveRejectBeneRequest) {
+    int[] batchApprovedCount = switch (approveRejectBeneRequest.getBeneTypeAction()) {
+      case SAME_BANK_ADD_BENE -> {
+        logger.info("Same Bank-Add approval - OID");
+        yield manageFileBeneficiaryDaoImpl.batchUpdate(APPROVE_3P_BY_OID, approveRejectBeneRequest.getBeneficiaryIds()
+                .stream().map(oid -> new MapSqlParameterSource()
+                        .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                        .addValue(STATUS, ACTIVE)
+                        .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                        .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+      }
+      case OTHER_BANK_ADD_BENE -> {
+        logger.info("Other Bank-Add approval - OID");
+        yield manageFileBeneficiaryDaoImpl.batchUpdate(APPROVE_OR_REJECT_IBTP_BY_OID, approveRejectBeneRequest.getBeneficiaryIds()
+                .stream().map(oid -> new MapSqlParameterSource()
+                        .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                        .addValue(STATUS, ACTIVE)
+                        .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                        .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+      }
+      case SAME_BANK_DELETE_BENE -> {
+        if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType())) {
+          logger.info("Same Bank-Delete approval - COMPOSITE - OID");
+          yield manageFileBeneficiaryDaoImpl.batchUpdate(APPROVE_D3P_BY_OID_COMPBEN, approveRejectBeneRequest.getBeneficiaryIds()
+                  .stream().map(oid -> new MapSqlParameterSource()
+                          .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                          .addValue(STATUS, 3)
+                          .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                          .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+        } else {
+          logger.info("Same Bank-Delete approval - NON-COMPOSITE - OID");
+          yield manageFileBeneficiaryDaoImpl.batchUpdate(APPROVE_D3P_BY_OID_BEN, approveRejectBeneRequest.getBeneficiaryIds()
+                  .stream().map(oid -> new MapSqlParameterSource()
+                          .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                          .addValue(STATUS, APPROVED)
+                          .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                          .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+        }
+      }
+      case OTHER_BANK_DELETE_BENE -> {
+        logger.info("Other Bank-Delete approval - OID");
+        yield manageFileBeneficiaryDaoImpl.batchUpdate(APPROVE_DIBTP_BY_OID, approveRejectBeneRequest.getBeneficiaryIds()
+                .stream().map(oid -> new MapSqlParameterSource()
+                        .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                        .addValue(STATUS, INACTIVE)
+                        .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                        .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+      }
+      default -> throw new ValidationException(INVALID_TYPE_ACTION, "Invalid beneficiary type & action");
+    };
+    int approvedCount = ZERO;
+    if (Optional.ofNullable(batchApprovedCount).isPresent()) {
+      logger.info("Batch update approved counts: {}", Arrays.toString(batchApprovedCount));
+      approvedCount = Arrays.stream(batchApprovedCount).sum();
+      logger.info("Total beneficiary records approved is {} for type & action {}", approvedCount, approveRejectBeneRequest.getBeneTypeAction());
+      if (approvedCount <= 0) {
+        throw new ValidationException(ManageBeneStatusCode.NO_RECORDS_TO_APPROVE, "No beneficiary found to approve");
+      }
+      if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType()))
+        manageFileBeneficiaryDaoImpl.validateAndSaveToWACReferenceStatus(approveRejectBeneRequest.getFileReferenceNo());
+    } else
+      throw new TechnicalException(ErrorCodes.DB_ACCESS_FAILURE, "Something went wrong while accessing database.Please try later");
+    return approvedCount;
+  }
+
+  public int approveBeneficiaryByTypeActionWithCoolingPeriod(ApproveRejectBeneRequest approveRejectBeneRequest) {
+    return ZERO;
+  }
+
+  /**
+   * @param approveRejectBeneRequest
+   * @return int number of beneficiaries rejected
+   */
+  public int rejectBeneficiaryByTypeAction(ApproveRejectBeneRequest approveRejectBeneRequest) {
+    int rejectedCount = switch (approveRejectBeneRequest.getBeneTypeAction()) {
+      case SAME_BANK_ADD_BENE -> {
+        logger.info("Same Bank-Add rejection - TYPE");
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                .addValue(STATUS, 2)
+                .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+
+        yield manageFileBeneficiaryDaoImpl.update(APPROVE_OR_REJECT_3P_BY_TYPE, parameters);
+      }
+      case OTHER_BANK_ADD_BENE -> {
+        logger.info("Other Bank-Add rejection - TYPE");
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                .addValue(STATUS, REJECTED_SMALLCASE)
+                .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+
+        yield manageFileBeneficiaryDaoImpl.update(APPROVE_OR_REJECT_IBTP_BY_TYPE, parameters);
+      }
+      case SAME_BANK_DELETE_BENE -> {
+        if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType())) {
+          logger.info("Same Bank-Delete rejection - COMPOSITE - TYPE");
+          SqlParameterSource parameters = new MapSqlParameterSource()
+                  .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                  .addValue(STATUS, 1)
+                  //can't be added to rtgs or 3rd party as there is no link after rejection
+                  //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                  .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+          yield manageFileBeneficiaryDaoImpl.update(REJECT_D3P_BY_TYPE_COMPBEN, parameters);
+        } else {
+          logger.info("Same Bank-Delete rejection - NON-COMPOSITE - TYPE");
+          SqlParameterSource parameters = new MapSqlParameterSource()
+                  .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                  .addValue(STATUS, REJECTED)
+                  //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                  .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+
+          yield manageFileBeneficiaryDaoImpl.update(REJECT_D3P_BY_TYPE_BEN, parameters);
+        }
+      }
+      case OTHER_BANK_DELETE_BENE -> {
+        logger.info("Other Bank-Delete rejection - TYPE");
+        SqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                .addValue(STATUS, ACTIVE)
+                //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                .addValue(SNO, approveRejectBeneRequest.getFileReferenceNo());
+
+        yield manageFileBeneficiaryDaoImpl.update(REJECT_DIBTP_BY_TYPE, parameters);
+      }
+      default -> throw new ValidationException(INVALID_TYPE_ACTION, "Invalid beneficiary type & action");
+    };
+    logger.info("Total beneficiary records rejected is {} for file type {}", rejectedCount, approveRejectBeneRequest.getBeneTypeAction());
+
+    if (rejectedCount <= ZERO) {
+      logger.info("No records found to reject");
+      throw new ValidationException(ManageBeneStatusCode.NO_RECORDS_TO_REJECT, "No beneficiary found to reject");
+    }
+
+    saveToWACAuditTrail("rejectBeneficiaryByTypeAction", "", approveRejectBeneRequest);
+
+    if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType())) {
+      logger.info("ValidateAndSaveToWACReferenceStatus() is invoked as file type is COMPOSITE beneficiary");
+      manageFileBeneficiaryDaoImpl.validateAndSaveToWACReferenceStatus(approveRejectBeneRequest.getFileReferenceNo());
+    }
+    return rejectedCount;
+  }
+
+  /**
+   * @param approveRejectBeneRequest
+   * @return int number of beneficiaries rejected
+   */
+  public int rejectBeneficiaryByOid(ApproveRejectBeneRequest approveRejectBeneRequest) {
+    int[] batchRejectedCount = switch (approveRejectBeneRequest.getBeneTypeAction()) {
+      case SAME_BANK_ADD_BENE -> {
+        logger.info("Same Bank-Add rejection - OID");
+        yield manageFileBeneficiaryDaoImpl.batchUpdate(REJECT_3P_BY_OID, approveRejectBeneRequest.getBeneficiaryIds()
+                .stream().map(oid -> new MapSqlParameterSource()
+                        .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                        .addValue(STATUS, 2)
+                        .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                        //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                        .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+      }
+      case OTHER_BANK_ADD_BENE -> {
+        logger.info("Other Bank-Add rejection - OID");
+        yield manageFileBeneficiaryDaoImpl.batchUpdate(APPROVE_OR_REJECT_IBTP_BY_OID, approveRejectBeneRequest.getBeneficiaryIds()
+                .stream().map(oid -> new MapSqlParameterSource()
+                        .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                        .addValue(STATUS, REJECTED_SMALLCASE)
+                        .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+                        //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                        .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+      }
+      case SAME_BANK_DELETE_BENE -> {
+        if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType())) {
+          logger.info("Same Bank-Delete rejection - COMPOSITE - OID");
+          yield manageFileBeneficiaryDaoImpl.batchUpdate(REJECT_D3P_BY_OID_COMPBEN, approveRejectBeneRequest.getBeneficiaryIds()
+                  .stream().map(oid -> new MapSqlParameterSource()
+                          .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                          .addValue(STATUS, 1)
+                          //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                          .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+        } else {
+          logger.info("Same Bank-Delete rejection - NON-COMPOSITE - OID");
+          yield manageFileBeneficiaryDaoImpl.batchUpdate(REJECT_D3P_BY_OID_BEN, approveRejectBeneRequest.getBeneficiaryIds()
+                  .stream().map(oid -> new MapSqlParameterSource()
+                          .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                          .addValue(STATUS, REJECTED)
+                          //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                          .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+        }
+      }
+      case OTHER_BANK_DELETE_BENE -> {
+        logger.info("Other Bank-Delete rejection - OID");
+        yield manageFileBeneficiaryDaoImpl.batchUpdate(REJECT_DIBTP_BY_OID, approveRejectBeneRequest.getBeneficiaryIds()
+                .stream().map(oid -> new MapSqlParameterSource()
+                        .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+                        //.addValue("rejectionReason", approveRejectBeneRequest.getComments())
+                        .addValue(OID, oid)).toArray(SqlParameterSource[]::new));
+      }
+      default -> throw new ValidationException(INVALID_TYPE_ACTION, "Invalid beneficiary type & action");
+    };
+    int rejectedCount = ZERO;
+    if (Optional.ofNullable(batchRejectedCount).isPresent()) {
+      logger.info("Batch update rejected counts: {}", Arrays.toString(batchRejectedCount));
+      rejectedCount = Arrays.stream(batchRejectedCount).sum();
+      logger.info("Total beneficiary records rejected is {} for type & action {}", rejectedCount, approveRejectBeneRequest.getBeneTypeAction());
+      if (rejectedCount <= ZERO) {
+        logger.info(" No records found to reject");
+        throw new ValidationException(ManageBeneStatusCode.NO_RECORDS_TO_REJECT, "No beneficiary found to reject");
+      }
+      approveRejectBeneRequest.getBeneficiaryIds().forEach(oid ->
+              saveToWACAuditTrail("rejectBeneficiaryByOid", oid.toString(), approveRejectBeneRequest));
+      if (COMPOSITE_BENE.equals(approveRejectBeneRequest.getFileType())) {
+        logger.info(" ValidateAndSaveToWACReferenceStatus() is invoked as file type is COMPOSITE beneficiary");
+        manageFileBeneficiaryDaoImpl.validateAndSaveToWACReferenceStatus(approveRejectBeneRequest.getFileReferenceNo());
+      }
+    } else
+      throw new TechnicalException(ErrorCodes.DB_ACCESS_FAILURE, "Something went wrong while accessing database.Please try later");
+    return rejectedCount;
+  }
+
+  public void saveToWACAuditTrail(String methodName, String oid, ApproveRejectBeneRequest approveRejectBeneRequest) {
+    try {
+      logger.info("saveToWACAuditTrail() - Method : {} , oid : {}", methodName, oid);
+      SqlParameterSource sqlParameterSource = new MapSqlParameterSource()
+              .addValue("auditCode", COMPB001)
+              .addValue("className", this.getClass().getName())
+              .addValue("methodName", methodName)
+              .addValue(USERNAME, approveRejectBeneRequest.getUserName())
+              .addValue(FILENAME, approveRejectBeneRequest.getFileName())
+              .addValue("fileType", approveRejectBeneRequest.getBeneTypeAction())
+              .addValue(CORPORATE_ID, approveRejectBeneRequest.getCorporateAlias())
+              .addValue("rejectedId", oid).addValue("field6", "")
+              .addValue("field7", "").addValue("field8", "")
+              .addValue("field9", "").addValue("field10", "")
+              .addValue("field11", "").addValue("field12", "")
+              .addValue("field13", "").addValue("field14", "")
+              .addValue("field15", "").addValue("field16", "")
+              .addValue("field17", "").addValue("field18", "")
+              .addValue("field19", "").addValue("field20", "");
+      int count = manageFileBeneficiaryDaoImpl.update(SAVE_WAC_AUDIT_TRAIL, sqlParameterSource);
+      logger.info("Saved to WAC_AUDIT_TRAIL - Inserted Row count in audit {}.", count);
+    } catch (DataAccessException dataAccessException) {
+      logger.error("DataAccessException while saving details to WAC_AUDIT_TRAIL : {}", dataAccessException.getMessage());
+    } catch (Exception exception) {
+      logger.info("Failed to insert in wac_audit_trail for userName : {} and fileName : {} ", approveRejectBeneRequest.getUserName(), approveRejectBeneRequest.getFileName());
+      logger.error("Exception message : {} ", exception.getMessage());
+    }
+  }
+
 
 }
