@@ -1,427 +1,1094 @@
-import com.sbi.yb.constants.QueryConstants;
-import com.sbi.yb.model.Beneficiary;
-import com.sbi.yb.model.BeneficiaryDetailsResponse;
-import com.sbi.yb.model.BeneficiaryFileRequest;
-import com.sbi.yb.model.BeneficiaryFileResponse;
-import com.sbi.yb.repository.impl.ManageFileBeneficiaryDaoImpl;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.sbi.yb.constants.UtilConstants.*;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+Version No	Date	Author	Changes Made
+0.1	19-05-2025	Sankara Narayanan	Draft Version
+0.2	10-06-2025	Sankara Narayanan	Changes made as per the latest wireframes provided by UI/UX team
 
-@ExtendWith(MockitoExtension.class)
-class ManageFileBeneficiaryDaoImplTest {
 
-    @Mock
-    private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+	Prepared By	Inspected/Reviewed By	Approved By
+Name	Sankara Narayanan	Ramanan & Chitra	Philip Martin
+Role	Business Analyst (Tech M)	Java Lead (Tech M)	Program Manager (Tech M)
+Signature			
+Date			
 
-    @InjectMocks
-    private ManageFileBeneficiaryDaoImpl manageFileBeneficiaryDao;
 
-    private BeneficiaryFileRequest request;
-    private AtomicInteger totalCount;
+	
+Stake Holder Review (SBI Project Officer)
+Ramya	AGM Name
+Reviewer	Approver
+Manager (IT – YB)	Designation
+	Current date
 
-    @BeforeEach
-    void setUp() {
-        request = new BeneficiaryFileRequest();
-        request.setCorporateAlias("CORP123");
-        request.setPageNo(1);
-        request.setPageSize(10);
-        request.setTabName("testTab");
-        totalCount = new AtomicInteger(0);
-    }
+Contents
+1.	Overview	4
+2.	Objective of the CR	4
+3.	Scope	4
+4.	Impacted Applications	4
+5.	Out of Scope	4
+6.	Risks, if any	5
+7.	Stakeholders	5
+8.	Solution	5
+8.1	AS-IS Process	5
+8.2	Limitations of Existing Process	7
+8.3	To-Be Process	7
+8.4	To-Be Process- Benefits & Advantages	9
+8.5	Business Logics & Validations	10
+8.6	Exception Scenarios	11
+8.7	Alternate Scenarios	11
+8.8	Functional Process Flow	12
+8.9	Data Flow	14
+8.10	Proposed Screens	15
+8.10.1	Proposed Request Parameters	15
+8.10.2	Proposed Sample Request	15
+8.10.3	Proposed Response Parameters	15
+8.10.4	Proposed Sample Response	15
+8.11	Use case Specification	15
+8.11.1	Use Case ID: US01_Uploading an IMPS Transaction File	15
+8.11.2	Use Case ID: US02_Approving the IMPS Transaction File in the Authorizer login using Bulk Echeque Approval menu	19
+8.11.3	Use Case ID: US03_Approving the IMPS Transaction File in the Authorizer login using Authorize File menu	24
+8.11.4	Use Case ID: US04_ View Status - Viewing the IMPS Transaction File Upload/Approval Status details	30
+8.11.5	Use Case ID: US05_ Uploading an IMPS beneficiary File	34
+8.11.6	Use Case ID: US06_Manage Beneficiary – Approver landing page	37
+8.11.7	Use Case ID: US07_ Manage Beneficiary – Approver – Approve/Reject files	40
+8.11.8	Use Case ID: US08_ View Status - Viewing the IMPS Beneficiary File Upload/Approval Status details	43
+8.11.9 Validation Failure Scenarios	46
+8.12	Interface Control	46
+8.13	Class Diagrams	46
+8.14	Sequence Diagrams	46
+8.15	Error Description	46
+9.	Infrastructure Requirements	46
+10.	Security Requirements	47
+11.	Deployment Requirements	47
+12.	Non-Functional Requirements	47
+13.	Support Required from Dept.	47
+14.	Assumptions, Constraints & Dependencies	47
+15.	Statutory & Regulatory Requirements	47
+16.	Report Requirement	47
+17.	Annexures	47
 
-    @Test
-    void getBeneFiles_WithAllFilters() throws SQLException {
-        // Setup request with all filters
-        request.setSearchBy("test");
-        Map<String, String> filterBy = new HashMap<>();
-        filterBy.put("uploader", "user1");
-        filterBy.put(UPLOADSTATUS, "UPLOADED");
-        filterBy.put(APPROVALSTATUS, "APPROVED");
-        filterBy.put(FILETYPE, "TYPE1");
-        request.setFilterBy(filterBy);
 
-        // Mock ResultSet for BeneficiaryFileResponse
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("fileRefNo")).thenReturn("REF123");
-        when(mockResultSet.getString(FILENAME)).thenReturn("test.txt");
-        when(mockResultSet.getString("username")).thenReturn("user1");
-        when(mockResultSet.getString("fileUploadedDate")).thenReturn("2023-01-01");
-        when(mockResultSet.getString(UPLOADSTATUS)).thenReturn("UPLOADED");
-        when(mockResultSet.getString(APPROVALSTATUS)).thenReturn("APPROVED");
-        when(mockResultSet.getString("approvedBy")).thenReturn("admin");
-        when(mockResultSet.getString("approvedOn")).thenReturn("2023-01-02");
-        when(mockResultSet.getString(FILETYPE)).thenReturn("TYPE1");
-        when(mockResultSet.getInt("benCount")).thenReturn(10);
-        when(mockResultSet.getInt("approvedCount")).thenReturn(5);
-        when(mockResultSet.getInt("rejectedCount")).thenReturn(2);
-        when(mockResultSet.getInt("pendingCount")).thenReturn(3);
-        when(mockResultSet.getInt("failureCount")).thenReturn(0);
 
-        // Mock database calls
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(5);
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<BeneficiaryFileResponse> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
 
-        // Execute method
-        List<BeneficiaryFileResponse> result = manageFileBeneficiaryDao.getBeneFiles(request, totalCount);
 
-        // Verify results
-        assertEquals(5, totalCount.get());
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("REF123", result.get(0).getFileRefNo());
-        assertEquals("test.txt", result.get(0).getFileName());
-        assertEquals("UPLOADED", result.get(0).getUploadStatus());
-    }
 
-    @Test
-    void getBeneFiles_WithoutFilters() {
-        // Mock database calls for empty request
-        when(namedParameterJdbcTemplate.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Integer.class)))
-                .thenReturn(2);
-        when(namedParameterJdbcTemplate.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class)))
-                .thenReturn(List.of());
 
-        // Execute method
-        manageFileBeneficiaryDao.getBeneFiles(request, totalCount);
 
-        // Verify count
-        assertEquals(2, totalCount.get());
-    }
 
-    @Test
-    void getFileDetails() throws SQLException {
-        // Mock ResultSet for BeneficiaryDetailsResponse
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("FILEREFNO")).thenReturn("REF123");
-        when(mockResultSet.getString(FILENAME)).thenReturn("test.txt");
-        when(mockResultSet.getString("FILEUPLOADEDDATE")).thenReturn("2023-01-01");
-        when(mockResultSet.getString("USERNAME")).thenReturn("user1");
-        when(mockResultSet.getString(UPLOADSTATUS)).thenReturn("UPLOADED");
-        when(mockResultSet.getString(FILETYPE)).thenReturn("TYPE1");
 
-        // Mock database call
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.FETCH_UPLOADED_FILE_DETAILS),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<BeneficiaryDetailsResponse> mapper = invocation.getArgument(2);
-                    return mapper.mapRow(mockResultSet, 1);
-                });
 
-        // Execute method
-        BeneficiaryDetailsResponse result = manageFileBeneficiaryDao.getFileDetails("CORP123", "REF123");
 
-        // Verify results
-        assertNotNull(result);
-        assertEquals("REF123", result.getFileRefNo());
-        assertEquals("test.txt", result.getFileName());
-    }
 
-    @Test
-    void getBeneficiaryCounts() {
-        // Setup mock result
-        Map<String, Object> mockResult = new HashMap<>();
-        mockResult.put(BENEFICIARY_COUNT, 10);
-        mockResult.put(APPROVED_COUNT, 5);
-        mockResult.put(REJECTED_COUNT, 2);
-        mockResult.put(PENDING_COUNT, 3);
-        mockResult.put(VALIDATION_FAILURE_COUNT, 0);
 
-        // Mock database call
-        when(namedParameterJdbcTemplate.queryForMap(
-                eq(QueryConstants.GET_FILE_DETAILS_COUNT),
-                anyMap()))
-                .thenReturn(mockResult);
 
-        // Execute method
-        Map<String, Integer> result = manageFileBeneficiaryDao.getBeneficiaryCounts("REF123");
 
-        // Verify results
-        assertEquals(5, result.size());
-        assertEquals(10, result.get(BENEFICIARY_COUNT));
-        assertEquals(5, result.get(APPROVED_COUNT));
-        assertEquals(2, result.get(REJECTED_COUNT));
-    }
 
-    @Test
-    void getAllBeneficiaries() throws SQLException {
-        // Mock ResultSet for Beneficiary
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
-        when(mockResultSet.getString("ACCOUNTNO")).thenReturn("ACC123");
-        when(mockResultSet.getString("IFSCCODE")).thenReturn("IFSC123");
-        when(mockResultSet.getString("NAME")).thenReturn("Test Name");
-        when(mockResultSet.getString("COMMENTS")).thenReturn("Test Comment");
-        when(mockResultSet.getString("CODE")).thenReturn("CODE123");
-        when(mockResultSet.getString("ACTION")).thenReturn("A");
-        when(mockResultSet.getString("TYPE")).thenReturn("S");
-        when(mockResultSet.getString("STATUS")).thenReturn("APPROVED");
 
-        // Mock database call
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.COMBINED_WITH_STATUS),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
 
-        // Execute method
-        List<Beneficiary> result = manageFileBeneficiaryDao.getAllBeneficiaries("REF123");
 
-        // Verify results
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("OID123", result.get(0).getOid());
-        assertEquals("ACC123", result.get(0).getAccountNumber());
-    }
 
-    @ParameterizedTest
-    @ValueSource(strings = {"APPROVED", "REJECTED", "PENDING", "FAILURE", "UNKNOWN"})
-    void getBeneficiariesByStatus(String status) throws SQLException {
-        // Mock ResultSet
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
 
-        // Determine which query to expect based on status
-        String expectedQuery = switch (status.toUpperCase()) {
-            case "APPROVED" -> QueryConstants.APPROVED_FILE_LIST;
-            case "REJECTED" -> QueryConstants.REJECTED_FILE_LIST;
-            case "PENDING" -> QueryConstants.SELECT_PENDING_FILES;
-            case "FAILURE" -> QueryConstants.FAILURE_FILE_LIST;
-            default -> null;
-        };
 
-        if (expectedQuery != null) {
-            when(namedParameterJdbcTemplate.query(
-                    eq(expectedQuery),
-                    anyMap(),
-                    any(RowMapper.class)))
-                    .thenAnswer(invocation -> {
-                        RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                        return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                    });
-        }
 
-        // Execute method
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByStatus("REF123", status);
+    1. Overview 
 
-        // Verify results
-        assertNotNull(result);
-        if (!status.equalsIgnoreCase("UNKNOWN")) {
-            assertEquals(1, result.size());
-            assertEquals("OID123", result.get(0).getOid());
-        } else {
-            assertTrue(result.isEmpty());
-        }
-    }
+This document details the re-imagination of File Based Transactions – IMPS Module (both beneficiary and Transactions) for VYAPAAR VISTAAR corporate journey in YONO Business.
+    2. Objective of the CR
 
-    @Test
-    void getActionTypeCounts() {
-        // Setup mock result
-        Map<String, Object> mockResult = new HashMap<>();
-        mockResult.put(SAME_BANK_ADD, 5);
-        mockResult.put(OTHER_BANK_ADD, 3);
-        mockResult.put(SAME_BANK_DELETE, 2);
-        mockResult.put(OTHER_BANK_DELETE, 1);
+    • The purpose of this document is to develop a solution process wherein VYAPAAR VISTAAR customers can use file upload facility for initiating IMPS beneficiary and IMPS transactions.
+    • Transactions can be of single debit & single credit (SDSC) or single debit & multiple credit (SDMC) or multiple debits & Multiple Credits (MDMC)
+    • Beneficiaries can be of P2P type (mobile number & MMID)
+    • The above-specified file modes include beneficiary files & Transaction files (both P2P & P2A)
 
-        // Mock database call
-        when(namedParameterJdbcTemplate.queryForMap(
-                eq(QueryConstants.SELECT_COUNT_BY_ACTION_TYPE),
-                any(MapSqlParameterSource.class)))
-                .thenReturn(mockResult);
+    3. Scope 
 
-        // Execute method
-        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCounts("REF123");
+    • To allow VYAPAAR VISTAAR customers to initiate IMPS beneficiary & IMPS transactions using file upload facility.
+    • IMPS Transaction type includes P2P & P2A (For P2P  Beneficiary mobile number & Beneficiary MMID are mandatory, For P2A  Beneficiary account number & Beneficiary IFSC code are mandatory)
+    • To allow VYAPAAR VISTAAR customers to upload a beneficiary & transaction file as per the configuration set by regulator and admin. If no configuration is set by regulator or admin, then default configuration will be used
+    • E-Cheque creation is based on the number of Debits in a transaction file.
+    • Either single or multiple beneficiary records can be approved at an instance in a beneficiary file
+    • File upload and File approval/E cheque Approval must be completed using mandatory OTP.
+    • VYAPAAR VISTAAR Customers (Both uploaders and Authorizers) can check the status of files uploaded on various stages during file processing.
+    4. Impacted Applications
+YONO Business
+    5. Out of Scope 
 
-        // Verify results
-        assertEquals(4, result.size());
-        assertEquals(5, result.get(SAME_BANK_ADD));
-        assertEquals(3, result.get(OTHER_BANK_ADD));
-        assertEquals(2, result.get(SAME_BANK_DELETE));
-        assertEquals(1, result.get(OTHER_BANK_DELETE));
-    }
+    • IMPS Form based Transactions
+    • IMPS Form based beneficiary
 
-    @ParameterizedTest
-    @ValueSource(strings = {"Approved", "Rejected", "Pending", "Failure", "default"})
-    void getActionTypeCountsByStatus(String status) {
-        // Setup mock result
-        Map<String, Integer> mockResult = new HashMap<>();
-        mockResult.put(SAME_BANK_ADD, 5);
-        mockResult.put(OTHER_BANK_ADD, 3);
-        mockResult.put(SAME_BANK_DELETE, 2);
-        mockResult.put(OTHER_BANK_DELETE, 1);
+    6. Risks, if any
 
-        // Mock database call
-        when(namedParameterJdbcTemplate.queryForObject(
-                anyString(),
-                any(MapSqlParameterSource.class),
-                any(RowMapper.class)))
-                .thenReturn(mockResult);
+    • NA
 
-        // Execute method
-        Map<String, Integer> result = manageFileBeneficiaryDao.getActionTypeCountsByStatus("REF123", status);
+    7. Stakeholders 
 
-        // Verify results
-        assertNotNull(result);
-        assertEquals(4, result.size());
-        assertEquals(5, result.get(SAME_BANK_ADD));
-    }
+S. No.	Stakeholders	Benefits / Influence / Impact
+1.	BU – Yono Business	This facility will be helpful for bulk transactions
+2.	Core Banking	Existing Services being used for IMPS  beneficiary and IMPS Transaction posting as available in corporate facility
+3.	Infrastructure / Systems	As per existing in Corporate
+4.	3rd party systems	NA
+5.	ISD	Sandbox Environment is required for File upload
+6.	Complaint Management	INB.CINB@sbi.co.in
+Support.yonobusiness@sbi.co.in
+7.	<<any other stakeholders>>	NA
 
-    @ParameterizedTest
-    @ValueSource(strings = {SAME_BANK_ADD_BENE, OTHER_BANK_ADD_BENE, SAME_BANK_DELETE_BENE, OTHER_BANK_DELETE_BENE})
-    void getBeneficiariesByTypeAction(String actionType) throws SQLException {
-        // Mock ResultSet
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
+    8. Solution 
 
-        // Determine which query to expect based on action type
-        String expectedQuery = switch (actionType) {
-            case SAME_BANK_ADD_BENE -> QueryConstants.SELECT_3P_LIST;
-            case OTHER_BANK_ADD_BENE -> QueryConstants.SELECT_IBTP_LIST;
-            case SAME_BANK_DELETE_BENE -> QueryConstants.SELECT_D3P_LIST;
-            case OTHER_BANK_DELETE_BENE -> QueryConstants.SELECT_DIBTP_LIST;
-            default -> null;
-        };
+        8.1   AS-IS Process
 
-        when(namedParameterJdbcTemplate.query(
-                eq(expectedQuery),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
+    • In CINB for VYAPAAR VISTAAR Customers, Regulator/admin has set the configuration for the IMPS beneficiary & IMPS Transactions under File Configuration option
 
-        // Execute method
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", actionType, "REF123");
+    • Uploader has the option to view the configured file set by regulator/admin and download the sample TXT file as per the configured details under View Configuration option. As per his requirement, he must edit the sample TXT file and to upload the same file under File Upload à IMPS  Mobile based Beneficiary file/Transaction file
 
-        // Verify results
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("OID123", result.get(0).getOid());
-    }
+    • Uploaders must visit the Reports menu à File Upload status to check the status of the file that has been uploaded. 
 
-    @Test
-    void getBeneficiariesByTypeAction_UnknownType() {
-        // Execute method with unknown type
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeAction(
-                "test.txt", "ACC123", "CODE123", "UNKNOWN", "REF123");
+    • Once the beneficiary file has been processed, the list of beneficiary files that are pending for authorization will go to the approver for approving under Manage Beneficiaries  Approve beneficiary file
 
-        // Verify empty result
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
-    }
+    • By clicking on the File name hyperlink, count of beneficiaries based on the beneficiary action (Add, Delete) will be displayed along with Validation failure count
 
-    @ParameterizedTest
-    @ValueSource(strings = {SAME_BANK_ADD_BENE, OTHER_BANK_ADD_BENE, SAME_BANK_DELETE_BENE, OTHER_BANK_DELETE_BENE})
-    void getBeneficiariesByTypeActionOnFailure(String actionType) throws SQLException {
-        // Mock ResultSet
-        ResultSet mockResultSet = mock(ResultSet.class);
-        when(mockResultSet.getString("OID")).thenReturn("OID123");
+    • As per the existing flow, approver (administrator) must approve all the records for addition and then to continue the same flow for deletion
 
-        // Mock database call
-        when(namedParameterJdbcTemplate.query(
-                eq(QueryConstants.FAILURE_FILE_LIST_BY_ACTION),
-                anyMap(),
-                any(RowMapper.class)))
-                .thenAnswer(invocation -> {
-                    RowMapper<Beneficiary> mapper = invocation.getArgument(2);
-                    return Collections.singletonList(mapper.mapRow(mockResultSet, 1));
-                });
 
-        // Execute method
-        List<Beneficiary> result = manageFileBeneficiaryDao.getBeneficiariesByTypeActionOnFailure(
-                "test.txt", "ACC123", "CODE123", actionType, "REF123");
 
-        // Verify results
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("OID123", result.get(0).getOid());
-    }
+    • By Selecting the beneficiary type hyperlink, beneficiary details like beneficiary name, MMID and Mobile number will get displayed along with Approve and Reject button.
 
-    @Test
-    void getUploaderList() {
-        // Mock database call
-        when(namedParameterJdbcTemplate.queryForList(
-                eq(QueryConstants.GET_UPLOADER_NAMES),
-                anyMap(),
-                eq(String.class)))
-                .thenReturn(Collections.singletonList("user1"));
+    • Multiple selection of beneficiary records can be selected by the approver and by clicking on the approve/reject, system will approve/ the selected beneficiary records (flow is same for addition and deletion)
 
-        // Execute method
-        List<String> result = manageFileBeneficiaryDao.getUploaderList("CORP123", "user1");
+    • By Clicking on the reject button, system will ask the user to capture the rejection reason and the selected records will get rejected by the approver
 
-        // Verify results
-        assertNotNull(result);
-        assertEquals(1, result.size());
-        assertEquals("user1", result.get(0));
-    }
+    • Once the IMPS transaction file has been processed, the list of E cheques that are pending for authorization transactions will go to the Authorizer for posting under Manage Transactions à Bulk E Cheque Inbox menu and if the Authorize File is enabled by regulator for the particular corporate, the list of Files that are pending for authorization will go the Authorizer for posting under Manage Transactions à Authorize File (Authorize File menu will get appear only if the regulator enabled the Authorize File option)
 
-    @Test
-    void update() {
-        // Mock database call
-        when(namedParameterJdbcTemplate.update(anyString(), any(SqlParameterSource.class)))
-                .thenReturn(1);
+    • Under Bulk E Cheque inbox menu, Authorizer/Approval must select the single/multiple E cheque (E-Cheque creation is based on the number of Debits in a transaction file) from the multiple files and need to click on the Approve button to approve the E cheque by using Transaction Password and OTP validation
 
-        // Execute method
-        int result = manageFileBeneficiaryDao.update("UPDATE TEST SET VAL=1", new MapSqlParameterSource());
+    • Under Authorize File menu, Authorizer must select either single or multiple Files that are pending for authorization and need to click on the Approve button to approve the transaction file by using Transaction Password and OTP validation
+        8.2   Limitations of Existing Process 
 
-        // Verify results
-        assertEquals(1, result);
-    }
+    • In CINB for VYAPAAR VISTAAR Customers, Uploader is not able to view the status of the uploaded files in the same upload flow whereas he must visit the separate menu to check the status of the uploaded file (Reports à File Upload Status)
 
-    @Test
-    void batchUpdate() {
-        // Mock database call
-        when(namedParameterJdbcTemplate.batchUpdate(anyString(), any(SqlParameterSource[].class)))
-                .thenReturn(new int[]{1, 1});
+    • Authorizer does not have any option to view the status of the uploaded files once it is approved/rejected/Expired by them
 
-        // Execute method
-        int[] result = manageFileBeneficiaryDao.batchUpdate(
-                "UPDATE TEST SET VAL=1",
-                new SqlParameterSource[]{new MapSqlParameterSource(), new MapSqlParameterSource()});
+    • Under Authorize File menu, Authorizer is not having the provision to view/check the Echeque details (debit and credit details), he is just selecting the entire transaction file and approving it
 
-        // Verify results
-        assertEquals(2, result.length);
-        assertEquals(1, result[0]);
-    }
+    • As per the beneficiary file approval process, approver must approve all the records for addition and then to continue the same flow for deletion
+        8.3  To-Be Process
+    • In CINB for VYAPAAR VISTAAR Customers, Uploader has the option to view the configured file set by regulator/admin and download the sample TXT/XLS file as per the configured details under File Configuration à View Configuration option
+    • As per his requirement, uploader must edit the sample TXT/XLS file and to upload the same file under Payments à File Upload à IMPS using OTP process
+    • Uploader must select the File Type – Beneficiary File (Mobile Based Beneficiary)/ Transaction File before uploading the file
+    • Uploader has the provision to view the status of the uploaded files while uploading the file itself. Recent/Last 10 uploaded file status will get displayed in the same File upload screen and last 6 months File status will be displayed under ‘View Status’ Tab – includes both beneficiary & Transaction File type
+    • Once the beneficiary file has been processed, the list of beneficiary files that are pending for authorization will get displayed in the Approver or administrator login under the Manage Beneficiaries  Bulk Approval  Approve File
+    • In the beneficiary File approval screen, system will display the total beneficiary count, Add Beneficiary count, Delete beneficiary count & Validation Failure count. By clicking on the respective counts, system will display the particular beneficiary records. 
+    • On click on Validation Failure tab/count, system will display the Failure reasons for the failed beneficiary records
+    • Approver must select the beneficiary records and able to approve or reject using the OTP validation. For reject cases, approver must capture the reasons for rejection remarks
+    • In View/Approval status, system to display the Summary/count of the Total beneficiary records available in the uploaded file along with Approved, Rejected, Expired, Pending & Validation Failure status (In uploader login, system to display the File status for the files that he has been uploaded and in the approver login, system to display all the File status details of all the uploaders who has been assigned under the same approver)
+    • Once the transaction file has been processed, the list of E cheques that are pending for authorization transactions will go to the Authorizer for posting under Manage Transactions à Bulk E Cheque Approval menu and if the Authorize File is enabled by regulator for the particular corporate, the list of Files that are pending for authorization will go the Authorizer for posting under Manage Transactions à Authorize File (Authorize File menu will get appear only if the regulator enabled the Authorize File option)
+    • Under Bulk E Cheque Approval menu, Authorizer must select the single/multiple E cheque (E-Cheque creation is based on the number of Debits in a transaction file) from the multiple files and need to click on the Approve button to approve the E cheque by using OTP process
+    • Authorizer has the provision to select either single or multiple E cheques at a time and to click on the Approve button for approval.
+    • Authorizer must select a single E cheque for rejection
+    • Under Authorize File menu, Authorizer must select either a single File that are pending for authorization or select single/multiple echeques available in a selected file by clicking on the File reference no. hyper link and need to click on the Approve button to approve the transaction file by using OTP process
+    • If any one of the e-cheque is pending for authorization in the uploaded transaction files, that needs to get displayed in the ‘Pending File Approval’ tab under the Authorize File menu option
+    • If any of the E cheque or uploaded transaction File got failed due to any of the validation failure reasons, system to display the Failure count and the Failure reasons for the failed transaction records 
+    • In the View Status, system to display the Summary/count of the Total E cheques available in the uploaded file along with Approved, Rejected, Expired, Pending & Validation Failure status (In uploader login, system to display the File status for the files that he has been uploaded and in the Authorizer login, system to display all the File status details of all the uploaders who has been assigned under the same authorizer)
+    • VISTAAR & VYAPAAR customers can check the status of files uploaded at various stages during file processing.
+    • Once the e cheque or Transaction file has been approved/rejected/expired, the file approval status must be updated for both uploader and Authorizer as per the below logic
 
-    @Test
-    void getValueFromNameValueMasterByNameAndStatus() {
-        // Mock database call
-        when(namedParameterJdbcTemplate.queryForObject(
-                eq(QueryConstants.GET_VALUE_FROM_NAME_VALUE_MASTER_BY_NAME),
-                any(MapSqlParameterSource.class),
-                eq(String.class)))
+
+Scenarios	Beneficiary Count/ transaction e- cheques	Approval Pending	Approved	Rejected	Validation Failure	Expired	Status
+1	10	10	 	 	 	 	Pending
+2	10	 	 	 	10	 	Validation Failure
+3	10	5	2	2	1	 	Partially approved
+4	10	 	5	5	 	 	Partially approved
+5	10	5	 	5	 	 	Partially approved
+6	10	1	9	 	 	 	Partially approved
+7	10	 	10	 	 	 	Approved
+8	10	 	 	10	 	 	Rejected
+9	10	 	 	5	5	 	Partially Rejected
+10	10	5	 	 	5	 	Pending
+11	10	 	4	 	6	 	Partially approved
+12	10	 	9	1	 	 	Partially approved
+13	10	 	1	9	 	 	Partially approved
+14	10	 	 	 	 	 	Expired
+15	10	 	4	 	 	6	Partially approved
+16	10	 	 	5	 	5	Partially Rejected
+17	10	 	 	 	5	5	Expired
+Color Legends for the File Approval Status.
+Approved – Green, pending – Amber, rejected – Red, Partially Approved – Amber, Partially Rejected – Red, Expired – Red, Validation Failure – Red
+Please find the detailed IMPS transaction limits for corporate users (VYAPAAR & VISTAAR) in below tabular format.
+
+IMPS: Maximum per transaction amount is Rs.2 lac
+
+
+
+For detailed process and steps refer to the Use case specification section. 
+        8.4   To-Be Process- Benefits & Advantages 
+
+    • Once the functionality is developed in YONO Business, the user need not visit CINB to complete the File based Transactions – IMPS beneficiary & IMPS transactions
+    • The re-imagination of the existing journey with improvised UI
+    • View detailed status of the file upload and approval status in the uploader & Authorizer/Approver logins
+    • Under Authorize File menu, user is having the provision to authorize the transaction file after checking/verifying the E cheque details (debit and credit account details)
+
+
+
+
+
+
+        8.5   Business Logics & Validations
+
+Transaction limit validations
+
+IMPS: Maximum per transaction amount is Rs.2 lac
+
+
+
+File Approval status logic
+
+Scenarios	Beneficiary Count/ transaction e- cheques	Approval Pending	Approved	Rejected	Validation Failure	Expired	Status
+1	10	10	 	 	 	 	Pending
+2	10	 	 	 	10	 	Validation Failure
+3	10	5	2	2	1	 	Partially approved
+4	10	 	5	5	 	 	Partially approved
+5	10	5	 	5	 	 	Partially approved
+6	10	1	9	 	 	 	Partially approved
+7	10	 	10	 	 	 	Approved
+8	10	 	 	10	 	 	Rejected
+9	10	 	 	5	5	 	Partially Rejected
+10	10	5	 	 	5	 	Pending
+11	10	 	4	 	6	 	Partially approved
+12	10	 	9	1	 	 	Partially approved
+13	10	 	1	9	 	 	Partially approved
+14	10	 	 	 	 	 	Expired
+15	10	 	4	 	 	6	Partially approved
+16	10	 	 	5	 	5	Partially Rejected
+17	10	 	 	 	5	5	Expired
+
+
+
+Accounting entries
+    • IMPS  System to debit the customer account and credit the transaction amount of the echeque to the particular IMPS outward payable GL account
+    • Commission amount  If commission amount is applicable, system should debit the transaction charges from customer account and credit it to the particular NEFT/RTGS charges income GL account respectively
+        8.6   Exception Scenarios 
+Refer to the use case section 
+        8.7   Alternate Scenarios 
+
+If approver is enabled by admin for the corporate, then the transaction authorization flow would be Uploader --> Approver à Authorizer
+The flow is same for the approver where the only changes will be in the Acknowledgment screen. System to display the following details in the success screen
+    • ‘eCheque(s) approved and sent to Authorizer’ with green tick
+             “Selected eCheques have been approved and sent to Authorizer for further approval” 
+    • ‘Back to Pending eCheques’ button – System to redirect pending eCheques tab
+Note to be displayed – “The transaction eCheques will automatically expire if no action is taken within 10 days”
+ii. System to display the following details in the failure screen (If the echeque approval is failed by approver)
+    • ‘eCheque(s) approval has been Failed’ with X mark
+             “Selected eCheques have been failed due to an error”
+    • Error Remarks - <Display the failed reason>
+‘Back to Pending eCheques’ button – System to redirect pending eCheques tab
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        8.8  Functional Process Flow 
+Uploader – IMPS Beneficiary File
+
+Approver(administrator) – IMPS Beneficiary file
+
+
+
+
+Uploader – IMPS Transaction File
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Authorizer – IMPS Transaction File
+
+
+        8.9   Data Flow 
+
+
+
+        8.10   Proposed Screens
+
+
+            8.10.1 Proposed Request Parameters
+
+         To be provided by tech team
+            8.10.2 Proposed Sample Request
+
+        To be provided by tech team
+            8.10.3 Proposed Response Parameters
+
+To be provided by tech team
+            8.10.4 Proposed Sample Response
+
+To be provided by tech team
+
+        8.11  Use case Specification
+
+            8.11.1 Use Case ID: US01_Uploading an IMPS Transaction File
+
+
+            8.11.2 Use Case ID: US02_Approving the IMPS Transaction File in the Authorizer login using Bulk Echeque Approval menu
+
+Use Case ID: 8.11.2
+Type: (Complex)	Use Case Name: Approving the IMPS Transaction File in the Authorizer login using Bulk Echeque Approval menu
+Description:	This use case depicts the journey of an authoriser approving the eCheque from the uploaded transaction files
+Actors:	Authorizers (VISTAAR and VYAPAAR)
+Preconditions:	-Uploaders should upload valid transaction files.
+-The uploaded IMPS transaction file should be successfully processed and list of Echeques that are pending for authorization will get displayed in ‘Pending Echeques’ tab under Manage Transactions à Bulk E cheque Approval
+Post conditions:	System should successfully process the uploaded file and transactions to be posted to CBS. E cheque & File Approval status to be updated accordingly
+Frequency of Use:	As and when transactions are required to be uploaded in file mode
+Normal Course of Events:	    1. Authorizer logs into YonoB.
+    2. Authorizer clicks on Manage Transactionsà Bulk eCheque Approval
+    3. All the Echeques that are pending for authorization from the processed file will be displayed under ‘Pending eCheques’ tab in tabular format with below columns:
+            i. Checkbox for selection
+            ii. eCheque No.
+            iii. File Name
+            iv. Uploader Name
+            v. Transaction Type
+            vi. Debit A/C No.
+            vii. Debit Amount
+            viii. Beneficiary Name
+            ix. Credit A/C No. (in case of IMPS- MMID transactions, MMID will get displayed)
+            x. Transaction Date
+Note to be displayed: The authorizer must take action within 10 days, or the transaction eCheques will automatically expire
+    4. Approve button to be provided to approve either single or multiple e cheques. By selecting a single echeque, approve button will get enabled
+    5. View Status tab will be provided to view the last 6 months file upload/Approval status details 
+Please note a. Pending eCheques tab needs to display only 10 records at a time and pagination to be included as per the YB application (display 10 records per screen).
+                       b. System to display only those e-cheques that are “Pending” in status for approval/rejection
+    6. Search using eCheque number/File name/Debit A/C No. to be provided along with the dropdown filter option for Transaction Type & Uploader Name, by default ‘All’ should be selected
+    7. In case of Multiple Credits, information icon(i) will be available for Beneficiary Name and Credit A/C No (info icon content: To view multiple credits, please click on the echeque number)
+    8. Approve button to be provided to authorize the selected echeques
+    9. Authorizer clicks on the eCheque No. hyperlink for authorization process. 
+    10. Authorizer may select single eCheque or multiple eCheques from single file or multiple eCheques from multiple files
+    11. Authorizer can select only up to 10 eCheques that are displayed in the screen for the authorization
+    12. If the Authorizer is selecting multiple echeques (either from single file or multiple files) from the pending echeques list and clicking on Approve button, system to redirect to the confirmation pop up screen directly, “Are you sure you want to proceed with the approval of the selected eCheques?” with Yes & No buttons and OTP validation process will continue
+    13. On the click of eCheque No. hyperlink or by selecting one echeque from the list and clicking on Approve button, below details are to be displayed:
+            i. Echeque Approval status: Pending
+            ii. File Reference No
+            iii. eCheque No.
+            iv. File Name
+            v. Commission Amount
+            vi. File Upload Date and Time
+            vii. Debit Account Details with below column details 
+        ◦ Account Number
+        ◦ Debit Amount
+        ◦ Debit Branch
+            viii. Credit Account Details Table with below column details for IMPS: 
+        ◦ Account Number/MMID
+        ◦ Beneficiary Name
+        ◦ Credit Amount
+        ◦ Bank
+        ◦ Branch
+        ◦ Beneficiary Code
+        ◦ IFSC Code/Mobile Number
+        ◦ Credit Status
+        ◦ Verify Beneficiary Name
+            ix. Approve & Reject button
+    14.  Verify Beneficiary Name: ‘Verify Name’ hyperlink is provided to verify the beneficiary’s name. By clicking on the link, a system displays the Verified name from the beneficiary CBS/EIS and an appropriate error message to be displayed if system is unable to get the beneficiary’s name due to any technical issue. However, this is an option where the authorizer can proceed without verifying the beneficiary’s name also.
+Foot note to be displayed: 
+    • Verified Beneficiary name is the account holder name as registered with the beneficiary bank
+    • Verified Beneficiary name will be received from the Beneficiary Bank on click of Submit
+    • The remitter can proceed further, at their discretion in below scenarios: 
+            i. In case of mismatch between entered beneficiary name and name received from beneficiary
+            ii. If beneficiary’s name is not received for any reason under Verified Beneficiary name
+Please note:  Credit account details records need to display only 10 records at a time and pagination to be included as per the YB application (display 10 records per screen)
+    15. Depending upon the action selected- Approve/Reject, eCheques will be approved or rejected.
+    16. Once Authorizer clicks on Approve button, screen will be displayed for the confirmation pop up stating “Are you sure you want to proceed with the approval of the selected eCheques?” with Yes & No buttons.
+    17. If user clicks on Yes, user to proceed with OTP Validation process and if user clicks on No, user to remain in the same screen (OTP screen to be aligned with existing YB system)
+    18. User to enter OTP received on mobile no.
+    19. User enters the valid OTP and clicks on Submit. On click of Submit, transaction file gets approved, and transaction posting happens to CBS.
+    20. In the Echeque is successfully approved, system to display the following details in the success screen
+    • ‘eCheque(s) Approval Successful!’ With tick
+“Selected eCheques have been approved successfully”
+    • ‘Back to Pending eCheques’ button – System to redirect pending eCheques tab
+    21. If the eCheque is failed due to any reasons, system to display the following details
+    • ‘eCheque(s) approval has been Failed’ with X mark
+             “Selected eCheques have been failed due to an error”
+    • Error Remarks - <Display the failed reason>
+    • ‘Back to Pending eCheques’ button – System to redirect pending eCheques tab
+    22. Once Authorizer clicks on Reject button, system should ask the authorizer to capture the rejection reason/remarks and then to display the confirmation screen stating with the following details:
+“eCheque Rejected!”
+‘Selected eCheque have been rejected’
+    • Echeque number
+    • Reason for Rejection/Cancellation
+    • ‘Back to Pending eCheques – System to redirect pending eCheques tab
+    23. If the rejection is failed due to any error/validation failure, system to display the following details:
+“eCheque Rejection Failed!”
+‘Selected eCheque rejection have been failed”
+    • Echeque number
+    • Error Remarks
+    • ‘Back to Pending eCheques – System to redirect pending eCheques tab
+Note: eCheque status to be marked as Failed if the rejection is failed due to any error
+Please note: 
+        a. Status to be marked as “Rejected”, if the approver rejects the e-cheque and the “Reason for Rejection” to be displayed based on the comments from the Approver.
+        b. Status to be marked as “Expired”, if the e-cheque is not approved within 10 days (configured window) and the “Reason for Cancellation” to be displayed as “E-cheque has auto expired, since no action was taken within 10 days”.
+    24. The Transaction date to be restricted to 15 days from the date of authorisation. If it exceeds, the eCheque needs to be failed during authorization.
+    25. System to throw an error message while approving the eCheque if the transaction limit has got exceeded as, 
+"Since your per transaction limit has exceeded, kindly do the transaction within the permissible limit”
+Alternative Courses:	i. If approver is enabled by admin for the corporate, then the transaction authorization flow would be Uploader --> Approver à Authorizer
+The flow is same for the approver where the only changes will be in the Acknowledgment screen. System to display the following details in the success screen
+    • ‘eCheque(s) approved and sent to Authorizer’ with green tick
+             “Selected eCheques have been approved and sent to Authorizer for further approval” 
+    • ‘Back to Pending eCheques’ button – System to redirect pending eCheques tab
+Note to be displayed – “The transaction eCheques will automatically expire if no action is taken within 10 days”
+ii. System to display the following details in the failure screen (If the echeque approval is failed by approver)
+    • ‘eCheque(s) approval has been Failed’ with X mark
+             “Selected eCheques have been failed due to an error”
+    • Error Remarks - <Display the failed reason>
+    • ‘Back to Pending eCheques’ button – System to redirect pending eCheques tab
+Business rules:	    • System will not allow the user to approve the transaction if the user has exceeded the per Transaction limit.
+    • System to mark the files as “Expired” if the User does not take any action on the pending eCheques for the stipulated time of “T+10” to approve the transaction. Please note that this must be a configurable parameter, 
+    •  System should perform below-specified validations on each transaction record:
+        a. Debit account is a valid account.
+        b. Beneficiary account validation in case of same bank transfers.
+        c. Debit amount equals to the sum of credits available in the file.
+        d. The IFS code is valid and belongs to appropriate banks.
+        e. Amount validation – per transaction limit should be verified.
+        f. Debit & credit amount mismatch.
+        g. Scheduled date validation.
+    • If the authorizer is unable to approve transaction files, the system should display an appropriate error message.
+    • System unable to fire transaction to CBS, appropriate error message should be displayed
+Associated Use cases	US04 – View Status - Viewing the File Upload/Approval Status details
+Assumptions: 	The authorizer has a mobile number registered to receive mandatory OTP for approving the transaction.
+Customer uses a browser version that is compatible for internet banking application.
+Notes and Issues: 	-NA-
+Acceptance Criteria 	Authorizer should be able to successfully approve the pending echeques by single & multiple selections
+Authorizer should be able to successfully reject the pending echeque by single selection
+Configurable Parameters 	Expiration logic Time parameter (T+10), Future date transactions (T+15)
+            8.11.3 Use Case ID: US03_Approving the IMPS Transaction File in the Authorizer login using Authorize File menu
+
+
+Use Case ID: 8.11.3
+Type: (Complex)	Use Case Name: Approving the IMPS Transaction File in the Authorizer login using Authorize File menu
+Description:	This use case depicts the journey of an authorizer approving uploaded transaction file login using Authorize File menu
+Actors:	Authorizers (VISTAAR and VYAPAAR)
+Preconditions:	    • Uploaders should upload valid transaction files.
+    • Authorize File option should be enabled by the regulator (system to display the Authorize File menu in the front end only if it is enabled by the regulator)
+    • The uploaded transaction file should be processed and available in ‘Pending File Approvals’ tab in the Authorize File menu under Manage Transactions with File Serial no. in the authorizer login
+Post conditions:	System should successfully process the uploaded file and transactions to be posted to CBS. E cheque & File Approval status to be updated accordingly
+Frequency of Use:	As and when transactions are required to be uploaded in file mode
+Normal Course of Events:	    1. Authorizer logs into YonoB.
+    2. Authorizer clicks on Manage Transactionsà Authorize File 
+    3. All the successfully uploaded files that are pending for authorization and in the uploaded files if any echeque is pending for approval, then system to display the below columns in tabular format under Pending File Approvals’ tab:
+            i. File Reference No
+            ii. File Name
+            iii. Uploader Name
+            iv. Transaction Type
+            v. Uploaded Date
+            vi. File Approval status
+            vii. eCheque count
+            viii. Pending eCheques count
+            ix. Actions: Approve & reject buton
+Note to be displayed: The authorizer must take action within 10 days, or the transaction eCheques will automatically expire
+    4. Search using Reference number, File name to be provided along with the dropdown filter option for Transaction Type & Uploader Name
+    5. View Status tab will be provided to view the last 6 months file upload/Approval status details 
+    6. Please note: ‘Pending File Approval’ tab needs to display only 10 records at a time and pagination to be included in case of multiple files (more than 10).
+    7. Authorizer can directly either approve or reject the uploaded files by selecting approve and reject buttons. In case of approval, system to redirect to the confirmation screen directly, “Are you sure you want to proceed with the approval of the transaction file?” with Yes & No buttons and user can proceed further with OTP process for authorization. 
+    8. If user clicks on Yes, user to proceed with OTP Validation process and if user clicks on No, user to remain in the same screen
+    9. User to enter OTP received on mobile no.
+    10. User enters the valid OTP and clicks on Submit. On click of Submit, transaction file gets approved, and transaction posting happens to CBS.      
+    11. If the transaction file is successfully approved, system to display the following details in the success screen
+    • Transaction File Approved Successfully! With green tick
+“Transaction File has been approved successfully.”
+    • File Reference Number
+    • File Name
+    • File Upload Date and Time
+    • ‘View Status’ button à System to redirect to view status screen
+    • ‘Back to Pending File Approvals’ button à System to redirect to Pending File Approvals tab 
+    12. If the transaction file approval is failed due to any technical error/validation, system to display the following details:
+    • Transaction File Approval Failed! With X mark
+“Transaction File Approval has been failed due to an error”
+    • File Reference Number
+    • File Name
+    • File Upload Date and Time
+    • Error Remarks: 
+    • ‘View Status’ button à System to redirect to view status screen
+    • ‘Back to Pending File Approvals’ button à System to redirect to Pending File Approvals tab
+    13. If the User directly clicks on the “Reject” button in the Pending File Approvals’ tab, system should ask the authorizer to capture the rejection reason and then to display the confirmation screen stating that Transaction File got rejected with the following details:
+    • Transaction File Rejected! With green tick
+“Transaction File has been rejected”
+    • File Reference Number
+    • File Name
+    • File Upload Date and Time
+    • Reason for rejection/Cancellation
+    • ‘View Status’ button à System to redirect to view status screen
+    • ‘Back to Pending File Approvals’ button à System to redirect to Pending File Approvals tab
+    14. If the rejection is failed due to an error occurred/validation failure, system to display the following details:
+    • Transaction File Rejection Failed! With X
+“Transaction File has been rejected due to an error”
+    • File Reference Number
+    • File Name
+    • File Upload Date and Time
+    • Error Remarks:
+    • ‘View Status’ button à System to redirect to view status screen
+    • ‘Back to Pending File Approvals’ button à System to redirect to Pending File Approvals tab
+    15. Authorizer clicks on the File Reference No hyperlink for authorization process.
+    16. On click of File Reference No hyperlink, below details are displayed in the Transaction File Approval Screen:
+            i. File Reference No
+            ii. File Name with Download hyperlink
+            iii. Transaction type
+            iv. File Approval Status
+            v. File creation Date and Time
+            vi. Uploaded By
+            vii. ECheque count
+            viii. Pending Approvals (count)
+            ix. Table with below column details:
+                    a. Checkbox for selection
+                    b. Echeque Number
+                    c. Debit A/C No
+                    d. Debit Amount
+                    e. Beneficiary Name
+                    f. Beneficiary A/C No.
+                    g. Approver Name
+                    h. Transaction Time
+                    i. Corporate Reference No
+                    j. Approval Status
+                    k. Approve button to be provided to approve the echeques
+    17. System to display only those e-cheques that are “Pending” in status to be approved/rejected.
+    18. In case of Multiple Credits, information icon(i) will be available for Beneficiary Name and Credit A/C No (info icon content: To view multiple credits, please click on the echeque number)
+    19. Approve button to be provided to authorize the selected echeques
+    20. Authorizer clicks on the eCheque No. hyperlink for authorization process. 
+    21. Authorizer may select single eCheque or multiple eCheques from single file or multiple eCheques from multiple files
+    22. Authorizer can select only up to 10 eCheques that are displayed in the screen for the authorization
+    23. If the Authorizer is selecting multiple echeques (either from single file or multiple files) from the Transaction File Approval screen and clicking on Approve button, system to redirect to the confirmation pop up screen directly, “Are you sure you want to proceed with the approval of the selected eCheques?” with Yes & No buttons and OTP validation process will continue
+    24. On the click of eCheque No. hyperlink or by selecting one echeque from the list and clicking on Approve button, below details are to be displayed:
+            i. Echeque Approval status: Pending
+            ii. File Reference No
+            iii. eCheque No.
+            iv. File Name
+            v. Commission Amount
+            vi. File Upload Date and Time
+            vii. Debit Account Details with below column details 
+        ◦ Account Number
+        ◦ Debit Amount
+        ◦ Debit Branch
+            viii. Credit Account Details Table with below column details for NEFT & RTGS (interbank):
+        ◦ Account Number
+        ◦ Beneficiary Name
+        ◦ Credit Amount
+        ◦ Bank
+        ◦ Branch
+        ◦ Beneficiary Code
+        ◦ IFSC Code
+        ◦ Credit Status
+        ◦ Verify Beneficiary Name
+            ix. Credit Account Details Table with below column details for Same bank (intrabank):
+        ◦ Account Number
+        ◦ Beneficiary Name
+        ◦ Credit Amount
+        ◦ Beneficiary Code
+        ◦ Credit Status
+        ◦ Verify Beneficiary Name
+            x. Approve & Reject button
+    26.  Verify Beneficiary Name: ‘Verify Name’ hyperlink will be provided to verify the beneficiary’s name. By clicking on the link, a system displays the Verified name from the beneficiary CBS/EIS and an appropriate error message to be displayed if system is unable to get the beneficiary’s name due to any technical issue. However, this is an option where the authorizer can proceed without verifying the beneficiary’s name.
+
+Foot note to be displayed: 
+    • Verified Beneficiary name is the account holder name as registered with the beneficiary bank
+    • Verified Beneficiary name will be received from the Beneficiary Bank on click of Submit
+    • The remitter can proceed further, at their discretion in below scenarios: 
+            i. In case of mismatch between entered beneficiary name and name received from beneficiary
+            ii. If beneficiary’s name is not received for any reason under Verified Beneficiary name
+Please note:  Credit account details records need to display only 10 records at a time and pagination to be included as per the YB application (display 10 records per screen)
+    27. Depending upon the action selected- Approve/Reject, eCheques will be approved or rejected.
+    28. Once Authorizer clicks on Approve button, screen will be displayed for the confirmation pop up stating “Are you sure you want to proceed with the approval of the selected eCheques?” with Yes & No buttons.
+    29. If user clicks on Yes, user to proceed with OTP Validation process and if user clicks on No, user to remain in the same screen (OTP screen to be aligned with existing YB system)
+    30. User to enter OTP received on mobile no.
+    31. User enters the valid OTP and clicks on Submit. On click of Submit, transaction file gets approved, and transaction posting happens to CBS.
+    32. In the Echeque is successfully approved, system to display the following details in the success screen
+    • ‘eCheque(s) Approval Successful!’ With tick
+“Selected eCheques have been approved successfully”
+    • ‘Back to Pending File Approvals’ button – System to redirect pending file approval tab
+    33. If the eCheque is failed due to any reasons, system to display the following details
+    • ‘eCheque(s) approval has been Failed’ with X mark
+             “Selected eCheques have been failed due to an error”
+    • Error Remarks - <Display the failed reason>
+    • ‘Back to Pending File Approvals’ button – System to redirect pending file approval tab
+    34. Once Authorizer clicks on Reject button, system should ask the authorizer to capture the rejection reason/remarks and then to display the confirmation screen stating with the following details:
+“eCheque Rejected!”
+‘Selected eCheque have been rejected’
+    • Echeque number
+    • Reason for Rejection/Cancellation
+    • ‘Back to Pending File Approvals’ button – System to redirect pending file approval tab
+    35. If the rejection is failed due to any error/validation failure, system to display the following details:
+“eCheque Rejection Failed!”
+‘Selected eCheque rejection have been failed”
+    • Echeque number
+    • Error Remarks
+    • ‘Back to Pending File Approvals’ button – System to redirect pending file approval tab
+Note: eCheque status to be marked as Failed if the rejection is failed due to any error
+Please note: 
+        a. Status to be marked as “Rejected”, if the approver rejects the e-cheque and the “Reason for Rejection” to be displayed based on the comments from the Approver.
+        b. Status to be marked as “Expired”, if the e-cheque is not approved within 10 days (configured window) and the “Reason for Cancellation” to be displayed as “E-cheque has auto expired, since no action was taken within 10 days”.
+    36. The Transaction date to be restricted to 15 days from the date of authorisation. If it exceeds, the eCheque needs to be failed during authorization.
+    37. System to throw an error message while approving the eCheque if the transaction limit has got exceeded as, 
+        a. "Since your per transaction limit has exceeded, kindly do the transaction within the permissible limit”
+    38. Text Message to be sent to the user before the file is authorized (along with the OTP),
+“We are including value of the file (.............. is the OTP to authorise the file-based transaction of Rs......................).” The transaction amount will be a consolidated amount in case of multiple e cheques.
+    39. Text Message to be sent to the User after the file is authorized.
+“Your file-based transaction of Rs.......is authorised and sent for posting.... Ref. No is ...............”. It will have the consolidated amount in case of multiple e cheques and the file number is the Ref. No.
+
+Alternative Courses:	-NA-
+Business rules:	    • System will not allow the user to approve the transaction if the user has exceeded the per Transaction limit.
+    • System to mark the files as “Cancelled” if the User tries to approve it post the stipulated time of “T+10” to approve the transaction. Please note that this must be a configurable approach, (if this needs to be changed in the future)
+    • System should perform below-specified validations on each transaction record:
+        ◦ Debit account is a valid account.
+        ◦ Beneficiary account validation in case of same bank transfers.
+        ◦ Debit amount equals to the sum of credits available in the file.
+        ◦ The IFS code is valid and belongs to appropriate banks.
+        ◦ Amount validation – per transaction limit should be verified.
+        ◦ Debit & credit amount mismatch.
+        ◦ Scheduled date validation.
+    • If the authorizer is unable to approve transaction files, the system should display an appropriate error message.
+    • System unable to fire transaction to CBS, appropriate error message should be displayed
+Associated Use cases	US04 – View Status - Viewing the IMPS Transaction File Upload/Approval Status details
+Assumptions: 	    • Authorizer has a mobile number registered to receive mandatory OTP for approving the transaction.
+    • Customer uses a browser version that is compatible for internet banking application.
+Notes and Issues: 	-NA-
+Acceptance Criteria 	Authorizer should be able to successfully approve/reject the transaction files 
+Authorizer should be able to successfully approve either single or multiple eCheques from the particular transaction file
+should be able to successfully reject the pending echeque by single selection from the particular transaction file
+Configurable Parameters 	Expiration logic Time parameter (T+10), Future date transactions (T+15)
+
+            8.11.4 Use Case ID: US04_ View Status - Viewing the IMPS Transaction File Upload/Approval Status details
+
+Use Case ID: 8.11.4
+Type: (Medium)	Use Case Name: View IMPS Transaction File Upload/Approval Status
+Description:	This use case depicts the journey for an Uploader & authoriser user to verify the status of files that were uploaded/approved by them.
+Actors:	Uploader and Authorizer (VISTAAR & VYAPAAR)
+Preconditions:	Uploader should have uploaded a transaction file
+Authorizer should have approved/rejected a transaction file
+Transaction file got expired/failed in the system due to the validation failure
+Post conditions:	Uploader & Authorizer users will be able to view status of files that were uploaded/approved by them.
+Frequency of Use:	As and when uploader user uploads transaction file
+Normal Course of Events:	    1. Uploader & Authorizer user logs into YonoB.
+    2. Uploader clicks on Payments -> File Upload -> IMPS  Transaction File  View Status option 
+    3. Authorizer clicks on Manage Transactions à Bulk eCheque Approval à View Status option
+    4. Authorizer clicks on Manage Transactions à Authorize File à View Status option
+    5. System will display a tabular format with below columns:
+            i. Sr No.
+            ii. File Reference No
+            iii. File Name
+            iv. File Type
+            v. Upload Status
+            vi. Approval Status
+            vii. Uploaded Date
+    6. Search using Reference number, File name to be provided along with the dropdown filter option for File Type, Upload Status & Approval status
+Please note: View status tab needs to display only 10 records at a time and pagination to be included as per the YB application (display 10 records per screen).
+Foot Note to be added: “The above list contains only the last 6 months File status details. Historic details of File status can be retrieved through File Upload Status menu under Reports Section in the uploader login”
+    7. File Reference No will be hyperlinked, Only the File Reference No with File Upload Status as ‘Pending’ will not be hyperlinked.
+    8. On click on File Reference No, a screen will be displayed with the below fields.
+            i. File Reference No
+            ii. File Name with Download hyperlink
+            iii. File type
+            iv. File Upload Status
+            v. File creation date and time
+            vi. Uploaded By
+            vii. File Approval status 
+            viii. All eCheques| Pending | Approved |Rejected |Expired| Validation Failure
+Please Note: The above-mentioned options will be clickable buttons. On click of any button, corresponding information to be displayed to the User in a table format. 
+            ix. Table with below column details:
+    • Echeque Number
+    • Debit A/C No
+    • Debit Amount
+    • Beneficiary Name
+    • Credit A/C no./MMID
+    • Approver Name
+    • Transaction date
+    • Corp Ref no
+    • Approval status
+    9. When File upload status is Error, the details will be displayed under Validation Failure. Validation Failure Remark can be ‘Incorrect Delimiter’ or ‘Incorrect File format’ etc. System to display the following in the Transaction File Overview screen:
+    • File Reference No.
+    • File Name
+    • File Upload Status: Error
+    • File Creation date & time
+    • Validation Failure Remark
+    • File Approval status: NA
+    10. When file upload status is Pending, the File Reference no. Hyperlink will be disabled
+    11. When File upload status is processed, on click of File Reference No, the total Echeque count will be displayed along with pending, Approved, Rejected, Expired and Failed Echeques. Users can click on either of the options to view the Echeques and the detail table available under the selected category.
+    12. In the case of Multiple Credits, the information icon(i) will be available for Beneficiary Name and Beneficiary A/C.
+    13. Echeque Number will be hyperlinked, on click of Echeque Number, Echeque Details will be displayed with Debit and Credit Details.
+    14. On click of eCheque No. hyperlink, below details are to be displayed:
+            i. Echeque Approval status
+            ii. File Reference No
+            iii. eCheque No.
+            iv. File Name
+            v. Commission Amount
+            vi. File Upload Date and Time
+            vii. Debit Account Details with below column details 
+        ◦ Account Number
+        ◦ Debit Amount
+        ◦ Debit Branch
+            viii. Credit Account Details Table with below column details for IMPS:
+        ◦ Account Number/MMID
+        ◦ Beneficiary Name
+        ◦ Credit Amount
+        ◦ Bank
+        ◦ Branch
+        ◦ Beneficiary Code
+        ◦ IFSC Code/Mobile Number
+        ◦ Credit Status
+    15. If the File upload status is Processed and File approval status is Approved, system to provide the Download and Print option in the echeque Approval status details screen
+Note: Whenever user opts for downloading/printing, all echeque details needs to be downloaded along with debit and credit account details in a specific format
+    16. For rejected eCheques, system to display the rejection remarks provided by authorizer along with echeque details (debit & credit account details)
+    17. For the expired eCheques, system to display the “Reason for Cancellation” to be displayed as “E-cheque has auto expired, since no action was taken within 10 days” along with echeque details (debit & credit account details)
+    18. For the failed eCheques, the “Failure Reason” to be displayed along with echeque details (debit & credit account details)
+Alternative Courses:	Suppose if the transaction file has failed owing to any specific error, then the system should display the corresponding error message to the user.
+Business rules:	File Approval status will be displayed as per the below logic
+Scenarios	Beneficiary Count/ transaction e- cheques
+Approval Pending	Approved
+Rejected	Validation Failure
+Expired	Status
+1	10
+10	 	 	 	 	Pending	2	10
+ 	 	 	10	 	Validation Failure	3	10
+5	2	2	1	 	Partially approved	4	10
+ 	5	5	 	 	Partially approved	5	10
+5	 	5	 	 	Partially approved	6	10
+1	9	 	 	 	Partially approved	7	10
+ 	10	 	 	 	Approved	8	10
+ 	 	10	 	 	Rejected	9	10
+ 	 	5	5	 	Partially Rejected	10	10
+5	 	 	5	 	Pending	11	10
+ 	4	 	6	 	Partially approved	12	10
+ 	9	1	 	 	Partially approved	13	10
+ 	1	9	 	 	Partially approved	14	10
+ 	 	 	 	 	Expired	15	10
+ 	4	 	 	6	Partially approved	16	10
+ 	 	5	 	5	Partially Rejected	17	10
+ 	 	 	5	5	Expired		Associated Use cases
+-NA-	Assumptions: 	    • Customer has internet banking access with transaction rights.
+    • Customer uses a browser version that is compatible for internet banking application.	Notes and Issues: 	-NA-	Acceptance Criteria 	Uploader & Authorizer users should be able to view the status of the files that are uploaded/approved by them.	Configurable Parameters 
+-NA-	
+            8.11.5  Use Case ID: US05_ Uploading an IMPS beneficiary File	
+	            8.11.6 Use Case ID: US06_Manage Beneficiary – Approver landing page
+	Use Case ID: 8.11.6
+Type: Simple 
+Use Case Name: Manage Beneficiary – Approver landing page 	Description: 
+ 
+This use case describes the landing page displayed to the Approver on click of Manage Beneficiaries 	Actors: 
+Approver-Administrator	Preconditions: 
+-Uploaders should upload valid beneficiary files.
+-The uploaded IMPS beneficiary file should be successfully processed and list of files that are pending for approval will get displayed under Manage Beneficiaries  Bulk Approval  Approve File	Post conditions: 
+Successfully able to see the Bulk Approval landing page 	Frequency of Use: 
+On click of Manage Beneficiary 	Normal Course of Events: 
+    1. User logs into Yono Business, clicks on Manage Beneficiary 
+    2. On click of Manage Beneficiary, system displays the following sub menus 
+    • Form based Approval (Default page displayed with list of funds transfer) 
+    • Bulk Approval
+    3. On click of Bulk Approval, system displays 
+    • Approve File– user can view the list of pending files for approval (default tab selected) 
+    • View  status – user can view the status of the approved by the logged in user 
+    • Top 15(default selected) and View ALL toggle option 
+Manage Beneficiary 
+    4. System to display the total count of approval pending with the logged in user for approval.  The count includes – Form Based approval, Bulk approval and any other approval in future. 
+ 
+Approve Files 
+    5. System to display the total count of approval pending with the logged in user for Bulk approvals 
+    6. Toggle option: 
+    • Top 15: Default view. System to display the list of most recent 15 requests pending for approval. 
+    • View All: When user toggles to view all, system to navigate the user to list view of Approve files page 
+    • User should be able to switch between the two views 
+    7. Search by field: User can search by Reference number or File name. User to input at least 3 characters, based on the input system to display the cards. 
+    8. Request will be expired if the approver does not take any action within 60 days from the date of initiation by the Uploader 
+ 
+Top 15 Card view 
+ 
+    9. System to display the following details in the card view for reach request 
+    • Reference no (hyperlink) – on click of hyper link display detailed view of the request 
+    • File name 
+    • Beneficiary Count (Count) 
+    • Validation failure (Count) 
+    • Pending: (Count) Beneficiaries pending for approval: count of beneficiaries pending for approval in the file along with the graph 
+    • More details (hyperlink) – on click of hyperlink display Uploader name and File uploaded date 
+ 
+View ALL 
+    10. On View All, system to display all the list of requests pending with logged admin for approval 
+    11. System to display the request in the list view with the following details for all the records 
+    • Reference no (hyperlink) – on click of hyper link display detailed view of the request 
+    • File name 
+    • File Type
+    • Uploader (Uploader name and Date of Upload) 
+    • Beneficiary count (display the total count of beneficiaries in the file) 
+    • Validation Failure: display count if validation failure records in the file if no such records, then system to display value as 0 
+    • Pending: count of beneficiaries pending for approval in the file along with the graph 
+    12. System to provide sort option (arrow icon) against Beneficiary count, Validation Failure and Pending column. 
+    13. Sort by: System to display following values in dropdown and display the records based on the selected sort option 
+    • Beneficiary count (descending order, based on total records) 
+    • Beneficiary Pending (descending order, based on beneficiary pending for approval) 
+    • Validation Failure (descending order, based on total failed records)
+    14. System needs to display only 10 records at a time and pagination to be included as per the YB application (display 10 records per screen).	Alternative Courses: 
+NA 	Business rules: 
+System to display the list of beneficiary files that are pending for approval will get displayed under the approve File tab
+System to display the beneficiary file under the approve File tab even if one beneficiary record is pending for approval in the particular beneficiary file
+	Associated Use cases 
+US06_ Manage Beneficiary – Approver – Approve/Reject files	Assumptions: 
+-If any file uploaded at the CINB system should also be available at YB for approval 	Notes and Issues: 
+NA	Acceptance Criteria 
+ User should able to see the Bulk Approval landing page successfully
+ 	Configurable Parameters 
+Expiration logic Time parameter (T+60) to display the list of beneficiary files that are pending for approval under Approver login	            8.11.7 Use Case ID: US07_ Manage Beneficiary – Approver – Approve/Reject files
+	Use Case ID: 8.11.7
+Type: Complex 
+Use Case Name: Manage Beneficiary – Approver – Approve / Reject Files 	Description: 
+ 
+This use case describes the process of Approve/ Reject flow by the approver 
+    • Single file request (by select All option)
+    • Single/ Multiple beneficiary records in a file request 
+    • Single/Multiple beneficiaries based on Add/delete beneficiary action in a file request 	Actors: 
+Approver - Administrator 	Preconditions: 
+Uploader should have initiated at least one beneficiary file upload request 	Post conditions: 
+On approval, beneficiary details should be available with the corporate user for payment initiation also it should be available when the corporate downloads the list of beneficiaries 
+ 
+On reject, beneficiary details should not be available to the corporate user for initiating payments or download beneficiary 
+ 
+In both the cases the status should be reflected in the respective uploaders File upload/approval status tab 	Frequency of Use: 
+User approves/ rejects beneficiary file 	Normal Course of Events: 
+User has the option to approve/ reject the requests as follows: 
+1. On click of reference number from Top 15 or View ALL page, system will display the Beneficiary File Approval screen with below details:
+    • File Reference No.
+    • File Name
+    • File Type
+    • File Approval status
+    • File Creation Date & Time
+    • Uploaded By
+    • Pending approvals count along with the graph 
+    • Beneficiary Records: Below options to be provided as a clickable tab along with the count 
+    i. Total records – System to display all the records present in the uploaded file
+    ii. Add Beneficiaries – System to display only the Add beneficiary records details
+    iii. Delete Beneficiaries – System to display only the Delete beneficiary records details
+    iv. Validation Failure - – System to display only the Validation failed records details along with the Failure reason
+    • By clicking on any of the tabs, system to display the following in a tabular format
+    i. Beneficiary Name
+    ii. MMID
+    iii. Mobile Number
+    iv. Beneficiary Action
+    v. Beneficiary Code
+    vi. Approver Name
+    vii. Approval Status
+    viii. Failure Reason (applicable only for validation failure records)
+    • Approve and Reject buttons
+    2. On selecting the records, system to enable the APRROVE/ REJECT buttons
+    3. User can select any of the following 
+    • Single file request (by select All option)
+    • Single/ Multiple beneficiary records in a file request 
+    • Single/Multiple beneficiaries based on Add/delete beneficiary action in a file request 
+    4. On clicking of Approve button, system to display the confirmation pop up, “Are you sure you want to proceed with the approval of the selected beneficiary records?” with Yes and No Buttons. On clicking of No button, user to remain in the same screen. 
+    5. If user clicks on Yes, user to proceed with OTP Validation process (OTP screen to be aligned with existing YB system)
+    6. Resend OTP button to be enabled after 60 secs.
+    7. User to enter OTP received on mobile no. and enters the valid OTP and clicks on Submit
+    8. System to display the acknowledgement screen with the following:
+    • “Beneficiary Records Approval Successful!” With tick
+‘Selected beneficiary records have been approved successfully’
+    • Back to Pending File Approval button – User to redirect to the Approve files home screen
+    9. If approval is failed due to any error/validation failure, system to display the following:
+    • “Beneficiary Records Approval Failed!” With X
+‘Selected beneficiary records approval has been failed due to an error’
+    • Error Remarks: <Display the error/failure reason>
+    • Back to Pending File Approval button – User to redirect to the Approve files home screen
+    10. Once the approver clicks on Reject button, system should ask the approver to capture the rejection reason/remarks and then to display the confirmation screen stating with the following details:
+    • “Beneficiary Records Rejected!” with tick
+‘Selected beneficiary records have been rejected’
+    • Reason for Rejection/Cancellation:<Display the remarks provided by approver>
+    • Back to Pending File Approval button – User to redirect to the Approve files home screen
+    11. If the rejection is failed due to any error/validation failure, system to display the following details:
+    • “Beneficiary Records rejection Failed!” With cross
+Selected beneficiary records rejection has been failed due to an error’
+    • Error Remarks: <Display the error/failure reason>
+    • Back to Pending File Approval button – User to redirect to the Approve files home screen
+Note: Approval status to be marked as Failed if the rejection is failed due to any error
+
+Please note: 
+        a. Status to be marked as “Rejected”, if the approver rejects any beneficiary records and the “Reason for Rejection” to be displayed based on the comments from the Approver.
+        b. Status to be marked as “Expired”, if the beneficiary record/file is not approved within 60 days (configured window) and the “Reason for Cancellation” to be displayed as “Beneficiary records have automatically expired due to no action being taken within 60 days”.
+	Alternative Courses: 
+If approver is enabled for the corporate, then the beneficiary approval flow should be Uploader  Approver  Admin 	Business rules: 
+1.  System to mark the files as “Expired” if the User does not take any action on the pending beneficiary records/Files for the stipulated time of “T+60” to approve the transaction. Please note that this must be a configurable parameter
+    2. System should perform below-specified validations on each beneficiary record:
+    • MMID should be 7 digits
+    • Mobile number should be 10 digits
+    • Beneficiary Name should be alphanumeric
+    3. If the approver is unable to approve beneficiary files, the system should display an appropriate error message.
+    4. System to display the list of beneficiary files that are pending for approval will get displayed under the approve File tab
+    5. System to display the beneficiary file under the approve File tab even if one beneficiary record is pending for approval in the particular beneficiary file	Associated Use cases 
+US05_ Uploading an IMPS beneficiary File: Request uploaded by the uploader should be available to the approver for approval 
+US07_ View Status - Viewing the IMPS Beneficiary File Upload/Approval Status details: Request approved or rejected by the approver should be reflected in the status 	Assumptions: 
+The approver has a mobile number registered to receive mandatory OTP for approving the transaction.
+Customer uses a browser version that is compatible for internet banking application.	Notes and Issues: 
+NA  	Acceptance Criteria 
+    • Approver should be able to successfully approve/reject the beneficiary files 
+    • Approver should be able to successfully approve either single or multiple beneficiary records from the particular beneficiary file
+    • Approver should be able to successfully reject the beneficiary records by single/multiple selection from the particular beneficiary file
+    • Approver should be able to successfully approve/reject the Single/Multiple beneficiaries based on Add/delete beneficiary action from the particular beneficiary file
+	Configurable Parameters 
+ Expiration logic Time parameter (T+60)	
+	
+	
+	            8.11.8 Use Case ID: US08_ View Status - Viewing the IMPS Beneficiary File Upload/Approval Status details
+Use Case ID: 8.11.8 
+Type: Simple 	Use Case Name: Manage Beneficiary – View Status - Viewing the IMPS Beneficiary File Upload/Approval Status details
+
+Description: 
+ 	This use case describes the functionality of providing an option to the uploader & approver to view the status of the file approved/ rejected 
+Actors: 	Approver – Administrator, Uploader
+Preconditions: 	Uploader should have uploaded a beneficiary file
+Approver should have approved/rejected a beneficiary record
+Beneficiary file got expired/failed in the system due to the validation failure
+Post conditions: 	Uploader & Approver users will be able to view status of files that were uploaded/approved by them.
+Frequency of Use: 	As and when uploader user uploads beneficiary file
+Normal Course of Events: 	1. Uploader & Approver logs into YonoB.
+2. Uploader clicks on Payments -> File Upload -> IMPS  Beneficiary File  View Status option 
+3. Approver clicks on Manage Beneficiaries  Approve Beneficiary File  View Status
+    6. System will display a tabular format with below columns:
+            i.) Sr No.
+            ii.) File Reference No
+            iii.) File Name
+            iv.) File Type
+            v.) Upload Status
+            vi.) Approval Status
+            vii.) Uploaded Date
+    7. Search using Reference number, File name to be provided along with the dropdown filter option for File Type, Upload Status & Approval status
+Please note: View status tab needs to display only 10 records at a time and pagination to be included as per the YB application (display 10 records per screen).
+Foot Note to be added: “The above list contains only the last 6 months File status details. Historic details of File status can be retrieved through File Upload Status menu under Reports Section in the uploader login”
+    8. File Reference No will be hyperlinked, Only the File Reference No with File Upload Status as ‘Pending’ will not be hyperlinked.
+    9. On click on File Reference No, a screen will be displayed with the below fields.
+            i.) File Reference No
+            ii.) File Name with Download hyperlink
+            iii.) File type
+            iv.) File Upload Status
+            v.) File creation date and time
+            vi.) Uploaded By
+            vii.) File Approval status 
+            viii.) Beneficiary Count| Pending | Approved |Rejected |Expired| Validation Failure
+Please Note: The above-mentioned options will be clickable buttons. On click of any button, corresponding information to be displayed to the User in a table format. 
+            ix.) Table with below column details:
+    • Beneficiary Name
+    • MMID
+    • Mobile Number
+    • Beneficiary Action
+    • Beneficiary Code
+    • Approver Name
+    • Approval status
+    10. When File upload status is Error, the details will be displayed under Validation Failure. Validation Failure Remark can be ‘Incorrect Delimiter’ or ‘Incorrect File format’ etc. System to display the following in the Beneficiary File Overview screen:
+    • File Reference No.
+    • File Name
+    • File Upload Status: Error
+    • File Creation date & time
+    • Validation Failure Remark
+    • File Approval status: NA
+    11. When file upload status is Pending, the File Reference no. Hyperlink will be disabled
+    12. When File upload status is processed, on click of File Reference No, the total beneficiary count will be displayed along with pending, Approved, Rejected, Expired and Failed records count. Users can click on either of the options to view the particular beneficiary records and the detail table available under the selected category.
+    13. For rejected records, system to display the rejection remarks provided by approver in the comments column
+    14. For the expired records, system to display the “Reason for Cancellation” to be displayed as “Beneficiary records have automatically expired due to no action being taken within 60 days” along with table details 
+    15. For the failed records, the “Failure Reason” to be displayed for each failed records along with table details
+Alternative Courses: 	Suppose if the transaction file has failed owing to any specific error, then the system should display the corresponding error message to the user.
+Business rules: 	File Approval status will be displayed as per the below logic
+
+Scenarios	Beneficiary Count/ transaction e- cheques
+Approval Pending	Approved
+Rejected	Validation Failure
+Expired	Status
+1	10
+10	 
+ 	 
+ 	Pending
+2	10
+ 	 
+ 	10
+ 	Validation Failure	3	10	5	2	2	1
+ 	Partially approved	4	10	 	5	5	 
+ 	Partially approved	5	10	5	 	5	 
+ 	Partially approved	6	10	1	9	 	 
+ 	Partially approved	7	10	 	10	 	 
+ 	Approved	8	10	 	 	10	 
+ 	Rejected	9	10	 	 	5	5
+ 	Partially Rejected	10	10	5	 	 	5
+ 	Pending	11	10	 	4	 	6
+ 	Partially approved	12	10	 	9	1	 
+ 	Partially approved	13	10	 	1	9	 
+ 	Partially approved	14	10	 	 	 	 
+ 	Expired	15	10	 	4	 	 
+6	Partially approved	16	10	 	 	5	 
+5	Partially Rejected	17	10	 	 	 	5
+5	Expired		Associated Use cases 	8.11.7 Manage Beneficiary – Approver – Approve/Reject files: All requests approved or rejected by the approver should be visible under View status tab 	Assumptions: 	Customer has internet banking access with approver rights.
+Customer uses a browser version that is compatible for internet banking application.	Notes and Issues: 
+-NA-	Acceptance Criteria 	Uploader & Approver users should be able to view the status of the files that are uploaded/approved by them.	Configurable Parameters 	-NA-		8.11.9 Validation Failure Scenarios	
+File Level Validation Failure: The Uploaded File is “Error” marked in the following scenarios.		    • Delimiter is incorrect – If the file has got any other Delimiter apart from the delimiter set by regulator/admin	    • If the file has any invalid characters like special characters, i.e., etc.	    • If the file format is different from .txt & .XLS	    • If the file is empty.	    • Invalid file format – If the user trying to upload a file which mismatches with the configured details	    • Unable to decrypt the file – If the file has mismatched/wrong field positions from the configured details (when the system is unable to decrypt the file)
+    • No. of records in the uploaded file has been exceeding the threshold/maximum limit (XX)
+    • Incorrect MMID
+    • Incorrect Mobile Number
+        8.12 Interface Control
+
+To be provided by Tech Team
+
+        8.13 Class Diagrams
+
+To be provided by Tech Team
+
+        8.14 Sequence Diagrams
+
+    • Dev team to provide the same
+        8.15   Error Description
+
+To be provided by Tech Team
+
+    9. Infrastructure Requirements
+
+To be provided by Tech Team
+
+    10. Security Requirements
+
+NA
+    11. Deployment Requirements
+
+To be provided by Tech Teams
+
+    12. Non-Functional Requirements
+
+Text Messages to the User 
+        a. Before the file is authorized
+        b. After the file is authorized
+        c. After the transaction is completed
+        d. If the transaction has failed. 
+Please Note: c & d are under review currently and will be updated to the bank by the Tech team.
+
+    13. Support Required from Dept.
+
+            ▪ CINB
+    14. Assumptions, Constraints & Dependencies
+
+    • Customer has mobile number registered to receive mandatory OTP for completing the transaction.
+    • Customer has internet banking access with transaction rights.
+    • Customer uses a browser version that is compatible for internet banking application.
+    15. Statutory & Regulatory Requirements 
+
+NA	
+
+    16. Report Requirement 
+
+Will update in the next version
+
+    17. Annexures
+
+
