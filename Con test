@@ -1,142 +1,59 @@
-package com.sbi.yb.repository;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 
-import com.sbi.microservice.framework.constant.ErrorCodes;
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.model.ActualFileDownloadRequest;
-import com.sbi.yb.model.FileMasterConfig;
-import com.sbi.yb.repository.impl.ActualFileDownloadDaoImpl;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.BeanPropertyRowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class ActualFileDownloadDaoImplTest {
-
-    @InjectMocks
-    ActualFileDownloadDaoImpl actualFileDownloadDao;
-
-    @Mock
-    NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-
-    ActualFileDownloadRequest actualFileDownloadRequest;
-    FileMasterConfig fileMasterConfig;
-
-    @BeforeEach
-    void setUp() {
-        actualFileDownloadRequest = new ActualFileDownloadRequest();
-        actualFileDownloadRequest.setFileReferenceNo("41006289");
+public class ReferenceGenerator {
+    
+    public String generateReferenceNo(String transactionName, Connection connection) throws SQLException {
+        String sequenceName;
+        String refCode;
+        String refNo = null;
+        String nextValue;
         
-        fileMasterConfig = new FileMasterConfig();
-        fileMasterConfig.setFileReferenceNo("41006289");
-        fileMasterConfig.setFileName("testfile.pdf");
+        // Determine reference code based on transaction name
+        if ("FEE".equals(transactionName)) {
+            refCode = "CU";
+        } else if ("SARALMTOPUP".equals(transactionName)) {
+            refCode = "CV";
+        } else {
+            refCode = transactionName.trim();
+        }
+        
+        // Build sequence name
+        sequenceName = "R" + refCode + "REF.nextval";
+        
+        // Execute sequence query
+        String sql = "SELECT " + sequenceName + " FROM dual";
+        try (PreparedStatement stmt = connection.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            
+            if (rs.next()) {
+                nextValue = rs.getString(1);
+                
+                // Format the reference number based on refCode
+                if (refCode.matches("CK|IU|CR")) {
+                    refNo = refCode + (char) Integer.parseInt(nextValue.substring(0, 2)) 
+                            + nextValue.substring(2);
+                } else if (refCode.matches("CX|CN|CI|CT")) {
+                    long numericValue = Long.parseLong(nextValue);
+                    long floorValue = numericValue / 10;
+                    String alphaNumRef = alphaNumRefNo(floorValue); // Need to implement FN_ALPHA_NUM_REF_NO
+                    refNo = refCode + String.format("%07d", Long.parseLong(alphaNumRef)) 
+                            + nextValue.substring(nextValue.length() - 1);
+                } else {
+                    refNo = refCode + String.format("%08d", Long.parseLong(nextValue));
+                }
+            }
+        }
+        
+        return refNo;
     }
-
-    @Test
-    void getFileDetailsTest_Success() {
-        // Mock the JDBC call
-        when(namedParameterJdbcTemplate.queryForObject(
-                anyString(), 
-                any(MapSqlParameterSource.class), 
-                any(BeanPropertyRowMapper.class)))
-            .thenReturn(fileMasterConfig);
-
-        // Call the method
-        FileMasterConfig result = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
-
-        // Verify the results
-        assertNotNull(result);
-        assertEquals("41006289", result.getFileReferenceNo());
-        assertEquals("testfile.pdf", result.getFileName());
-        
-        // Verify the JDBC call was made
-        verify(namedParameterJdbcTemplate, times(1))
-            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
-    }
-
-    @Test
-    void getFileDetailsTest_DataAccessException() {
-        // Mock the JDBC call to throw exception
-        when(namedParameterJdbcTemplate.queryForObject(
-                anyString(), 
-                any(MapSqlParameterSource.class), 
-                any(BeanPropertyRowMapper.class)))
-            .thenThrow(new DataAccessException("Database connection failed") {});
-
-        // Verify that TechnicalException is thrown
-        TechnicalException exception = assertThrows(TechnicalException.class, 
-            () -> actualFileDownloadDao.getFileDetails(actualFileDownloadRequest));
-
-        // Verify exception details
-        assertEquals("Database connection failed", exception.getMessage());
-        assertEquals(ErrorCodes.DB_ACCESS_FAILURE, exception.getErrorCode());
-        
-        // Verify the JDBC call was made
-        verify(namedParameterJdbcTemplate, times(1))
-            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
-    }
-
-    @Test
-    void getFileDetailsTest_NullRequest() {
-        assertThrows(NullPointerException.class, 
-            () -> actualFileDownloadDao.getFileDetails(null));
-    }
-
-    @Test
-    void getFileDetailsTest_EmptyFileReference() {
-        // Prepare test data
-        ActualFileDownloadRequest request = new ActualFileDownloadRequest();
-        request.setFileReferenceNo("");
-        
-        // Mock the JDBC call to return null
-        when(namedParameterJdbcTemplate.queryForObject(
-                anyString(), 
-                any(MapSqlParameterSource.class), 
-                any(BeanPropertyRowMapper.class)))
-            .thenReturn(null);
-
-        // Call the method
-        FileMasterConfig result = actualFileDownloadDao.getFileDetails(request);
-
-        // Verify results
-        assertNull(result);
-        
-        // Verify the JDBC call was made
-        verify(namedParameterJdbcTemplate, times(1))
-            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
-    }
-
-    @Test
-    void getFileDetailsTest_NoResultsFound() {
-        // Mock the JDBC call to return null (no results)
-        when(namedParameterJdbcTemplate.queryForObject(
-                anyString(), 
-                any(MapSqlParameterSource.class), 
-                any(BeanPropertyRowMapper.class)))
-            .thenReturn(null);
-
-        // Call the method
-        FileMasterConfig result = actualFileDownloadDao.getFileDetails(actualFileDownloadRequest);
-
-        // Verify results
-        assertNull(result);
-        
-        // Verify the JDBC call was made
-        verify(namedParameterJdbcTemplate, times(1))
-            .queryForObject(anyString(), any(MapSqlParameterSource.class), any(BeanPropertyRowMapper.class));
+    
+    // Placeholder for FN_ALPHA_NUM_REF_NO function - needs proper implementation
+    private String alphaNumRefNo(long value) {
+        // TODO: Implement the actual logic for FN_ALPHA_NUM_REF_NO
+        // This is a placeholder - the original PL/SQL function isn't shown
+        return String.valueOf(value);
     }
 }
