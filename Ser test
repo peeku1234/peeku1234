@@ -1,117 +1,124 @@
-package com.sbi.yb.service;
+import java.util.concurrent.atomic.AtomicLong;
 
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.model.ActualFileDownloadRequest;
-import com.sbi.yb.model.FileDownloadResponse;
-import com.sbi.yb.model.FileMasterConfig;
-import com.sbi.yb.repository.ActualFileDownloadDao;
-import com.sbi.yb.service.impl.ActualFileDownloadServiceImpl;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
+public class ReferenceNumberGenerator {
+    // Simulate sequences with in-memory counters
+    private static final ConcurrentHashMap<String, AtomicLong> sequences = new ConcurrentHashMap<>();
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Base64;
+    public String generateReferenceNo(String transactionName) {
+        String refCode;
+        String refNo = null;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
+        // Determine reference code
+        if ("FEE".equals(transactionName)) {
+            refCode = "CU";
+        } else if ("SARALMTOPUP".equals(transactionName)) {
+            refCode = "CV";
+        } else {
+            refCode = transactionName.trim();
+        }
 
-@ExtendWith(MockitoExtension.class)
-class ActualFileDownloadServiceImplTest {
+        // Get or create sequence for this refCode
+        long nextValue = sequences.computeIfAbsent("R" + refCode + "REF", k -> new AtomicLong(0))
+                                .incrementAndGet();
 
-    @InjectMocks
-    private ActualFileDownloadServiceImpl manageFileBeneficiaryService;
-    @Mock
-    private ActualFileDownloadDao manageFileBeneficiaryDao;
+        // Format the reference number
+        if (refCode.matches("CK|IU|CR")) {
+            String strNextValue = String.valueOf(nextValue);
+            refNo = refCode + (char) Integer.parseInt(strNextValue.substring(0, 2)) 
+                    + strNextValue.substring(2);
+        } else if (refCode.matches("CX|CN|CI|CT")) {
+            String alphaPart = alphaNumRefNo((long) Math.floor(nextValue / 10));
+            String paddedAlpha = String.format("%7s", alphaPart).replace(' ', '0');
+            refNo = refCode + paddedAlpha + String.valueOf(nextValue).substring(String.valueOf(nextValue).length() - 1);
+        } else {
+            refNo = refCode + String.format("%08d", nextValue);
+        }
 
-    private String testFileReferenceNo = "41006289";
-    private String testFileName = "testfile.xml";
-    private String testFileContent = "Test file content";
-    ActualFileDownloadRequest request = new ActualFileDownloadRequest();
-    FileMasterConfig fileConfig = new FileMasterConfig();
-
-    @BeforeEach
-    void setUp() throws IOException {
-        request = new ActualFileDownloadRequest();
-        request.setFileReferenceNo(testFileReferenceNo);
-        request.setFileExtension("xml");
-        fileConfig = new FileMasterConfig();
-        fileConfig.setSno("41006289");
-        fileConfig.setFileType("COMPOSITE_BEN");
-        fileConfig.setFileName(testFileName);
-        String tempDir = System.getProperty("java.io.tmpdir");
-        ReflectionTestUtils.setField(manageFileBeneficiaryService, "compositeFilePath", tempDir);
-        ReflectionTestUtils.setField(manageFileBeneficiaryService, "nonCompositeFilePath", tempDir);
-        ReflectionTestUtils.setField(manageFileBeneficiaryService, "fileExtensionTxt", "txt");
-        ReflectionTestUtils.setField(manageFileBeneficiaryService, "fileExtensionXml", "xml");
-        Path testFilePath = Path.of(tempDir, testFileReferenceNo + ".xml");
-        Files.write(testFilePath, testFileContent.getBytes());
+        return refNo;
     }
 
-    @Test
-    void downloadActualFile_Success() throws Exception {
-        Mockito.when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
-        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
-        Assertions.assertEquals(testFileReferenceNo + ".xml", "41006289.xml");
-        String expectedContent = Base64.getEncoder().encodeToString(testFileContent.getBytes());
-        Assertions.assertEquals(expectedContent, response.fileContent());
-        assertNotNull(response);
+    private String alphaNumRefNo(long seqNo) {
+        long modValue = seqNo % 26;
+        long divValue = seqNo / 26;
+        String retValue;
+
+        if (modValue == 0) {
+            modValue = 26;
+            divValue--;
+        }
+
+        if (divValue >= 1) {
+            retValue = alphaNumRefNo((long) Math.floor(divValue)) + (char) (64 + modValue);
+        } else {
+            retValue = String.valueOf((char) (64 + modValue));
+        }
+
+        return retValue;
+    }
+}
+
+
+
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+public class ReferenceNumberGenerator {
+    
+    // Optionally inject this if using Spring or DI framework
+    private Connection connection;
+
+    public ReferenceNumberGenerator(Connection connection) {
+        this.connection = connection;
     }
 
-    @Test
-    void downloadActualFile_FileNotFound() {
-        request.setFileReferenceNo("41006289");
-        fileConfig.setSno("123");
-        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(null);
-        assertThrows(TechnicalException.class,
-                () -> manageFileBeneficiaryService.downloadActualFile(request));
+    public String generateReferenceNo(String transactionName) throws SQLException {
+        String refCode;
+        String refNo = null;
+
+        // Determine reference code
+        if ("FEE".equals(transactionName)) {
+            refCode = "CU";
+        } else if ("SARALMTOPUP".equals(transactionName)) {
+            refCode = "CV";
+        } else {
+            refCode = transactionName.trim();
+        }
+
+        String sequenceName = "R" + refCode + "REF.nextval";
+        String nextValue = getNextSequenceValue(sequenceName);
+
+        // Format the reference number
+        if (refCode.matches("CK|IU|CR")) {
+            refNo = refCode + (char) Integer.parseInt(nextValue.substring(0, 2)) 
+                    + nextValue.substring(2);
+        } else if (refCode.matches("CX|CN|CI|CT")) {
+            long numericValue = Long.parseLong(nextValue);
+            String alphaPart = alphaNumRefNo((long) Math.floor(numericValue / 10));
+            String paddedAlpha = String.format("%7s", alphaPart).replace(' ', '0');
+            refNo = refCode + paddedAlpha + nextValue.substring(nextValue.length() - 1);
+        } else {
+            refNo = refCode + String.format("%08d", Long.parseLong(nextValue));
+        }
+
+        return refNo;
     }
 
-    @Test
-    void downloadActualFile_txt() throws Exception {
-        request.setFileExtension("txt");
-        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
-        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
-        Assertions.assertEquals(testFileReferenceNo + ".txt", "41006289.txt");
+    private String getNextSequenceValue(String sequenceName) throws SQLException {
+        String sql = "SELECT " + sequenceName + " FROM dual";
+        try (PreparedStatement stmt = connection.prepareStatement(sql);
+             ResultSet rs = stmt.executeQuery()) {
+            if (rs.next()) {
+                return rs.getString(1);
+            }
+            throw new SQLException("Failed to get sequence value");
+        }
     }
 
-    @Test
-    void downloadActualFile_NonCompositeFile() throws Exception {
-        fileConfig.setFileType("NON_COMPOSITE");
-        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
-        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
-        assertNotNull(response);
-    }
-
-    @Test
-    void downloadActualFile_IOException() throws Exception {
-        // Set up a non-existent directory to force IOException
-        String invalidPath = "/invalid/path/";
-        ReflectionTestUtils.setField(manageFileBeneficiaryService, "compositeFilePath", invalidPath);
-        
-        fileConfig.setFileType("COMPOSITE_BEN");
-        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
-        
-        assertThrows(TechnicalException.class,
-                () -> manageFileBeneficiaryService.downloadActualFile(request));
-    }
-
-    @Test
-    void downloadActualFile_DefaultFileExtension() throws Exception {
-        request.setFileExtension("pdf"); // Not txt or xml
-        when(manageFileBeneficiaryDao.getFileDetails(any())).thenReturn(fileConfig);
-        FileDownloadResponse response = manageFileBeneficiaryService.downloadActualFile(request);
-        // Should default to xml extension
-        Assertions.assertTrue(response.fileName().endsWith(".xml"));
+    private String alphaNumRefNo(long seqNo) {
+        // Same implementation as above
+        // ...
     }
 }
