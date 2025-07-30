@@ -1,17 +1,14 @@
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.util.concurrent.atomic.AtomicLong;
 
-public class ReferenceGenerator {
-    
-    public String generateReferenceNo(String transactionName, Connection connection) throws SQLException {
-        String sequenceName;
+public class ReferenceNumberGenerator {
+    // Simulate sequences with in-memory counters
+    private static final ConcurrentHashMap<String, AtomicLong> sequences = new ConcurrentHashMap<>();
+
+    public String generateReferenceNo(String transactionName) {
         String refCode;
         String refNo = null;
-        String nextValue;
-        
-        // Determine reference code based on transaction name
+
+        // Determine reference code
         if ("FEE".equals(transactionName)) {
             refCode = "CU";
         } else if ("SARALMTOPUP".equals(transactionName)) {
@@ -19,41 +16,43 @@ public class ReferenceGenerator {
         } else {
             refCode = transactionName.trim();
         }
-        
-        // Build sequence name
-        sequenceName = "R" + refCode + "REF.nextval";
-        
-        // Execute sequence query
-        String sql = "SELECT " + sequenceName + " FROM dual";
-        try (PreparedStatement stmt = connection.prepareStatement(sql);
-             ResultSet rs = stmt.executeQuery()) {
-            
-            if (rs.next()) {
-                nextValue = rs.getString(1);
-                
-                // Format the reference number based on refCode
-                if (refCode.matches("CK|IU|CR")) {
-                    refNo = refCode + (char) Integer.parseInt(nextValue.substring(0, 2)) 
-                            + nextValue.substring(2);
-                } else if (refCode.matches("CX|CN|CI|CT")) {
-                    long numericValue = Long.parseLong(nextValue);
-                    long floorValue = numericValue / 10;
-                    String alphaNumRef = alphaNumRefNo(floorValue); // Need to implement FN_ALPHA_NUM_REF_NO
-                    refNo = refCode + String.format("%07d", Long.parseLong(alphaNumRef)) 
-                            + nextValue.substring(nextValue.length() - 1);
-                } else {
-                    refNo = refCode + String.format("%08d", Long.parseLong(nextValue));
-                }
-            }
+
+        // Get or create sequence for this refCode
+        long nextValue = sequences.computeIfAbsent("R" + refCode + "REF", k -> new AtomicLong(0))
+                                .incrementAndGet();
+
+        // Format the reference number
+        if (refCode.matches("CK|IU|CR")) {
+            String strNextValue = String.valueOf(nextValue);
+            refNo = refCode + (char) Integer.parseInt(strNextValue.substring(0, 2)) 
+                    + strNextValue.substring(2);
+        } else if (refCode.matches("CX|CN|CI|CT")) {
+            String alphaPart = alphaNumRefNo((long) Math.floor(nextValue / 10));
+            String paddedAlpha = String.format("%7s", alphaPart).replace(' ', '0');
+            refNo = refCode + paddedAlpha + String.valueOf(nextValue).substring(String.valueOf(nextValue).length() - 1);
+        } else {
+            refNo = refCode + String.format("%08d", nextValue);
         }
-        
+
         return refNo;
     }
-    
-    // Placeholder for FN_ALPHA_NUM_REF_NO function - needs proper implementation
-    private String alphaNumRefNo(long value) {
-        // TODO: Implement the actual logic for FN_ALPHA_NUM_REF_NO
-        // This is a placeholder - the original PL/SQL function isn't shown
-        return String.valueOf(value);
+
+    private String alphaNumRefNo(long seqNo) {
+        long modValue = seqNo % 26;
+        long divValue = seqNo / 26;
+        String retValue;
+
+        if (modValue == 0) {
+            modValue = 26;
+            divValue--;
+        }
+
+        if (divValue >= 1) {
+            retValue = alphaNumRefNo((long) Math.floor(divValue)) + (char) (64 + modValue);
+        } else {
+            retValue = String.valueOf((char) (64 + modValue));
+        }
+
+        return retValue;
     }
 }
