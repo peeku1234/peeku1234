@@ -1,14 +1,16 @@
-import java.util.concurrent.atomic.AtomicLong;
+package org.example;
 
-public class ReferenceNumberGenerator {
-    // Simulate sequences with in-memory counters
-    private static final ConcurrentHashMap<String, AtomicLong> sequences = new ConcurrentHashMap<>();
+public class GenerateReferenceNo {
+    public static void main(String[] args) {
+        GenerateReferenceNo generateReferenceNo = new GenerateReferenceNo();
+        System.out.println(generateReferenceNo.generateReferenceNo("FEE"));
+    }
 
     public String generateReferenceNo(String transactionName) {
+        String sequenceName;
         String refCode;
         String refNo = null;
-
-        // Determine reference code
+        String nextValue;
         if ("FEE".equals(transactionName)) {
             refCode = "CU";
         } else if ("SARALMTOPUP".equals(transactionName)) {
@@ -16,24 +18,21 @@ public class ReferenceNumberGenerator {
         } else {
             refCode = transactionName.trim();
         }
-
-        // Get or create sequence for this refCode
-        long nextValue = sequences.computeIfAbsent("R" + refCode + "REF", k -> new AtomicLong(0))
-                                .incrementAndGet();
-
-        // Format the reference number
+        sequenceName = "R" + refCode + "REF.nextval";
+        String sql = "SELECT " + sequenceName + " FROM dual";
+        nextValue = "null";
         if (refCode.matches("CK|IU|CR")) {
-            String strNextValue = String.valueOf(nextValue);
-            refNo = refCode + (char) Integer.parseInt(strNextValue.substring(0, 2)) 
-                    + strNextValue.substring(2);
+            refNo = refCode + (char) Integer.parseInt(nextValue.substring(0, 2))
+                    + nextValue.substring(2);
         } else if (refCode.matches("CX|CN|CI|CT")) {
-            String alphaPart = alphaNumRefNo((long) Math.floor(nextValue / 10));
-            String paddedAlpha = String.format("%7s", alphaPart).replace(' ', '0');
-            refNo = refCode + paddedAlpha + String.valueOf(nextValue).substring(String.valueOf(nextValue).length() - 1);
+            long numericValue = Long.parseLong(nextValue);
+            long floorValue = numericValue / 10;
+            String alphaNumRef = alphaNumRefNo(floorValue);
+            refNo = refCode + String.format("%07d", Long.parseLong(alphaNumRef))
+                    + nextValue.substring(nextValue.length() - 1);
         } else {
-            refNo = refCode + String.format("%08d", nextValue);
+            refNo = refCode + String.format("%08d", Long.parseLong(nextValue));
         }
-
         return refNo;
     }
 
@@ -41,84 +40,15 @@ public class ReferenceNumberGenerator {
         long modValue = seqNo % 26;
         long divValue = seqNo / 26;
         String retValue;
-
         if (modValue == 0) {
             modValue = 26;
             divValue--;
         }
-
         if (divValue >= 1) {
             retValue = alphaNumRefNo((long) Math.floor(divValue)) + (char) (64 + modValue);
         } else {
             retValue = String.valueOf((char) (64 + modValue));
         }
-
         return retValue;
-    }
-}
-
-
-
-
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-
-public class ReferenceNumberGenerator {
-    
-    // Optionally inject this if using Spring or DI framework
-    private Connection connection;
-
-    public ReferenceNumberGenerator(Connection connection) {
-        this.connection = connection;
-    }
-
-    public String generateReferenceNo(String transactionName) throws SQLException {
-        String refCode;
-        String refNo = null;
-
-        // Determine reference code
-        if ("FEE".equals(transactionName)) {
-            refCode = "CU";
-        } else if ("SARALMTOPUP".equals(transactionName)) {
-            refCode = "CV";
-        } else {
-            refCode = transactionName.trim();
-        }
-
-        String sequenceName = "R" + refCode + "REF.nextval";
-        String nextValue = getNextSequenceValue(sequenceName);
-
-        // Format the reference number
-        if (refCode.matches("CK|IU|CR")) {
-            refNo = refCode + (char) Integer.parseInt(nextValue.substring(0, 2)) 
-                    + nextValue.substring(2);
-        } else if (refCode.matches("CX|CN|CI|CT")) {
-            long numericValue = Long.parseLong(nextValue);
-            String alphaPart = alphaNumRefNo((long) Math.floor(numericValue / 10));
-            String paddedAlpha = String.format("%7s", alphaPart).replace(' ', '0');
-            refNo = refCode + paddedAlpha + nextValue.substring(nextValue.length() - 1);
-        } else {
-            refNo = refCode + String.format("%08d", Long.parseLong(nextValue));
-        }
-
-        return refNo;
-    }
-
-    private String getNextSequenceValue(String sequenceName) throws SQLException {
-        String sql = "SELECT " + sequenceName + " FROM dual";
-        try (PreparedStatement stmt = connection.prepareStatement(sql);
-             ResultSet rs = stmt.executeQuery()) {
-            if (rs.next()) {
-                return rs.getString(1);
-            }
-            throw new SQLException("Failed to get sequence value");
-        }
-    }
-
-    private String alphaNumRefNo(long seqNo) {
-        // Same implementation as above
-        // ...
     }
 }
