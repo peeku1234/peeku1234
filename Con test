@@ -1,58 +1,122 @@
-import java.util.concurrent.atomic.AtomicLong;
+package com.sbi.microservice.framework.utils;
 
-public class ReferenceNumberGenerator {
-    // Simulate sequences with in-memory counters
-    private static final ConcurrentHashMap<String, AtomicLong> sequences = new ConcurrentHashMap<>();
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
-    public String generateReferenceNo(String transactionName) {
-        String refCode;
-        String refNo = null;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
-        // Determine reference code
-        if ("FEE".equals(transactionName)) {
-            refCode = "CU";
-        } else if ("SARALMTOPUP".equals(transactionName)) {
-            refCode = "CV";
-        } else {
-            refCode = transactionName.trim();
-        }
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.Endpoint;
+import com.sbi.microservice.framework.model.Service;
+import com.sbi.microservice.framework.model.ValidationRule;
 
-        // Get or create sequence for this refCode
-        long nextValue = sequences.computeIfAbsent("R" + refCode + "REF", k -> new AtomicLong(0))
-                                .incrementAndGet();
+import jakarta.servlet.http.HttpServletRequest;
 
-        // Format the reference number
-        if (refCode.matches("CK|IU|CR")) {
-            String strNextValue = String.valueOf(nextValue);
-            refNo = refCode + (char) Integer.parseInt(strNextValue.substring(0, 2)) 
-                    + strNextValue.substring(2);
-        } else if (refCode.matches("CX|CN|CI|CT")) {
-            String alphaPart = alphaNumRefNo((long) Math.floor(nextValue / 10));
-            String paddedAlpha = String.format("%7s", alphaPart).replace(' ', '0');
-            refNo = refCode + paddedAlpha + String.valueOf(nextValue).substring(String.valueOf(nextValue).length() - 1);
-        } else {
-            refNo = refCode + String.format("%08d", nextValue);
-        }
+@Component
+public class RequestValidator {
+    private final static Logger logger = LoggerFactory.getLogger(RequestValidator.class);
 
-        return refNo;
+    public void validateRequest(HttpServletRequest request, String channelId, Optional<Service> optionalService, Optional<Endpoint> optionalEndpoint) throws IOException {
+        String requestBody = readRequestBody(request);
+        JSONObject jsonRequest = new JSONObject(requestBody);
+        
+        validateTxnNo(jsonRequest);
+        validateBankCode(jsonRequest);
+        validateAccountNo(jsonRequest);
+        validateReqList(jsonRequest);
+        validateResList(jsonRequest);
     }
 
-    private String alphaNumRefNo(long seqNo) {
-        long modValue = seqNo % 26;
-        long divValue = seqNo / 26;
-        String retValue;
-
-        if (modValue == 0) {
-            modValue = 26;
-            divValue--;
+    private void validateTxnNo(JSONObject requestBody) {
+        String attribute = "txnno";
+        if (!requestBody.has(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
         }
-
-        if (divValue >= 1) {
-            retValue = alphaNumRefNo((long) Math.floor(divValue)) + (char) (64 + modValue);
-        } else {
-            retValue = String.valueOf((char) (64 + modValue));
+        
+        Object value = requestBody.get(attribute);
+        if (!(value instanceof String strValue)) {
+            throw new ValidationException("400", attribute + " should be a string");
         }
+        if (strValue.length() != 10) {
+            throw new ValidationException("400", attribute + " should be exactly 10 characters");
+        }
+    }
 
-        return retValue;
+    private void validateBankCode(JSONObject requestBody) {
+        String attribute = "bankCode";
+        if (!requestBody.has(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
+        }
+        
+        Object value = requestBody.get(attribute);
+        if (!(value instanceof String strValue)) {
+            throw new ValidationException("400", attribute + " should be a string");
+        }
+        if (strValue.length() != 2) {
+            throw new ValidationException("400", attribute + " should be exactly 2 characters");
+        }
+    }
+
+    private void validateAccountNo(JSONObject requestBody) {
+        String attribute = "account_no";
+        if (!requestBody.has(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
+        }
+        
+        Object value = requestBody.get(attribute);
+        if (!(value instanceof String strValue)) {
+            throw new ValidationException("400", attribute + " should be a string");
+        }
+        if (strValue.length() != 17) {
+            throw new ValidationException("400", attribute + " should be exactly 17 characters");
+        }
+    }
+
+    private void validateReqList(JSONObject requestBody) {
+        String attribute = "req";
+        if (!requestBody.has(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
+        }
+        
+        Object value = requestBody.get(attribute);
+        if (!(value instanceof JSONArray)) {
+            throw new ValidationException("400", attribute + " should be a list");
+        }
+        JSONArray jsonArray = (JSONArray) value;
+        if (jsonArray.length() > 500) {
+            throw new ValidationException("400", attribute + " exceeds maximum length of 500");
+        }
+    }
+
+    private void validateResList(JSONObject requestBody) {
+        String attribute = "res";
+        if (!requestBody.has(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
+        }
+        
+        Object value = requestBody.get(attribute);
+        if (!(value instanceof JSONArray)) {
+            throw new ValidationException("400", attribute + " should be a list");
+        }
+        JSONArray jsonArray = (JSONArray) value;
+        if (jsonArray.length() > 3000) {
+            throw new ValidationException("400", attribute + " exceeds maximum length of 3000");
+        }
+    }
+
+    private String readRequestBody(HttpServletRequest request) throws IOException {
+        try (BufferedReader reader = request.getReader()) {
+            return reader.lines().collect(Collectors.joining(System.lineSeparator()));
+        }
     }
 }
