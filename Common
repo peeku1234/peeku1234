@@ -1,78 +1,424 @@
-   FUNCTION generatereferenceno (p_transactionname IN VARCHAR2)
-      RETURN VARCHAR2
-   AS
-      strsequencename   VARCHAR2 (20);
-      strrefcode        VARCHAR2 (2);
-      strrefno          VARCHAR (10);
-      strnextvalue      VARCHAR2 (10);
-      ref_cur           txn_cur;
-   BEGIN
-      /*IF p_transactionName = 'FT' OR p_transactionName = 'LPP' THEN
-          strRefCode := 'CI';
-      ELSIF p_transactionName = 'TP' THEN
-          strRefCode := 'CT';
-      ELSIF p_transactionName = 'DD' THEN
-          strRefCode := 'CD';
-      ELSIF p_transactionName = 'BP' THEN
-          strRefCode := 'CB';
-      ELSIF p_transactionName = 'MP' THEN
-          strRefCode := 'CK';
-      ELSIF p_transactionName = 'PS' THEN
-          strRefCode := 'CS';
-      END IF;
-      --strSequenceName := 'R' || strRefCode || 'REF.nextval';*/
-      --strsequencename := 'R' || TRIM (p_transactionname) || 'REF.nextval';
-      --Start of code added for Corporate fee transactions
-      IF p_transactionName = 'FEE' THEN
-        strRefCode := 'CU';
-/* if condition 'SARALMTOPUP' is added on 12-Mar-15 for CR No:CINB0125 by veeraraju */
-      ELSIF p_transactionName = 'SARALMTOPUP' THEN
-        strRefCode := 'CV';        
-      ELSE
-        strRefCode := trim(p_transactionName);
-      END IF;
-      
-      strSequenceName := 'R' || strRefCode || 'REF.nextval';
-      
-      --End of code added for Corporate fee transactions
 
-      OPEN ref_cur
-      FOR 'select '|| strSequenceName ||' from dual';
-      LOOP
-         FETCH ref_cur
-          INTO strnextvalue;
-         EXIT WHEN ref_cur%NOTFOUND;
-         IF strRefCode IN ('CK','IU','CR')  THEN 
-            strRefNo := strRefCode || CHR(SUBSTR(strNextValue,1,2)) || SUBSTR(strNextValue,3);
-         ELSIF strRefCode in ('CX','CN','CI','CT')  THEN 
-            strRefNo := strRefCode || LPAD(FN_ALPHA_NUM_REF_NO(FLOOR(strNextValue/10)),7,'0') || SUBSTR(strNextValue,-1);
-         ELSE
-            strRefNo := strRefCode || LPAD(strNextValue,8,'0');
-         END IF;         
-         --strrefno := TRIM (p_transactionname) || strnextvalue;
-      END LOOP;
-      RETURN strrefno;
-   END generatereferenceno;
-   
-FUNCTION FN_ALPHA_NUM_REF_NO(P_SEQ_NO NUMBER) RETURN VARCHAR2
-IS
-L_MOD_VALUE NUMBER:=MOD(P_SEQ_NO,26);
-L_DIV_VALUE NUMBER:= P_SEQ_NO/26;
-L_RET_VALUE VARCHAR2(8);
-BEGIN
-    DBMS_OUTPUT.PUT_LINE('Mod: ' || L_MOD_VALUE || ' - ' || 'Div:' || L_DIV_VALUE);
---   L_MOD_VALUE := L_MOD_VALUE + 1;
-    IF L_MOD_VALUE = 0 THEN L_MOD_VALUE := 26; L_DIV_VALUE:= L_DIV_VALUE-1; END IF;  
+package com.sbi.microservice.framework.utils;
 
-    IF L_DIV_VALUE >= 1 THEN
-        L_RET_VALUE := fn_alpha_Num_ref_no(FLOOR(L_DIV_VALUE)) || CHR(64 + L_MOD_VALUE);
-    ELSE
-        L_RET_VALUE := CHR(64 + L_MOD_VALUE);
-    END IF;
-    RETURN L_RET_VALUE;
-EXCEPTION
-WHEN OTHERS THEN
-    RETURN '*';
-END;
- 
-END; 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.security.GeneralSecurityException;
+import java.text.*;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.Endpoint;
+import com.sbi.microservice.framework.model.Service;
+import com.sbi.microservice.framework.model.ValidationRule;
+import com.sbi.microservice.framework.repository.AuditDAO;
+import com.sbi.microservice.framework.repository.ServiceDAO;
+import com.sbi.microservice.framework.repository.ValidationRuleDAO;
+import com.sbi.microservice.framework.security.Hashing;
+import com.sbi.microservice.framework.services.APIBankingService;
+import com.sbi.microservice.framework.services.ChannelValidator;
+import com.sbi.microservice.framework.services.ChannelValidatorFactory;
+import com.sbi.microservice.framework.services.CorporateService;
+import com.sbi.microservice.framework.services.UserService;
+
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.util.StringUtils;
+
+@Component
+public class RequestValidator {
+  private final static Logger logger = LoggerFactory.getLogger(RequestValidator.class);
+
+  private final ValidationRuleDAO validationRuleDAO;
+  private final ServiceDAO serviceDAO;
+  private final FrameworkUtils frameworkUtils;
+  private final APIBankingService apiBankingService;
+  private final UserService userService;
+  private final Hashing hashing;
+  private final CorporateService corporateService;
+  private final ChannelValidatorFactory channelValidatorFactory;
+  private final AuditDAO auditDAO;
+
+
+  public RequestValidator(ValidationRuleDAO validationRuleDAO, ServiceDAO serviceDAO, FrameworkUtils frameworkUtils, Hashing hashing, APIBankingService apiBankingService, UserService userService, CorporateService corporateService, ChannelValidatorFactory channelValidatorFactory, AuditDAO auditDAO) {
+    this.validationRuleDAO = validationRuleDAO;
+    this.serviceDAO = serviceDAO;
+    this.frameworkUtils = frameworkUtils;
+    this.hashing = hashing;
+    this.apiBankingService = apiBankingService;
+    this.userService = userService;
+    this.corporateService = corporateService;
+    this.channelValidatorFactory = channelValidatorFactory;
+    this.auditDAO = auditDAO;
+
+  }
+
+  public void validateRequest(HttpServletRequest request, String channelId, Optional<Service> optionalService, Optional<Endpoint> optionalEndpoint) throws IOException {
+    String requestBody = readRequestBody(request);
+    String requestURI = request.getRequestURI();
+
+    JSONObject jsonRequest = new JSONObject(requestBody);
+    List<ValidationRule> rules = validationRuleDAO.getValidationRulesForEndpoint(optionalEndpoint.get().endpointId(), optionalService.get().serviceId());
+    rules.removeIf(rule -> rule.parentAttributeId() != null);
+    Map<String, List<ValidationRule>> nestedRules = validationRuleDAO.getNestedRules(optionalEndpoint.get().endpointId(), optionalService.get().serviceId());
+    validate(jsonRequest, channelId, rules, nestedRules);
+  }
+
+  private void validate(JSONObject requestBody, String channelId, List<ValidationRule> rules, Map<String, List<ValidationRule>> nestedRules) {
+    for (ValidationRule rule : rules) {
+      String attribute = rule.attributeName();
+      if (rule.validate()) {
+        if (StringUtils.hasText(rule.mandatory()) && rule.mandatory().contains(channelId) && !requestBody.has(attribute)) {
+          throw new ValidationException("400", attribute + " is mandatory");
+        }
+
+        if (requestBody.has(attribute)) {
+          Object value = requestBody.get(attribute);
+          validateAttribute(value, channelId, rule, nestedRules);
+        }
+      }
+    }
+  }
+
+  private void validateAttribute(Object value, String channelId, ValidationRule rule, Map<String, List<ValidationRule>> nestedRules) {
+    switch (rule.dataType()) {
+      case "STRING" -> validateString(value, rule);
+      case "NUMBER" -> validateInteger(value, rule);
+      case "JSON" -> validateNestedJSON(value, channelId, rule, nestedRules);
+      case "LIST" -> validateList(value, channelId, rule, nestedRules);
+      case "BOOLEAN" -> validateBoolean(value, rule);
+      default -> throw new ValidationException("400", "Unsupported data type: " + rule.dataType());
+    }
+  }
+
+  private static void validateString(Object value, ValidationRule rule) {
+
+    if (!(value instanceof String strValue)) {
+      throw new ValidationException("400", rule.attributeName() + " should be a string");
+    }
+    if (!StringUtils.hasText(strValue)) {
+      throw new ValidationException("400", rule.attributeName() + "cannot be empty");
+    }
+    if (rule.attributeLength() != -1 && strValue.length() > rule.attributeLength()) {
+      throw new ValidationException("400", rule.attributeName() + " exceeds max length");
+    }
+    if (rule.allowableSplCharacters() != null && !strValue.matches(rule.allowableSplCharacters())) {
+      throw new ValidationException("400", rule.attributeName() + " contains invalid characters");
+    }
+    if (rule.isBranchCode() && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
+      throw new ValidationException("400", rule.attributeName() + " contains A, " + rule.attributeName() + "should have all numbers");
+    }
+  }
+
+  private static void validateInteger(Object value, ValidationRule rule) {
+    if (!(value instanceof Integer)) {
+      throw new ValidationException("400", rule.attributeName() + " should be an integer");
+    }
+  }
+
+  private static void validateBoolean(Object value, ValidationRule rule) {
+    if (!(value instanceof Boolean)) {
+      throw new ValidationException("400", rule.attributeName() + " should be a boolean");
+    }
+  }
+
+  private void validateNestedJSON(Object value, String channelId, ValidationRule rule, Map<String, List<ValidationRule>> nestedRules) {
+    if (!(value instanceof JSONObject jsonObject)) {
+      throw new ValidationException("400", rule.attributeName() + " should be a JSON object");
+    }
+    List<ValidationRule> childRules = nestedRules.get(rule.attributeName());
+    if (childRules != null) {
+      validate(jsonObject, channelId, childRules, nestedRules);
+    }
+  }
+
+  private void validateList(Object value, String channelId, ValidationRule rule, Map<String, List<ValidationRule>> nestedRules) {
+    if (!(value instanceof JSONArray jsonArray)) {
+      throw new ValidationException("400", rule.attributeName() + " should be a list");
+    }
+    List<ValidationRule> childRules = nestedRules.get(rule.attributeName());
+    if (childRules != null) {
+      for (int i = 0; i < jsonArray.length(); i++) {
+        if (jsonArray.get(i) instanceof JSONObject jsonObject) {
+          validate(jsonObject, channelId, childRules, nestedRules);
+        } else {
+          throw new ValidationException("400", "Invalid data type in list: " + rule.attributeName());
+        }
+      }
+    }
+  }
+
+  private String readRequestBody(HttpServletRequest request) throws IOException {
+    try (BufferedReader reader = request.getReader()) {
+      return reader.lines().collect(Collectors.joining(System.lineSeparator()));
+    }
+  }
+
+  public void validateHeader(Map<String, String> headerParams) {
+    Optional<String> key = Optional.ofNullable(headerParams.get("key"));
+    Optional<String> channelId = Optional.ofNullable(headerParams.get("channelid"));
+    Optional<String> ipAddress = Optional.ofNullable(headerParams.get("ipaddress"));
+    Optional<String> corpId = Optional.empty();
+    Optional<String> authorization = Optional.ofNullable(headerParams.get(FrameworkConstants.USER_TOKEN));
+    Optional<String> apicTokenAggregator = Optional.ofNullable(headerParams.get("apictokenaggid"));
+    Optional<String> apicTokenCorp = Optional.ofNullable(headerParams.get("apictokencorpid"));
+
+//    if (!validateToken(authorization.orElseThrow(() -> new ValidationException("API000049", "Authorization token is mandatory")))) {
+//      throw new ValidationException("API000050", "Invalid authorization token");
+//    }
+//    logger.info("Authorization token validation done");
+
+    if (!validateKey(key.orElseThrow(() -> new ValidationException("API000048", "Key is mandatory")))) {
+      throw new ValidationException("API000004", "Invalid key");
+    }
+    logger.info("Key validation done");
+
+    if (!validateChannelId(channelId.orElseThrow(() -> new ValidationException("API000047", "Channel id is mandatory")))) {
+      throw new ValidationException("API000006", "Invalid channel id");
+    }
+    logger.info("Channel validation done");
+
+    if (channelId.get().equalsIgnoreCase(FrameworkConstants.CHANNEL_AGGREGATOR) || channelId.get().equalsIgnoreCase(FrameworkConstants.CHANNEL_CORP)) {
+      if (!validateIPAddress(ipAddress.orElse(""))) {
+        throw new ValidationException("API000007", "Invalid ip address");
+      }
+      logger.info("IP validation done");
+    }
+  }
+
+  public void validateHeader(Map<String, String> headerParams, String channelId) {
+    Optional<String> apicTokenAggregator = Optional.empty();
+    Optional<String> authorization = Optional.empty();
+    Optional<String> ipAddress = Optional.empty();
+    Optional<String> corpId = Optional.empty();
+    Optional<String> apicTokenCorp = Optional.empty();
+    Optional<String> aesKey = Optional.empty();
+    String validationErrorMessage = FrameworkConstants.STRING_BLANK;
+    if (headerParams.containsKey("key")) {
+      aesKey = Optional.ofNullable(headerParams.get("key"));
+    }
+
+    //apicTokenAggId
+    if (headerParams.containsKey("apictokenaggid")) {
+      apicTokenAggregator = Optional.ofNullable(headerParams.get("apictokenaggid"));
+    }
+
+    //apicTokenCorpId
+    if (headerParams.containsKey("apictokencorpid")) {
+      apicTokenCorp = Optional.ofNullable(headerParams.get("apictokencorpid"));
+    }
+    if (headerParams.containsKey("channelid")) {
+      channelId = headerParams.get("channelid");
+    }
+    //iPAddress
+    if (headerParams.containsKey("ipaddress")) {
+      ipAddress = Optional.ofNullable(headerParams.get("ipaddress"));
+    }
+
+    boolean validationFlag = false;
+    if (aesKey.isPresent()) {
+      if (frameworkUtils.validateKeyParam(aesKey.get())) {
+        logger.info("AES key is valid");
+        validationFlag = true;
+      } else {
+        logger.error("Invalid AES Key");
+        validationErrorMessage = "Invalid AES Key";
+      }
+    } else {
+      logger.error("AES Key not present in header");
+      validationErrorMessage = "AES Key not present in header";
+    }
+
+    if (channelId != null) {
+      if (FrameworkConstants.ALL_CHANNELS.contains(channelId)) {
+        validationFlag = true;
+        /**
+         * Check if valid ip address is present for channels YB_API_AG or YB_API_C
+         */
+        if (channelId.equalsIgnoreCase(FrameworkConstants.CHANNEL_AGGREGATOR) || channelId.equalsIgnoreCase(FrameworkConstants.CHANNEL_CORP)) {
+          if (ipAddress.isPresent()) {
+            if (frameworkUtils.validateKeyParam(ipAddress.get())) {
+              logger.info("IP Address is valid");
+              validationFlag = true;
+            } else {
+              validationFlag = false;
+              logger.error("IP Address is invalid");
+              validationErrorMessage = "IP Address is invalid";
+            }
+          } else {
+            logger.error("IP Address not present in header");
+            validationErrorMessage = "IP Address not present in header";
+            validationFlag = false;
+          }
+        }
+      } else {
+        logger.error("Invalid Channel id in header");
+        validationErrorMessage = "Invalid Channel id in header";
+        validationFlag = false;
+      }
+    } else {
+      logger.error("Channel id not present in header");
+      validationErrorMessage = "Channel id not present in header";
+      validationFlag = false;
+    }
+
+    if (!validationFlag) {
+      throw new ValidationException("400", validationErrorMessage);
+
+    }
+  }
+
+  public boolean isValidHash(String payloadInReqBody, String hashValueReqBody) throws GeneralSecurityException {
+
+    return (hashValueReqBody.equalsIgnoreCase(hashing.shaHashing(payloadInReqBody, "SHA-512")));
+  }
+
+  public void validateAPIReqRefNo(Optional<String> aPIReqRefNo) {
+    if (aPIReqRefNo.isPresent()) {
+      logger.info("aPIReqRefNo is not null or empty");
+      Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+      Matcher matcherAPIReqRefNo = pattern.matcher(aPIReqRefNo.get());
+      if (matcherAPIReqRefNo.matches()) {
+        if (aPIReqRefNo.get().length() != 26) {
+          throw new ValidationException("API000025", "Request reference should be 26 characters in length");
+        } else {
+          if (aPIReqRefNo.get().startsWith("YBAPIREQ")) {
+            String date = aPIReqRefNo.get().substring(8, 16);
+            Date today = new Date();
+            SimpleDateFormat format = new SimpleDateFormat("ddMMyyyyHHMMSSFFFF");
+            String currentDate = format.format(today);
+            String tempDate = currentDate.substring(0, 8);
+            logger.info("tempDate from server:{}", tempDate);
+            logger.info("date from APIRefNo:{}", date);
+            if (!tempDate.equals(date)) {
+              throw new ValidationException("API000027", "Request reference should have current date");
+            }
+          } else {
+            throw new ValidationException("API000026", "Invalid request reference");
+          }
+        }
+      } else {
+        throw new ValidationException("API000026", "Invalid request reference");
+      }
+    } else {
+      throw new ValidationException("API000024", "Request reference is mandatory");
+    }
+
+  }
+
+  public void validateUserName(Optional<String> userName) {
+    if (userName.isPresent()) {
+      Pattern pattern = Pattern.compile("^[a-zA-Z0-9]*$");
+      Matcher matcherUserName = pattern.matcher(userName.get());
+      if (matcherUserName.matches()) {
+        if (userName.get().length() > 20) {
+          throw new ValidationException("API000030", "User name should not be more than 20 characters");
+        }
+        logger.info("Username is less than 20 in length and matches allowed pattern");
+      } else {
+        throw new ValidationException("API000013", "Invalid user name");
+      }
+    } else {
+      throw new ValidationException("API000038", "User name is mandatory");
+    }
+  }
+
+  public void validateCorporateAlias(Optional<String> corporateAlias, String channelId) {
+    Pattern patternCorpID = Pattern.compile("^[a-zA-Z0-9]*$");
+    Matcher matcherCorpID = patternCorpID.matcher(corporateAlias.get());
+    if (matcherCorpID.matches()) {
+      if (corporateAlias.get().length() > 17) {
+        throw new ValidationException("API000023", "Corporate alias cannot be more than 17 characters");
+      }
+    } else {
+      throw new ValidationException("API000022", "Invalid corporate alias.");
+    }
+
+  }
+
+  public void validateCorporateID(Optional<String> corporateAlias, String channelId) {
+    Pattern patternCorpID = Pattern.compile("^[0-9]*$");
+    logger.info("Pattern to check corporateID -->" + patternCorpID);
+    Matcher matcherCorpID = patternCorpID.matcher(corporateAlias.get());
+    if (matcherCorpID.matches()) {
+      if (corporateAlias.get().length() > 12) {
+        throw new ValidationException("API000023", "Corporate alias cannot be more than 12 characters");
+      }
+    } else {
+      throw new ValidationException("API000022", "Invalid corporate alias.");
+    }
+
+  }
+
+
+  public void doChannelSpecificValidation(Map<String, Object> channelDataMap) {
+    ChannelValidator channelValidator = channelValidatorFactory.getChannelValidator((String) channelDataMap.get("channelId"), apiBankingService, userService, corporateService);
+    channelValidator.validateData(channelDataMap);
+  }
+
+  public boolean validateIPAddress(String ipAddress) {
+    if (ipAddress == null) {
+      return false;
+    }
+
+    Pattern p = Pattern.compile("[{}(),;:']+");
+    Matcher m = p.matcher(ipAddress);
+    if (m.find()) {
+      return false;
+    }
+    return true;
+  }
+
+  public boolean validateKey(String key) {
+    Pattern p = Pattern.compile("[{}(),;:']+");
+    Matcher m = p.matcher(key);
+    if (m.find()) {
+      return false;
+    }
+    return true;
+  }
+
+  public boolean validateToken(String token) {
+    if (token.isBlank()) {
+      return false;
+    }
+    return true;
+  }
+
+  public boolean validateChannelId(String channelId) {
+    if (channelId == null) {
+      return false;
+    }
+    Pattern p = Pattern.compile("[{}(),;:']+");
+    Matcher m = p.matcher(channelId);
+    if (m.find()) {
+      return false;
+    }
+    return true;
+  }
+}
+
+the above code shod be changed based on the following
+attribute_name		datatype	   length	validate		minvalue	minvalue
+txnno				   STRING		10		   true			10			10						
+bankCode			   STRING		2		   true			2			2						
+account_no			STRING		17		   true			17			17						
+req					LIST		   500		true												
+res					LIST		   3000	   true										
+
+
+
+
+
