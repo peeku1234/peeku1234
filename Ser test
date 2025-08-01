@@ -1,40 +1,114 @@
-package org.example;
+package com.sbi.microservice.framework.utils;
 
-public class GenerateReferenceNo {
-    public static void main(String[] args) {
-        GenerateReferenceNo generateReferenceNo = new GenerateReferenceNo();
-        System.out.println(generateReferenceNo.generateReferenceNo("FEE"));
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.Endpoint;
+import com.sbi.microservice.framework.model.Service;
+import com.sbi.microservice.framework.model.ValidationRule;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+@Component
+public class RequestValidator {
+    private final static Logger logger = LoggerFactory.getLogger(RequestValidator.class);
+
+    public void validateRequest(HttpServletRequest request, String channelId, 
+                              Optional<Service> optionalService, Optional<Endpoint> optionalEndpoint) 
+                              throws IOException {
+        String requestBody = readRequestBody(request);
+        JSONObject jsonRequest = new JSONObject(requestBody);
+
+        // Fetch validation rules (e.g., from DB or config)
+        List<ValidationRule> rules = getValidationRulesForService(optionalService.get().serviceId());
+        
+        // Validate each rule
+        for (ValidationRule rule : rules) {
+            validateAttribute(jsonRequest, rule);
+        }
     }
 
-    public String generateReferenceNo(String transactionName) {
-        String sequenceName;
-        String refCode;
-        String refNo = null;
-        String nextValue;
-        if ("FEE".equals(transactionName)) {
-            refCode = "CU";
-        } else if ("SARALMTOPUP".equals(transactionName)) {
-            refCode = "CV";
-        } else {
-            refCode = transactionName.trim();
+    private void validateAttribute(JSONObject requestBody, ValidationRule rule) {
+        String attribute = rule.getAttributeName();
+        String dataType = rule.getDataType();
+        boolean isMandatory = rule.isMandatory();
+        int exactLength = rule.getExactLength();
+        int maxLength = rule.getMaxLength();
+
+        // Check if mandatory field exists
+        if (isMandatory && !requestBody.has(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
         }
-        sequenceName = "R" + refCode + "REF.nextval";
-        String sql = "SELECT " + sequenceName + " FROM dual";
-        nextValue = "null";
-        if (refCode.matches("CK|IU|CR")) {
-            refNo = refCode + (char) Integer.parseInt(nextValue.substring(0, 2))
-                    + nextValue.substring(2);
-        } else if (refCode.matches("CX|CN|CI|CT")) {
-            long numericValue = Long.parseLong(nextValue);
-            long floorValue = numericValue / 10;
-            String alphaNumRef = alphaNumRefNo(floorValue);
-            refNo = refCode + String.format("%07d", Long.parseLong(alphaNumRef))
-                    + nextValue.substring(nextValue.length() - 1);
-        } else {
-            refNo = refCode + String.format("%08d", Long.parseLong(nextValue));
+
+        // Skip if field is optional and not provided
+        if (!requestBody.has(attribute)) {
+            return;
         }
-        return refNo;
+
+        Object value = requestBody.get(attribute);
+
+        // Validate based on data type
+        switch (dataType) {
+            case "STRING":
+                validateString(value, attribute, exactLength, maxLength);
+                break;
+            case "LIST":
+                validateList(value, attribute, maxLength);
+                break;
+            default:
+                throw new ValidationException("400", "Unsupported data type: " + dataType);
+        }
     }
+
+    private void validateString(Object value, String attribute, int exactLength, int maxLength) {
+        if (!(value instanceof String strValue)) {
+            throw new ValidationException("400", attribute + " should be a string");
+        }
+        if (exactLength != -1 && strValue.length() != exactLength) {
+            throw new ValidationException("400", attribute + " must be exactly " + exactLength + " characters");
+        }
+        if (maxLength != -1 && strValue.length() > maxLength) {
+            throw new ValidationException("400", attribute + " exceeds max length of " + maxLength);
+        }
+    }
+
+    private void validateList(Object value, String attribute, int maxLength) {
+        if (!(value instanceof JSONArray jsonArray)) {
+            throw new ValidationException("400", attribute + " should be a list");
+        }
+        if (maxLength != -1 && jsonArray.length() > maxLength) {
+            throw new ValidationException("400", attribute + " exceeds max length of " + maxLength);
+        }
+    }
+
+    // Example: Fetch rules from DB/config (replace with actual implementation)
+    private List<ValidationRule> getValidationRulesForService(String serviceId) {
+        return List.of(
+            new ValidationRule("txnno", "STRING", true, 10, 10),
+            new ValidationRule("bankCode", "STRING", true, 2, 2),
+            new ValidationRule("account_no", "STRING", true, 17, 17),
+            new ValidationRule("req", "LIST", true, -1, 500),
+            new ValidationRule("res", "LIST", true, -1, 3000)
+        );
+    }
+
+    private String readRequestBody(HttpServletRequest request) throws IOException {
+        try (BufferedReader reader = request.getReader()) {
+            return reader.lines().collect(Collectors.joining(System.lineSeparator()));
+        }
+    }
+}    }
 
     private String alphaNumRefNo(long seqNo) {
         long modValue = seqNo % 26;
