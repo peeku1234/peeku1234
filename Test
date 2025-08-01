@@ -1,275 +1,236 @@
-package com.sbi.yb.controller;
+package com.sbi.microservice.framework.utils;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.CommonRequestPayload;
-import com.sbi.microservice.framework.model.SBIApplicationResponse;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import com.sbi.yb.constants.ManageBeneStatusCode;
-import com.sbi.yb.constants.UtilConstants;
-import com.sbi.yb.model.*;
-import com.sbi.yb.service.ManageFileBeneficiaryService;
-import com.sbi.yb.util.ManageBeneficiaryUtil;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import com.sbi.microservice.framework.model.IntegrationApiRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
 
-@ExtendWith(MockitoExtension.class)
-class ManageFileBeneficiaryControllerTest {
+@Component
+public class RequestValidator {
+    private static final Logger logger = LoggerFactory.getLogger(RequestValidator.class);
 
-    @Mock
-    private ManageFileBeneficiaryService manageFileBeneficiaryService;
+    public void validateRequest(
+        Map<String, Object> inputParams,
+        List<IntegrationApiRequest> validationRules
+    ) {
+        for (IntegrationApiRequest rule : validationRules) {
+            String attribute = rule.attribute_name();
+            String dataType = rule.data_type();
+            boolean isMandatory = rule.is_mandatory();
+            int exactLength = rule.exact_length();
+            int maxLength = rule.max_length();
 
-    @Mock
-    private FrameworkUtils frameworkUtils;
-
-    @Mock
-    private HttpServletRequest request;
-
-    @Mock
-    private HttpServletResponse response;
-
-    @Mock
-    private ObjectMapper objectMapper;
-
-    @InjectMocks
-    private ManageFileBeneficiaryController controller;
-
-    private final AtomicInteger totalCount = new AtomicInteger(0);
-
-    @BeforeEach
-    void setUp() {
-        // Reset totalCount before each test
-        totalCount.set(0);
+            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength);
+        }
     }
 
-    @Test
-    void getBeneficiaryFiles_InvalidRequest_ThrowsValidationException() {
-        when(request.getParameter("plainPayload")).thenReturn(null);
-        
-        assertThrows(ValidationException.class, () -> {
-            controller.getBeneficiaryFiles(request, response);
+    private void validateAttribute(
+        Map<String, Object> inputParams,
+        String attribute,
+        String dataType,
+        boolean isMandatory,
+        int exactLength,
+        int maxLength
+    ) {
+        // Mandatory check
+        if (isMandatory && !inputParams.containsKey(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
+        }
+
+        // Skip if optional and not provided
+        if (!inputParams.containsKey(attribute)) {
+            return;
+        }
+
+        Object value = inputParams.get(attribute);
+
+        // Type-specific validation
+        switch (dataType.toUpperCase()) {
+            case "STRING" -> validateString(value, attribute, exactLength, maxLength);
+            case "LIST" -> validateList(value, attribute, maxLength);
+            case "NUMBER" -> validateNumber(value, attribute);
+            case "BOOLEAN" -> validateBoolean(value, attribute);
+            default -> throw new ValidationException("400", 
+                "Unsupported data type '" + dataType + "' for attribute: " + attribute);
+        }
+    }
+
+    private void validateString(Object value, String attribute, int exactLength, int maxLength) {
+        if (!(value instanceof String strValue)) {
+            throw new ValidationException("400", attribute + " should be a string");
+        }
+        if (exactLength > 0 && strValue.length() != exactLength) {
+            throw new ValidationException("400", 
+                attribute + " must be exactly " + exactLength + " characters");
+        }
+        if (maxLength > 0 && strValue.length() > maxLength) {
+            throw new ValidationException("400", 
+                attribute + " exceeds max length of " + maxLength);
+        }
+    }
+
+    private void validateList(Object value, String attribute, int maxLength) {
+        if (!(value instanceof List<?> list)) {
+            throw new ValidationException("400", attribute + " should be a list");
+        }
+        if (maxLength > 0 && list.size() > maxLength) {
+            throw new ValidationException("400", 
+                attribute + " exceeds max size of " + maxLength);
+        }
+    }
+
+    private void validateNumber(Object value, String attribute) {
+        if (!(value instanceof Number)) {
+            throw new ValidationException("400", attribute + " should be a number");
+        }
+    }
+
+    private void validateBoolean(Object value, String attribute) {
+        if (!(value instanceof Boolean)) {
+            throw new ValidationException("400", attribute + " should be a boolean");
+        }
+    }
+}
+
+
+
+
+package com.sbi.microservice.framework.integration;
+
+import com.sbi.microservice.framework.constant.ErrorCodes;
+import com.sbi.microservice.framework.exception.BusinessException;
+import com.sbi.microservice.framework.model.IntegrationApiRequest;
+import com.sbi.microservice.framework.model.IntegrationConfig;
+import com.sbi.microservice.framework.repository.IntegrationDAO;
+import com.sbi.microservice.framework.security.EISEncryptRequest;
+import com.sbi.microservice.framework.utils.CoreDetails;
+import com.sbi.microservice.framework.utils.RequestValidator;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Service
+@Profile("!performance-test")
+public class IntegrationService implements DownstreamIntegration {
+
+    private static final Logger logger = LoggerFactory.getLogger(IntegrationService.class);
+
+    @Value("${yono.eis.publicKey}") private String providerPublicKey;
+    @Value("${yono.eis.privateKey}") private String consumerPrivateKey;
+    @Value("${yono.eis.passwordPath}") private String passwordPath;
+    @Value("${yono.eis.timeout}") private int timeout;
+
+    private final IntegrationDAO integrationDAO;
+    private final EISEncryptRequest eisEncryptRequest;
+    private final CoreDetails coreDetails;
+    private final RequestValidator requestValidator;
+    private final CircuitBreakerFactoryService circuitBreakerFactoryService;
+
+    public IntegrationService(
+        IntegrationDAO integrationDAO,
+        EISEncryptRequest eisEncryptRequest,
+        CoreDetails coreDetails,
+        RequestValidator requestValidator,
+        CircuitBreakerFactoryService circuitBreakerFactoryService
+    ) {
+        this.integrationDAO = integrationDAO;
+        this.eisEncryptRequest = eisEncryptRequest;
+        this.coreDetails = coreDetails;
+        this.requestValidator = requestValidator;
+        this.circuitBreakerFactoryService = circuitBreakerFactoryService;
+    }
+
+    @Override
+    public Map<String, Object> callDownstreamService(
+        String serviceName, 
+        Map<String, Object> inputParams
+    ) {
+        CircuitBreaker circuitBreaker = circuitBreakerFactoryService.getCircuitBreaker(serviceName);
+        IntegrationConfig config = circuitBreakerFactoryService.getConfig();
+
+        // 1. Get validation rules for this service
+        List<IntegrationApiRequest> validationRules = integrationDAO.getAPIIntegrationDetail(serviceName);
+        if (validationRules.isEmpty()) {
+            throw new BusinessException(ErrorCodes.SERVICE_NOT_FOUND, 
+                "No integration config found for service: " + serviceName);
+        }
+
+        // 2. Validate input parameters
+        requestValidator.validateRequest(inputParams, validationRules);
+
+        // 3. Prepare request map
+        Map<String, Object> requestMap = prepareRequestMap(validationRules, inputParams);
+        IntegrationApiRequest primaryRequest = validationRules.get(0);
+
+        // 4. Execute based on protocol
+        try {
+            return switch (primaryRequest.protocol().toUpperCase()) {
+                case "HTTP" -> makeHttpCall(primaryRequest.url(), requestMap, config);
+                case "TCP" -> makeTcpCall(primaryRequest.host(), primaryRequest.port(), requestMap);
+                default -> throw new BusinessException(ErrorCodes.UNSUPPORTED_PROTOCOL,
+                    "Unsupported protocol: " + primaryRequest.protocol());
+            };
+        } catch (Exception e) {
+            logger.error("Integration failed for service: {}", serviceName, e);
+            throw new BusinessException(ErrorCodes.INTEGRATION_FAILED, 
+                "Downstream service call failed: " + e.getMessage());
+        }
+    }
+
+    private Map<String, Object> prepareRequestMap(
+        List<IntegrationApiRequest> validationRules,
+        Map<String, Object> inputParams
+    ) {
+        Map<String, Object> requestMap = new HashMap<>();
+        validationRules.forEach(rule -> {
+            String attribute = rule.attribute_name();
+            if (inputParams.containsKey(attribute)) {
+                requestMap.put(attribute, inputParams.get(attribute));
+            } else if (rule.is_mandatory()) {
+                throw new BusinessException(ErrorCodes.MISSING_PARAMETER,
+                    "Required parameter missing: " + attribute);
+            }
         });
+        return requestMap;
     }
 
-    @Test
-    void getBeneficiaryFiles_InvalidJson_ThrowsValidationException() throws JsonProcessingException {
-        String invalidJson = "{invalid json}";
-        when(request.getParameter("plainPayload")).thenReturn(invalidJson);
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenThrow(JsonProcessingException.class);
-        
-        assertThrows(ValidationException.class, () -> {
-            controller.getBeneficiaryFiles(request, response);
-        });
+    private Map<String, Object> makeHttpCall(
+        String url,
+        Map<String, Object> requestMap,
+        IntegrationConfig config
+    ) {
+        configureEncryption();
+        return eisEncryptRequest.encryptDecryptReqResp(url, requestMap);
     }
 
-    @Test
-    void getBeneficiaryFiles_ApproveTabWithData_ReturnsSuccess() throws Exception {
-        BeneficiaryFileRequest fileRequest = new BeneficiaryFileRequest();
-        fileRequest.setTabName(UtilConstants.APPROVE_TAB);
-        
-        UploaderResponse uploaderResponse = new UploaderResponse();
-        uploaderResponse.setUploaders(List.of(new Uploader()));
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(fileRequest);
-        when(manageFileBeneficiaryService.getUploaderList(any())).thenReturn(uploaderResponse);
-        when(manageFileBeneficiaryService.getFileListByTab(any(), any())).thenReturn(List.of(new BeneficiaryFile()));
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getBeneficiaryFiles(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-        assertEquals(Status.SUCCESS.getStatusValue(), responseEntity.getBody().getStatus());
+    private Map<String, Object> makeTcpCall(
+        String host,
+        int port,
+        Map<String, Object> requestMap
+    ) {
+        try {
+            return coreDetails.getDataFromBankSystem(host, port, requestMap);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCodes.TCP_CONNECTION_FAILED,
+                "TCP call failed to " + host + ":" + port);
+        }
     }
 
-    @Test
-    void getBeneficiaryFiles_ApproveTabNoData_ReturnsNoData() throws Exception {
-        BeneficiaryFileRequest fileRequest = new BeneficiaryFileRequest();
-        fileRequest.setTabName(UtilConstants.APPROVE_TAB);
-        
-        UploaderResponse uploaderResponse = new UploaderResponse();
-        uploaderResponse.setUploaders(List.of());
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(fileRequest);
-        when(manageFileBeneficiaryService.getUploaderList(any())).thenReturn(uploaderResponse);
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getBeneficiaryFiles(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-        assertEquals(Status.SUCCESS.getStatusValue(), responseEntity.getBody().getStatus());
-    }
-
-    @Test
-    void getBeneficiaryFiles_ApproveStatusTab_ReturnsSuccess() throws Exception {
-        BeneficiaryFileRequest fileRequest = new BeneficiaryFileRequest();
-        fileRequest.setTabName(UtilConstants.APPROVE_STATUS_TAB);
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(fileRequest);
-        when(manageFileBeneficiaryService.getFileListByTab(any(), any())).thenReturn(List.of(new BeneficiaryFile()));
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getBeneficiaryFiles(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-    }
-
-    @Test
-    void getBeneficiaryFiles_UploadTab_ReturnsSuccess() throws Exception {
-        BeneficiaryFileRequest fileRequest = new BeneficiaryFileRequest();
-        fileRequest.setTabName(UtilConstants.UPLOAD_TAB);
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(fileRequest);
-        when(manageFileBeneficiaryService.getFileListByTab(any(), any())).thenReturn(List.of(new BeneficiaryFile()));
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getBeneficiaryFiles(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-    }
-
-    @Test
-    void getBeneficiaryFiles_UploadStatusTab_ReturnsSuccess() throws Exception {
-        BeneficiaryFileRequest fileRequest = new BeneficiaryFileRequest();
-        fileRequest.setTabName(UtilConstants.UPLOAD_STATUS_TAB);
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(fileRequest);
-        when(manageFileBeneficiaryService.getFileListByTab(any(), any())).thenReturn(List.of(new BeneficiaryFile()));
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getBeneficiaryFiles(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-    }
-
-    @Test
-    void getBeneficiaryDetails_InvalidRequest_ThrowsValidationException() {
-        when(request.getParameter("plainPayload")).thenReturn(null);
-        
-        assertThrows(ValidationException.class, () -> {
-            controller.getBeneficiaryDetails(request, response);
-        });
-    }
-
-    @Test
-    void getBeneficiaryDetails_ValidRequest_ReturnsSuccess() throws Exception {
-        BeneficiaryDetailsRequest detailsRequest = new BeneficiaryDetailsRequest();
-        BeneficiaryDetails beneficiaryDetails = new BeneficiaryDetails();
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(detailsRequest);
-        when(manageFileBeneficiaryService.getFileDetailsByTab(any(), any())).thenReturn(beneficiaryDetails);
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getBeneficiaryDetails(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-        assertEquals(Status.SUCCESS.getStatusValue(), responseEntity.getBody().getStatus());
-    }
-
-    @Test
-    void getUploader_InvalidRequest_ThrowsValidationException() {
-        when(request.getParameter("plainPayload")).thenReturn(null);
-        
-        assertThrows(ValidationException.class, () -> {
-            controller.getUploader(request, response);
-        });
-    }
-
-    @Test
-    void getUploader_ValidRequest_ReturnsSuccess() throws Exception {
-        CommonRequestPayload uploaderRequest = new CommonRequestPayload();
-        UploaderResponse uploaderResponse = new UploaderResponse();
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(uploaderRequest);
-        when(manageFileBeneficiaryService.getUploaderList(any())).thenReturn(uploaderResponse);
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.getUploader(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-        assertEquals(Status.SUCCESS.getStatusValue(), responseEntity.getBody().getStatus());
-    }
-
-    @Test
-    void approveOrRejectBeneficiary_InvalidRequest_ThrowsValidationException() {
-        when(request.getParameter("plainPayload")).thenReturn(null);
-        
-        assertThrows(ValidationException.class, () -> {
-            controller.approveOrRejectBeneficiary(request, response);
-        });
-    }
-
-    @Test
-    void approveOrRejectBeneficiary_ApprovalSuccess_ReturnsSuccess() throws Exception {
-        ApproveRejectBeneRequest requestObj = new ApproveRejectBeneRequest();
-        requestObj.setIsApproved(true);
-        requestObj.setFileReferenceNo("ref123");
-        requestObj.setFileName("test.txt");
-        requestObj.setBeneTypeAction("type1");
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(requestObj);
-        when(manageFileBeneficiaryService.approveBeneficiary(any())).thenReturn(1);
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.approveOrRejectBeneficiary(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-    }
-
-    @Test
-    void approveOrRejectBeneficiary_RejectionSuccess_ReturnsSuccess() throws Exception {
-        ApproveRejectBeneRequest requestObj = new ApproveRejectBeneRequest();
-        requestObj.setIsApproved(false);
-        requestObj.setFileReferenceNo("ref123");
-        requestObj.setFileName("test.txt");
-        requestObj.setBeneTypeAction("type1");
-        requestObj.setComments("rejected");
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(requestObj);
-        when(manageFileBeneficiaryService.rejectBeneficiary(any())).thenReturn(1);
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.approveOrRejectBeneficiary(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-    }
-
-    @Test
-    void approveOrRejectBeneficiary_NullIsApproved_ReturnsSuccess() throws Exception {
-        ApproveRejectBeneRequest requestObj = new ApproveRejectBeneRequest();
-        requestObj.setIsApproved(null);
-        
-        when(request.getParameter("plainPayload")).thenReturn("valid json");
-        when(ManageBeneficiaryUtil.toObject(any(), any())).thenReturn(requestObj);
-        
-        ResponseEntity<SBIApplicationResponse> responseEntity = controller.approveOrRejectBeneficiary(request, response);
-        
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
+    private void configureEncryption() {
+        eisEncryptRequest.setProviderPublicKey(providerPublicKey);
+        eisEncryptRequest.setConsumerPrivateKey(consumerPrivateKey);
+        eisEncryptRequest.setPasswordPath(passwordPath);
+        eisEncryptRequest.setConnectionTimeOut(timeout);
     }
 }
