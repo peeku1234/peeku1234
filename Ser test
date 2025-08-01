@@ -1,128 +1,143 @@
-package com.sbi.microservice.framework.utils;
+package com.sbi.microservice.framework.integration;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.stream.Collectors;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
+import com.sbi.microservice.framework.constant.ErrorCodes;
+import com.sbi.microservice.framework.constant.FrameworkConstants;
+import com.sbi.microservice.framework.exception.BusinessException;
+import com.sbi.microservice.framework.model.IntegrationApiRequest;
+import com.sbi.microservice.framework.model.IntegrationConfig;
+import com.sbi.microservice.framework.repository.IntegrationDAO;
+import com.sbi.microservice.framework.security.EISEncryptRequest;
+import com.sbi.microservice.framework.utils.CoreDetails;
+import com.sbi.microservice.framework.utils.IntegrationValidator;
+import com.sbi.microservice.framework.utils.JsonUtils;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Service;
 
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.Endpoint;
-import com.sbi.microservice.framework.model.Service;
-import com.sbi.microservice.framework.model.ValidationRule;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import jakarta.servlet.http.HttpServletRequest;
+@Service
+@Profile("!performance-test")
+public class IntegrationService implements DownstreamIntegration {
 
-@Component
-public class RequestValidator {
-    private final static Logger logger = LoggerFactory.getLogger(RequestValidator.class);
+ private static final Logger logger = LoggerFactory.getLogger(IntegrationService.class);
 
-    public void validateRequest(HttpServletRequest request, String channelId, 
-                              Optional<Service> optionalService, Optional<Endpoint> optionalEndpoint) 
-                              throws IOException {
-        String requestBody = readRequestBody(request);
-        JSONObject jsonRequest = new JSONObject(requestBody);
+ private JsonUtils jsonUtils;
 
-        // Fetch validation rules (e.g., from DB or config)
-        List<ValidationRule> rules = getValidationRulesForService(optionalService.get().serviceId());
-        
-        // Validate each rule
-        for (ValidationRule rule : rules) {
-            validateAttribute(jsonRequest, rule);
-        }
-    }
+ @Value("${yono.eis.publicKey}")
+ private String providerPublicKey;
+ @Value("${yono.eis.privateKey}")
+ private String consumerPrivateKey;
+ @Value("${yono.eis.passwordPath}")
+ private String passwordPath;
+ @Value("${yono.eis.timeout}")
+ private int timeout;
 
-    private void validateAttribute(JSONObject requestBody, ValidationRule rule) {
-        String attribute = rule.getAttributeName();
-        String dataType = rule.getDataType();
-        boolean isMandatory = rule.isMandatory();
-        int exactLength = rule.getExactLength();
-        int maxLength = rule.getMaxLength();
+ @Autowired
+ private IntegrationDAO integrationDAO;
 
-        // Check if mandatory field exists
-        if (isMandatory && !requestBody.has(attribute)) {
-            throw new ValidationException("400", attribute + " is mandatory");
-        }
+ @Autowired
+ private EISEncryptRequest eisEncryptRequest;
 
-        // Skip if field is optional and not provided
-        if (!requestBody.has(attribute)) {
-            return;
-        }
+ @Autowired
+ private CoreDetails coreDetails;
 
-        Object value = requestBody.get(attribute);
+ @Autowired
+ private IntegrationValidator integrationValidator;
+ @Autowired
+ private OTPValidationService otpValidationService;
 
-        // Validate based on data type
-        switch (dataType) {
-            case "STRING":
-                validateString(value, attribute, exactLength, maxLength);
-                break;
-            case "LIST":
-                validateList(value, attribute, maxLength);
-                break;
-            default:
-                throw new ValidationException("400", "Unsupported data type: " + dataType);
-        }
-    }
+ private final CircuitBreakerFactoryService circuitBreakerFactoryService;
 
-    private void validateString(Object value, String attribute, int exactLength, int maxLength) {
-        if (!(value instanceof String strValue)) {
-            throw new ValidationException("400", attribute + " should be a string");
-        }
-        if (exactLength != -1 && strValue.length() != exactLength) {
-            throw new ValidationException("400", attribute + " must be exactly " + exactLength + " characters");
-        }
-        if (maxLength != -1 && strValue.length() > maxLength) {
-            throw new ValidationException("400", attribute + " exceeds max length of " + maxLength);
-        }
-    }
+ public IntegrationService(CircuitBreakerFactoryService circuitBreakerFactoryService) {
+  this.circuitBreakerFactoryService = circuitBreakerFactoryService;
+ }
 
-    private void validateList(Object value, String attribute, int maxLength) {
-        if (!(value instanceof JSONArray jsonArray)) {
-            throw new ValidationException("400", attribute + " should be a list");
-        }
-        if (maxLength != -1 && jsonArray.length() > maxLength) {
-            throw new ValidationException("400", attribute + " exceeds max length of " + maxLength);
-        }
-    }
+ @Override
+ public Map<String, Object> callDownstreamService(String serviceName, Map<String, Object> inputParam) {
+  CircuitBreaker circuitBreaker = circuitBreakerFactoryService.getCircuitBreaker(serviceName);
+        /*Retry retry = circuitBreakerFactoryService.getRetry(serviceName);
+        return Try.ofSupplier(Retry.decorateSupplier(retry, CircuitBreaker.decorateSupplier(circuitBreaker, () -> {*/
+  // Fetch integration config
+  IntegrationConfig config = circuitBreakerFactoryService.getConfig();
+  Map<String, Object> requestMap = new HashMap<>();
+  List<IntegrationApiRequest> integrationApiRequest = integrationDAO.getAPIIntegrationDetail((String) inputParam.get("serviceName"));
+  if (!integrationApiRequest.isEmpty()) {
+   // List<IntegrationApiRequest> params = integrationApiRequest.get();
+   for (int i = 0; i < integrationApiRequest.size(); i++) {
+    integrationValidator.validateIntegrateService(integrationApiRequest.get(0));
+    requestMap.put(integrationApiRequest.get(i).attribute_name(), inputParam.get(integrationApiRequest.get(i).attribute_name()));
+   }
 
-    // Example: Fetch rules from DB/config (replace with actual implementation)
-    private List<ValidationRule> getValidationRulesForService(String serviceId) {
-        return List.of(
-            new ValidationRule("txnno", "STRING", true, 10, 10),
-            new ValidationRule("bankCode", "STRING", true, 2, 2),
-            new ValidationRule("account_no", "STRING", true, 17, 17),
-            new ValidationRule("req", "LIST", true, -1, 500),
-            new ValidationRule("res", "LIST", true, -1, 3000)
-        );
-    }
+   // requestMap = params.stream().collect(Collectors.toMap(IntegrationApiRequest::attribute_name, (paramsList) -> (String) inputParam.get(paramsList.attribute_name())));
 
-    private String readRequestBody(HttpServletRequest request) throws IOException {
-        try (BufferedReader reader = request.getReader()) {
-            return reader.lines().collect(Collectors.joining(System.lineSeparator()));
-        }
-    }
-}    }
+  }
+  if ("HTTP".equalsIgnoreCase(integrationApiRequest.get(0).protocol())) {
+   try {
+    return makeHttpCall((String) integrationApiRequest.get(0).url(), requestMap, config);
+   } catch (Exception e) {
+    // TODO Auto-generated catch block
+   }
+  } else {
+   return makeTcpCall(integrationApiRequest.get(0).host(), integrationApiRequest.get(0).port(), serviceName, requestMap);
+  }
+  return null;// check this
+  // }))).recover(throwable -> null).get(); // check this*/
+ }
 
-    private String alphaNumRefNo(long seqNo) {
-        long modValue = seqNo % 26;
-        long divValue = seqNo / 26;
-        String retValue;
-        if (modValue == 0) {
-            modValue = 26;
-            divValue--;
-        }
-        if (divValue >= 1) {
-            retValue = alphaNumRefNo((long) Math.floor(divValue)) + (char) (64 + modValue);
-        } else {
-            retValue = String.valueOf((char) (64 + modValue));
-        }
-        return retValue;
-    }
+ public Map<String, Object> makeHttpCall(String urlStr, Map<String, Object> inputParam, IntegrationConfig config) {
+  Map<String, Object> responseMap = new HashMap<String, Object>();
+  Map<String, Object> eisResponseMap = new HashMap<>();
+  String eciResponse = null;
+  if (urlStr.endsWith("validateotp-noenc")) {
+   logger.info(" urlStr {}", urlStr);
+   logger.info(" inputParam {}", inputParam);
+   eisResponseMap = otpValidationService.validateParams(inputParam);
+   logger.info(" eisResponseMap validateParams {}", eisResponseMap);
+   String status = (String) eisResponseMap.get(FrameworkConstants.STATUS);
+   logger.info(" status {}", status);
+   if (status.equalsIgnoreCase("Success")) {
+    eisResponseMap = otpValidationService.validateOTP(urlStr, inputParam);
+    logger.info(" eisResponseMap validateOTP {}", eisResponseMap);
+   }
+  } else {
+   String Req_REF_No = jsonUtils.getReqRefNo();
+   eisEncryptRequest.setProviderPublicKey(providerPublicKey);
+   eisEncryptRequest.setConsumerPrivateKey(consumerPrivateKey);
+   eisEncryptRequest.setPasswordPath(passwordPath);
+   eisEncryptRequest.setConnectionTimeOut(timeout);
+
+   try {
+/*            String reqJsonStr = JsonUtils.maptoJsonString(inputParam);
+            Map<String,String> reqMap = new HashMap<>();
+            reqMap.put("ReferenceNo", Req_REF_No);
+            reqMap.put("RequestJson", reqJsonStr);
+            reqMap.put("ServiceURL",urlStr);*/
+
+    eisResponseMap = eisEncryptRequest.encryptDecryptReqResp(urlStr, inputParam);
+    //responseMap.put("decryptedResponse",eisResponseMap);
+   } catch (Exception e) {
+    eciResponse = "FAILURE";
+
+   }
+  }
+  return eisResponseMap;
+ }
+
+ private Map<String, Object> makeTcpCall(String host, int port, String serviceName, Map<String, Object> inputParam) {
+  Map<String, Object> resMap = null;
+  try {
+   resMap = coreDetails.getDataFromBankSystem(host, port, inputParam);
+  } catch (NullPointerException e) {
+   throw new BusinessException(ErrorCodes.FATAL_EXCEPTION_ERRORCODE, ErrorCodes.FATAL_EXCEPTION_ERRORCODE);
+  }
+
+  return resMap;
+ }
 }
