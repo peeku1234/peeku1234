@@ -1,143 +1,128 @@
-package com.sbi.microservice.framework.integration;
+package com.sbi.microservice.framework.utils;
 
-import com.sbi.microservice.framework.constant.ErrorCodes;
-import com.sbi.microservice.framework.constant.FrameworkConstants;
-import com.sbi.microservice.framework.exception.BusinessException;
-import com.sbi.microservice.framework.model.IntegrationApiRequest;
-import com.sbi.microservice.framework.model.IntegrationConfig;
-import com.sbi.microservice.framework.repository.IntegrationDAO;
-import com.sbi.microservice.framework.security.EISEncryptRequest;
-import com.sbi.microservice.framework.utils.CoreDetails;
-import com.sbi.microservice.framework.utils.IntegrationValidator;
-import com.sbi.microservice.framework.utils.JsonUtils;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.ValidationApiRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Service;
-
-import java.util.HashMap;
+import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
-@Service
-@Profile("!performance-test")
-public class IntegrationService implements DownstreamIntegration {
+@Component
+public class validation {
+    private static final Logger logger = LoggerFactory.getLogger(RequestValidator.class);
 
- private static final Logger logger = LoggerFactory.getLogger(IntegrationService.class);
+    // Common regex patterns as constants
+    public static final String EMAIL_REGEX = "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$";
+    public static final String PHONE_REGEX = "^[+]?[0-9]{10,15}$";
+    public static final String ALPHANUMERIC_REGEX = "^[a-zA-Z0-9]*$";
+    public static final String DATE_YYYY_MM_DD = "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$";
 
- private JsonUtils jsonUtils;
+    public void validateRequest(Map<String, Object> inputParams, List<ValidationApiRequest> validationRules) {
+        for (ValidationApiRequest rule : validationRules) {
+            String attribute = rule.attribute_name();
+            String dataType = rule.attribute_data_type();
+            boolean isMandatory = rule.is_mandatory_attribute();
+            int exactLength = rule.attribute_length();
+            int maxLength = rule.max_value();
+            String regexPattern = rule.regex_pattern(); // Assuming this field exists in ValidationApiRequest
+            String regexErrorMessage = rule.regex_error_message(); // Custom error message
+            
+            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength, 
+                            regexPattern, regexErrorMessage);
+        }
+    }
 
- @Value("${yono.eis.publicKey}")
- private String providerPublicKey;
- @Value("${yono.eis.privateKey}")
- private String consumerPrivateKey;
- @Value("${yono.eis.passwordPath}")
- private String passwordPath;
- @Value("${yono.eis.timeout}")
- private int timeout;
+    private void validateAttribute(Map<String, Object> inputParams,
+                                  String attribute,
+                                  String dataType,
+                                  boolean isMandatory,
+                                  int exactLength,
+                                  int maxLength,
+                                  String regexPattern,
+                                  String regexErrorMessage) {
+        if (isMandatory && !inputParams.containsKey(attribute)) {
+            throw new ValidationException("400", attribute + " is mandatory");
+        }
+        
+        // Skip validation if value is null and not mandatory
+        if (!inputParams.containsKey(attribute) || inputParams.get(attribute) == null) {
+            return;
+        }
+        
+        Object value = inputParams.get(attribute);
+        switch (dataType.toUpperCase()) {
+            case "STRING" -> validateString(value, attribute, exactLength, maxLength, regexPattern, regexErrorMessage);
+            case "LIST" -> validateList(value, attribute, maxLength);
+            case "NUMBER" -> validateInteger(value, attribute);
+            case "BOOLEAN" -> validateBoolean(value, attribute);
+            default -> throw new ValidationException("400",
+                    "Unsupported data type '" + dataType + "' for attribute: " + attribute);
+        }
+    }
 
- @Autowired
- private IntegrationDAO integrationDAO;
+    private void validateString(Object value, String attribute, int exactLength, int maxLength, 
+                               String regexPattern, String regexErrorMessage) {
+        if (!(value instanceof String strValue)) {
+            throw new ValidationException("400", attribute + " should be a string");
+        }
+        if (exactLength > 0 && strValue.length() != exactLength) {
+            throw new ValidationException("400",
+                    attribute + " must be exactly " + exactLength + " characters");
+        }
+        if (maxLength > 0 && strValue.length() > maxLength) {
+            throw new ValidationException("400",
+                    attribute + " exceeds max length of " + maxLength);
+        }
+        if (regexPattern != null && !regexPattern.isEmpty()) {
+            validateRegex(strValue, attribute, regexPattern, regexErrorMessage);
+        }
+    }
 
- @Autowired
- private EISEncryptRequest eisEncryptRequest;
+    /**
+     * Dedicated method for regex validation that can be reused
+     * @param value The string value to validate
+     * @param attribute The attribute name for error messages
+     * @param regexPattern The regex pattern to match against
+     * @param customErrorMessage Optional custom error message
+     */
+    public static void validateRegex(String value, String attribute, String regexPattern, String customErrorMessage) {
+        if (value == null || regexPattern == null) {
+            return;
+        }
+        
+        try {
+            if (!Pattern.matches(regexPattern, value)) {
+                String errorMessage = customErrorMessage != null ? customErrorMessage 
+                    : attribute + " does not match the required pattern";
+                throw new ValidationException("400", errorMessage);
+            }
+        } catch (Exception e) {
+            logger.error("Regex validation failed for attribute: {}", attribute, e);
+            throw new ValidationException("400", "Invalid regex pattern for " + attribute);
+        }
+    }
 
- @Autowired
- private CoreDetails coreDetails;
+    private void validateList(Object value, String attribute, int maxLength) {
+        if (!(value instanceof List<?> list)) {
+            throw new ValidationException("400", attribute + " should be a list");
+        }
+        if (maxLength > 0 && list.size() > maxLength) {
+            throw new ValidationException("400",
+                    attribute + " exceeds max size of " + maxLength);
+        }
+    }
 
- @Autowired
- private IntegrationValidator integrationValidator;
- @Autowired
- private OTPValidationService otpValidationService;
+    private void validateInteger(Object value, String attribute) {
+        if (!(value instanceof Number)) {
+            throw new ValidationException("400", attribute + " should be a number");
+        }
+    }
 
- private final CircuitBreakerFactoryService circuitBreakerFactoryService;
-
- public IntegrationService(CircuitBreakerFactoryService circuitBreakerFactoryService) {
-  this.circuitBreakerFactoryService = circuitBreakerFactoryService;
- }
-
- @Override
- public Map<String, Object> callDownstreamService(String serviceName, Map<String, Object> inputParam) {
-  CircuitBreaker circuitBreaker = circuitBreakerFactoryService.getCircuitBreaker(serviceName);
-        /*Retry retry = circuitBreakerFactoryService.getRetry(serviceName);
-        return Try.ofSupplier(Retry.decorateSupplier(retry, CircuitBreaker.decorateSupplier(circuitBreaker, () -> {*/
-  // Fetch integration config
-  IntegrationConfig config = circuitBreakerFactoryService.getConfig();
-  Map<String, Object> requestMap = new HashMap<>();
-  List<IntegrationApiRequest> integrationApiRequest = integrationDAO.getAPIIntegrationDetail((String) inputParam.get("serviceName"));
-  if (!integrationApiRequest.isEmpty()) {
-   // List<IntegrationApiRequest> params = integrationApiRequest.get();
-   for (int i = 0; i < integrationApiRequest.size(); i++) {
-    integrationValidator.validateIntegrateService(integrationApiRequest.get(0));
-    requestMap.put(integrationApiRequest.get(i).attribute_name(), inputParam.get(integrationApiRequest.get(i).attribute_name()));
-   }
-
-   // requestMap = params.stream().collect(Collectors.toMap(IntegrationApiRequest::attribute_name, (paramsList) -> (String) inputParam.get(paramsList.attribute_name())));
-
-  }
-  if ("HTTP".equalsIgnoreCase(integrationApiRequest.get(0).protocol())) {
-   try {
-    return makeHttpCall((String) integrationApiRequest.get(0).url(), requestMap, config);
-   } catch (Exception e) {
-    // TODO Auto-generated catch block
-   }
-  } else {
-   return makeTcpCall(integrationApiRequest.get(0).host(), integrationApiRequest.get(0).port(), serviceName, requestMap);
-  }
-  return null;// check this
-  // }))).recover(throwable -> null).get(); // check this*/
- }
-
- public Map<String, Object> makeHttpCall(String urlStr, Map<String, Object> inputParam, IntegrationConfig config) {
-  Map<String, Object> responseMap = new HashMap<String, Object>();
-  Map<String, Object> eisResponseMap = new HashMap<>();
-  String eciResponse = null;
-  if (urlStr.endsWith("validateotp-noenc")) {
-   logger.info(" urlStr {}", urlStr);
-   logger.info(" inputParam {}", inputParam);
-   eisResponseMap = otpValidationService.validateParams(inputParam);
-   logger.info(" eisResponseMap validateParams {}", eisResponseMap);
-   String status = (String) eisResponseMap.get(FrameworkConstants.STATUS);
-   logger.info(" status {}", status);
-   if (status.equalsIgnoreCase("Success")) {
-    eisResponseMap = otpValidationService.validateOTP(urlStr, inputParam);
-    logger.info(" eisResponseMap validateOTP {}", eisResponseMap);
-   }
-  } else {
-   String Req_REF_No = jsonUtils.getReqRefNo();
-   eisEncryptRequest.setProviderPublicKey(providerPublicKey);
-   eisEncryptRequest.setConsumerPrivateKey(consumerPrivateKey);
-   eisEncryptRequest.setPasswordPath(passwordPath);
-   eisEncryptRequest.setConnectionTimeOut(timeout);
-
-   try {
-/*            String reqJsonStr = JsonUtils.maptoJsonString(inputParam);
-            Map<String,String> reqMap = new HashMap<>();
-            reqMap.put("ReferenceNo", Req_REF_No);
-            reqMap.put("RequestJson", reqJsonStr);
-            reqMap.put("ServiceURL",urlStr);*/
-
-    eisResponseMap = eisEncryptRequest.encryptDecryptReqResp(urlStr, inputParam);
-    //responseMap.put("decryptedResponse",eisResponseMap);
-   } catch (Exception e) {
-    eciResponse = "FAILURE";
-
-   }
-  }
-  return eisResponseMap;
- }
-
- private Map<String, Object> makeTcpCall(String host, int port, String serviceName, Map<String, Object> inputParam) {
-  Map<String, Object> resMap = null;
-  try {
-   resMap = coreDetails.getDataFromBankSystem(host, port, inputParam);
-  } catch (NullPointerException e) {
-   throw new BusinessException(ErrorCodes.FATAL_EXCEPTION_ERRORCODE, ErrorCodes.FATAL_EXCEPTION_ERRORCODE);
-  }
-
-  return resMap;
- }
+    private void validateBoolean(Object value, String attribute) {
+        if (!(value instanceof Boolean)) {
+            throw new ValidationException("400", attribute + " should be a boolean");
+        }
+    }
 }
