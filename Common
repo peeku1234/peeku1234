@@ -1,45 +1,173 @@
-public boolean linkAccounts(String userName, String linkedUserName) throws DAOException {
-    logger.info("linkAccounts() {}", LoggingConstants.METHODBEGIN);
-    
-    if (logger.isDebugEnabled()) {
-        logger.debug("username: {}, linkedUserName: {}", userName, linkedUserName);
+
+	public Map lockAccountConfirm(String userName, String mobileNo ,String bankCode, String corporateID) {
+		
+		
+		logger.info("lockAccountConfirm(String userName, String mobileNo ,String branchCode) method begin");
+		logger.info("userName :" + userName + "mobileNo :" + mobileNo+ "branchCode :" + bankCode);
+
+		Map outParam = new HashMap();
+		Date creationTime = null;
+		int status = 0;
+		
+		int status1 = 0;
+		int lockAccountConfirmCount = 0;
+		String referenceNo = null;
+		String validUserQuery;
+		String validRefNoCount;
+		
+		if (userName != null) {
+			Object[] countparams = new Object[] { userName, mobileNo, bankCode };
+			
+			validUserQuery = "select count(1) from bv_user a,bv_user_profile b where a.user_alias = ? and a.user_id = b.user_id  and a.user_state = 0 and b.mobile_no =? and b.bank_code =? and not exists(select 1 from sbi_user_lock_account d where d.user_name =a.user_alias and locked_status ='Y')";
+			lockAccountConfirmCount = getJdbcTemplate().queryForInt(validUserQuery, countparams);
+			logger.info("count :" + lockAccountConfirmCount);
+			if (lockAccountConfirmCount ==1) {
+				try {
+					
+					String query = "select 'UL'||LPAD(ACCOUNT_LOCK_SEQ.NEXTVAL,8,0)reference_no from dual";
+					referenceNo = (String) getJdbcTemplate().queryForObject(query,String.class);
+					
+					Object[] Parameter = new Object[] { referenceNo, userName,
+							userName,mobileNo,corporateID};
+					int sqlTypes[] = { Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
+							Types.VARCHAR,Types.VARCHAR };
+					logger.info("referenceNo:::" + referenceNo + "mobileNo :"
+							+ mobileNo);
+					String query_for_user = "INSERT INTO sbi_user_lock_account(REFERENCE_NO,USER_NAME,ACCOUNT_NO,BRANCH_CODE,MOBILE_NO,LOCKED_STATUS,REACTIVATED_BY,CREATION_TIME,CORPORATE_ID) "
+						+ "values(? ,?,null,(select branch_code from bv_user_profile "
+						+ "where user_id in (select user_id from bv_user where user_alias=?)),?,'Y',NULL,SYSDATE,?)";
+					status1 = getJdbcTemplate().update(query_for_user, Parameter,
+							sqlTypes);
+					
+					logger.info("status " + status1);
+					creationTime = new Date();
+					// after insert user state to be 1
+					if (status1 == 1) {
+						String updateQuery = "UPDATE bv_user set user_state = '1' where user_alias = ?";
+						int updateCount = 0;
+						updateCount = getJdbcTemplate().update(updateQuery,	new Object[] { userName });
+					}
+					if (referenceNo != null) {
+						logger.info("referenceNo :::" + referenceNo);
+						outParam.put("reference_no", referenceNo);
+						outParam.put("lockAccountConfirmCount", lockAccountConfirmCount);
+						
+						
+					}
+				} catch (DataAccessException dae) {
+					DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, dae);
+
+				}
+
+			}
+			else {
+				outParam.put("isUserLocked", "Yes");
+			}
+		} else {
+			DAOException.throwException(ErrorConstants.INPUT_NULL_ERROR_CODE);
+		}
+		if (logger.isDebugEnabled()) {
+			logger.debug("status :" + status);
+		}
+
+		logger.info("lockAccountConfirm(String userName, String mobileNo ,String branchCode) method end");
+		return outParam;
+		
+        //logger.info(" returning responseFlag:"+responseFlag);
+            
+		
+	}
+	
+	public boolean userExist(String corporatId,String userName,String mobileNo) throws DAOException {
+        logger.info(" userExist(String corporatId,String userName,String mobileNo) begin");
+        boolean isUserExists=false;
+        try {
+
+            Object[] parameters = new Object[] { corporatId,userName,mobileNo }; 
+            //List result = getJdbcTemplate().queryForList("select * from bv_user a ,bv_user_profile b where //a.user_id =b.user_id and b.corporate_id=? and a.user_alias=? and b.mobile_no=?",parameters);
+			List result = new ConvertSpring3Util().convertMap(getJdbcTemplate().queryForList("select * from bv_user a ,bv_user_profile b where a.user_id =b.user_id and b.corporate_id=? and a.user_alias=? and b.mobile_no=?",parameters));
+			
+            logger.info("result"+result);
+            if (result != null && result.size() > 0) {
+                logger.info("valid User:" + result.get(0));
+                logger.info("userExist(String corporatId,String userName,String mobileNo) method end");
+                isUserExists= true;
+             } else{
+            	 isUserExists=false;
+             }
+        } catch (DataAccessException ex) {
+            DAOException.throwException( ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
+        }
+       return isUserExists;
     }
-    
-    try {
-        // Validate input parameters
-        if (userName == null || linkedUserName == null || 
-            userName.trim().isEmpty() || linkedUserName.trim().isEmpty()) {
-            throw new DAOException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
+	
+	public Map findVoiceOTPMobileSeries() throws DAOException {
+        logger.debug("findVoiceOTPMobileSeries()" + LoggingConstants.METHODBEGIN);
+          Map data =  new LinkedHashMap();
+        try {
+           List  voiceOTPMobileList = getJdbcTemplate().query(SQLConstants.FIND_VOICE_OTP_MOBILE_SERIES, new MobileSeriesRowMapper());
+            logger.info("voice OTP list from table :"+voiceOTPMobileList);
+            data = (Map)voiceOTPMobileList.get(0);
+            logger.info("data :" +data);
+            return data;
+            }
+        catch (DataAccessException ex) {
+           DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
         }
 
-        Map<String, Object> inParams = new HashMap<>();
-        inParams.put(DAOConstants.USER_NAME, userName);
-        inParams.put(DAOConstants.LINKED_USER_NAME, linkedUserName);
-
-        List<SqlParameter> parameterList = new ArrayList<>();
-        parameterList.add(new SqlParameter(DAOConstants.USER_NAME, Types.VARCHAR));
-        parameterList.add(new SqlParameter(DAOConstants.LINKED_USER_NAME, Types.VARCHAR));
-        parameterList.add(new SqlOutParameter(DAOConstants.STATUS, Types.VARCHAR));
-
-        CallableStatementCreatorFactory statementFactory = new CallableStatementCreatorFactory(
-                "{call LINK_ACCOUNTS(?,?,?)}", parameterList);
-
-        CallableStatementCreator callableStatement = statementFactory.newCallableStatementCreator(inParams);
-
-        Map<String, Object> result = getJdbcTemplate().call(callableStatement, parameterList);
-        String linkAccountStatus = (String) result.get(DAOConstants.STATUS);
-        logger.info("Value Returned by Procedure: {}", linkAccountStatus);
-
-        if (!"true".equalsIgnoreCase(linkAccountStatus)) {
-            throw new DAOException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-        }
-
-        return true;
-        
-    } catch (DataAccessException ex) {
-        logger.error("linkAccounts() exception occurred: {}", ex.getMessage());
-        throw new DAOException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-    } finally {
-        logger.info("linkAccounts() {}", LoggingConstants.METHODEND);
+        return null;
     }
-}
+       class MobileSeriesRowMapper implements RowMapper
+	    { 
+	        HashMap data = new LinkedHashMap();
+
+	        public Object mapRow(ResultSet rs, int index) throws SQLException
+	        {
+	            data.put(rs.getString(1), rs.getString(2));
+	            return data;
+	        }
+	    }
+		
+		public Boolean getCorporateHasDisabledLinks(final String corporateId, final String moduleName) {
+		logger.debug("getCorporateHasDisabledLinks()" + LoggingConstants.METHODBEGIN);
+		Boolean isCorporateHasDisabledLinks = Boolean.FALSE;
+		final String query = "SELECT COUNT(DISTINCT LINK_NAME) FROM SBI_LINK_DISABLE_MASTER WHERE CORPORATE_ID=? AND MODULE_NAME=? AND LINK_DISABLE='YES' ";
+		final int count = getJdbcTemplate().queryForInt(query,new Object[]{corporateId,moduleName});
+		if(count>=1){
+			isCorporateHasDisabledLinks = Boolean.TRUE;
+			logger.info("isCorporateHasDisabledLinks:"+isCorporateHasDisabledLinks);
+		}
+		logger.debug("getCorporateHasDisabledLinks()" + LoggingConstants.METHODBEGIN);
+		return isCorporateHasDisabledLinks;
+	}
+	
+	public Boolean getCorporateHasDisabledLinksUser(final String corporateId, final String moduleName) {
+		logger.debug("getCorporateHasDisabledLinksUser()" + LoggingConstants.METHODBEGIN);
+		Boolean isCorporateHasDisabledLinks = Boolean.FALSE;
+		final String query = "SELECT COUNT(DISTINCT LINK_NAME) FROM SBI_LINK_DISABLE_MASTER WHERE CORPORATE_ID=? AND MODULE_NAME=? AND LINK_DISABLE='YES' and TAB_NAME='Payments / Transfers' ";
+		final int count = getJdbcTemplate().queryForInt(query,new Object[]{corporateId,moduleName});
+		if(count>=1){
+			isCorporateHasDisabledLinks = Boolean.TRUE;
+			logger.info("isCorporateHasDisabledLinks:"+isCorporateHasDisabledLinks);
+		}
+		logger.debug("getCorporateHasDisabledLinks()" + LoggingConstants.METHODBEGIN);
+		return isCorporateHasDisabledLinks;
+	}
+By seeing the below code as reference can you please make the above code like the same way like try catch return and use jdbctemplate please note same above logic only should be there and no chamge in logic..
+public Map<String, String> getCutOffTime(){
+
+        logger.info("getCutOffTimeData() {}" , UtilsConstant.METHODBEGIN);
+        Map<String, String> data = null;
+        try {
+            List<Map<String, String>> cutOffList = jdbcTemplate.query(SQLConstants.CUT_OFF_TIME_VALUE, new NameValueMasterDataRowMapper());
+            data =  cutOffList.get(0);
+
+            logger.info("data {}", data);
+
+        } catch(DataAccessException ex) {
+            logger.error("getCutOffTime() exception occured {}" ,ex.getMessage());
+            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
+        }
+        logger.info("getCutOffTimeData() {}" , UtilsConstant.METHODEND);
+        return data;
+    }
