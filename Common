@@ -1,11 +1,3 @@
-if (rule.isBranchCode() && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
-      throw new ValidationException("400", rule.attributeName() + " contains A, " + rule.attributeName() + "should have all numbers");
-    }
-	
-	
-the above lines of branchode condition should be added in the below validation code
-
-
 package com.sbi.microservice.framework.utils;
 import com.sbi.microservice.framework.exception.ValidationException;
 import com.sbi.microservice.framework.model.ValidationApiRequest;
@@ -45,7 +37,7 @@ public class validation {
         }
         Object value = inputParams.get(attribute);
         switch (dataType.toUpperCase()) {
-            case "STRING" -> validateString(value, attribute, exactLength, maxLength,regexPattern);
+            case "STRING" -> validateString(value, attribute, exactLength, maxLength, regexPattern);
             case "LIST" -> validateList(value, attribute, maxLength);
             case "NUMBER" -> validateInteger(value, attribute);
             case "BOOLEAN" -> validateBoolean(value, attribute);
@@ -69,7 +61,10 @@ public class validation {
         if (regexPattern != null && !regexPattern.isEmpty()) {
             validateRegex(strValue, attribute, regexPattern);
         }
-
+        // Add branch code validation
+        if (attribute.equalsIgnoreCase("branchCode") && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
+            throw new ValidationException("400", attribute + " contains A, " + attribute + " should have all numbers");
+        }
     }
 
     private void validateRegex(String value, String attribute, String regexPattern) {
