@@ -1,105 +1,60 @@
-package com.sbi.microservice.framework.utils;
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.ValidationApiRequest;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-import java.util.List;
-import java.util.Map;
-import java.util.regex.Pattern;
+public boolean linkAccounts(String userName, String linkedUserName) throws DAOException {
+        logger.info("linkAccounts(String userName, String linkedUserName)" + LoggingConstants.METHODBEGIN);
+        if (logger.isDebugEnabled())
+            logger.debug("username , linkedUserName : " + userName + " AND " + linkedUserName);
+        logger.info("username , linkedUserName : " + userName + "AND" + linkedUserName);
 
-@Component
-public class validation {
-    private static final Logger logger = LoggerFactory.getLogger(validation.class);
+        if (userName == null || linkedUserName == null || (userName.trim()).equals(DAOConstants.EMPTY)
+                || (linkedUserName.trim()).equals(DAOConstants.EMPTY)) {
+          DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
+        }
+        else {
 
-    public void validateRequest(Map<String, Object> inputParams, List<ValidationApiRequest> validationRules) {
-        for (ValidationApiRequest rule : validationRules) {
-            String attribute = rule.attribute_name();
-            String dataType = rule.attribute_data_type();
-            boolean isMandatory = rule.is_mandatory_attribute();
-            int exactLength = rule.attribute_length();
-            int maxLength = rule.max_value();
-            String regexPattern = rule.regex_pattern();
-            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength, regexPattern);
-        }
-    }
+            Map inParams = new HashMap();
+            inParams.put(DAOConstants.USER_NAME, userName);
+            inParams.put(DAOConstants.LINKED_USER_NAME, linkedUserName);
 
-    private void validateAttribute(Map<String, Object> inputParams,
-                                   String attribute,
-                                   String dataType,
-                                   boolean isMandatory,
-                                   int exactLength,
-                                   int maxLength,
-                                   String regexPattern
-    ) {
-        if (isMandatory && !inputParams.containsKey(attribute)) {
-            throw new ValidationException("400", attribute + " is mandatory");
-        }
-        Object value = inputParams.get(attribute);
-        switch (dataType.toUpperCase()) {
-            case "STRING" -> validateString(value, attribute, exactLength, maxLength, regexPattern);
-            case "LIST" -> validateList(value, attribute, maxLength);
-            case "NUMBER" -> validateInteger(value, attribute);
-            case "BOOLEAN" -> validateBoolean(value, attribute);
-            default -> throw new ValidationException("400",
-                    "Unsupported data type '" + dataType + "' for attribute: " + attribute);
-        }
-    }
+            List parameterList = new ArrayList();
+            parameterList.add(new SqlParameter(DAOConstants.USER_NAME, Types.VARCHAR));
+            parameterList.add(new SqlParameter(DAOConstants.LINKED_USER_NAME, Types.VARCHAR));
+            parameterList.add(new SqlOutParameter(DAOConstants.STATUS, Types.VARCHAR));
 
-    private void validateString(Object value, String attribute, int exactLength, int maxLength, String regexPattern) {
-        if (!(value instanceof String strValue)) {
-            throw new ValidationException("400", attribute + " should be a string");
-        }
-        if (exactLength > 0 && strValue.length() != exactLength) {
-            throw new ValidationException("400",
-                    attribute + " must be exactly " + exactLength + " characters");
-        }
-        if (maxLength > 0 && strValue.length() > maxLength) {
-            throw new ValidationException("400",
-                    attribute + " exceeds max length of " + maxLength);
-        }
-        if (regexPattern != null && !regexPattern.isEmpty()) {
-            validateRegex(strValue, attribute, regexPattern);
-        }
-        // Add branch code validation
-        if (attribute.equalsIgnoreCase("branchCode") && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
-            throw new ValidationException("400", attribute + " contains A, " + attribute + " should have all numbers");
-        }
-    }
+            CallableStatementCreatorFactory statementFactory = new CallableStatementCreatorFactory(
+                    "{call LINK_ACCOUNTS(?,?,?)}", parameterList);
 
-    private void validateRegex(String value, String attribute, String regexPattern) {
-        if (value == null || regexPattern == null) {
-            return;
-        }
-        try {
-            if (!Pattern.matches(regexPattern, value)) {
-                throw new ValidationException("400", attribute + " does not match the required pattern");
+            CallableStatementCreator callableStatement = statementFactory.newCallableStatementCreator(inParams);
+
+            Map result = getJdbcTemplate().call(callableStatement, parameterList);
+            String linkAccountStatus = (String) result.get(DAOConstants.STATUS);
+            logger.info("Value Returned by Procedure" + linkAccountStatus);
+
+            if (linkAccountStatus.equalsIgnoreCase("true")) {
+                logger.info("linkAccounts(String userName, String linkedUserName)" + LoggingConstants.METHODEND);
+                return true;
             }
-        } catch (Exception e) {
-            logger.error("Regex validation failed for attribute: {}", attribute, e);
-            throw new ValidationException("400", "Invalid regex pattern for " + attribute);
+            else {
+                logger.info("Exception occured :");
+               DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
+            }
         }
+       return false;
     }
+	
+By seeing the below code as reference can you please make the above code like the same way like try catch return the same above logic only should be there..
+public Map<String, String> getCutOffTime(){
 
-    private void validateList(Object value, String attribute, int maxLength) {
-        if (!(value instanceof List<?> list)) {
-            throw new ValidationException("400", attribute + " should be a list");
-        }
-        if (maxLength > 0 && list.size() > maxLength) {
-            throw new ValidationException("400",
-                    attribute + " exceeds max size of " + maxLength);
-        }
-    }
+        logger.info("getCutOffTimeData() {}" , UtilsConstant.METHODBEGIN);
+        Map<String, String> data = null;
+        try {
+            List<Map<String, String>> cutOffList = jdbcTemplate.query(SQLConstants.CUT_OFF_TIME_VALUE, new NameValueMasterDataRowMapper());
+            data =  cutOffList.get(0);
 
-    private void validateInteger(Object value, String attribute) {
-        if (!(value instanceof Number)) {
-            throw new ValidationException("400", attribute + " should be a number");
-        }
-    }
+            logger.info("data {}", data);
 
-    private void validateBoolean(Object value, String attribute) {
-        if (!(value instanceof Boolean)) {
-            throw new ValidationException("400", attribute + " should be a boolean");
+        } catch(DataAccessException ex) {
+            logger.error("getCutOffTime() exception occured {}" ,ex.getMessage());
+            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
         }
+        logger.info("getCutOffTimeData() {}" , UtilsConstant.METHODEND);
+        return data;
     }
-}
