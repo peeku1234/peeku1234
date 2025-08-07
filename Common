@@ -1,5 +1,12 @@
-package com.sbi.microservice.framework.utils;
+if (rule.isBranchCode() && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
+      throw new ValidationException("400", rule.attributeName() + " contains A, " + rule.attributeName() + "should have all numbers");
+    }
+	
+	
+the above lines of branchode condition should be added in the below validation code
 
+
+package com.sbi.microservice.framework.utils;
 import com.sbi.microservice.framework.exception.ValidationException;
 import com.sbi.microservice.framework.model.ValidationApiRequest;
 import org.slf4j.Logger;
@@ -7,10 +14,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Component
 public class validation {
-    private static final Logger logger = LoggerFactory.getLogger(RequestValidator.class);
+    private static final Logger logger = LoggerFactory.getLogger(validation.class);
 
     public void validateRequest(Map<String, Object> inputParams, List<ValidationApiRequest> validationRules) {
         for (ValidationApiRequest rule : validationRules) {
@@ -19,7 +27,8 @@ public class validation {
             boolean isMandatory = rule.is_mandatory_attribute();
             int exactLength = rule.attribute_length();
             int maxLength = rule.max_value();
-            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength);
+            String regexPattern = rule.regex_pattern();
+            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength, regexPattern);
         }
     }
 
@@ -28,14 +37,15 @@ public class validation {
                                    String dataType,
                                    boolean isMandatory,
                                    int exactLength,
-                                   int maxLength
+                                   int maxLength,
+                                   String regexPattern
     ) {
         if (isMandatory && !inputParams.containsKey(attribute)) {
             throw new ValidationException("400", attribute + " is mandatory");
         }
         Object value = inputParams.get(attribute);
         switch (dataType.toUpperCase()) {
-            case "STRING" -> validateString(value, attribute, exactLength, maxLength);
+            case "STRING" -> validateString(value, attribute, exactLength, maxLength,regexPattern);
             case "LIST" -> validateList(value, attribute, maxLength);
             case "NUMBER" -> validateInteger(value, attribute);
             case "BOOLEAN" -> validateBoolean(value, attribute);
@@ -44,7 +54,7 @@ public class validation {
         }
     }
 
-    private void validateString(Object value, String attribute, int exactLength, int maxLength) {
+    private void validateString(Object value, String attribute, int exactLength, int maxLength, String regexPattern) {
         if (!(value instanceof String strValue)) {
             throw new ValidationException("400", attribute + " should be a string");
         }
@@ -55,6 +65,24 @@ public class validation {
         if (maxLength > 0 && strValue.length() > maxLength) {
             throw new ValidationException("400",
                     attribute + " exceeds max length of " + maxLength);
+        }
+        if (regexPattern != null && !regexPattern.isEmpty()) {
+            validateRegex(strValue, attribute, regexPattern);
+        }
+
+    }
+
+    private void validateRegex(String value, String attribute, String regexPattern) {
+        if (value == null || regexPattern == null) {
+            return;
+        }
+        try {
+            if (!Pattern.matches(regexPattern, value)) {
+                throw new ValidationException("400", attribute + " does not match the required pattern");
+            }
+        } catch (Exception e) {
+            logger.error("Regex validation failed for attribute: {}", attribute, e);
+            throw new ValidationException("400", "Invalid regex pattern for " + attribute);
         }
     }
 
