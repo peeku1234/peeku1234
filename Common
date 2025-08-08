@@ -1,160 +1,98 @@
-public Boolean isTransactionPwdEmpty(String userName,String corporateId) throws DAOException 
-    {
-		logger.debug("isTransactionPwdEmpty(String userName,String corporateId) throws DAOException method starts");
-		List<Map> referenceNoList=new ArrayList<Map>();
-		Object[] params = {userName,corporateId};
-		String sqlQuery="";
-		Boolean count=null;
-		try {
-			sqlQuery="select count(*) from bv_user_profile where user_id in(select user_id from bv_user where user_alias=? and transaction_password is null and corporate_id = ?)";
-			count=(Boolean)getJdbcTemplate().queryForObject(sqlQuery, params, Boolean.class);
-			logger.info("referenceNo ::::"+count);
-		} catch (DataAccessException ex) {
-			logger.error("Exception Occurred: ",ex);
-			DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
-		}       
-		logger.debug("isTransactionPwdEmpty(String userName,String corporateId) throws DAOException method ends");
-		return count;
-	}
-	
-	
-	
-	
-public String insertPasswordCount(String userName, String branchCode,String type) throws DAOException
-	{
-		boolean status = false;
-		String message="";
-		String referenceNo = null;
-		
-		logger.info("insertPasswordCount(String userName, String branchCode,String type)"+ LoggingConstants.METHODBEGIN);
-		logger.info("username , linkedUserName, fullName : " + userName + " AND " + branchCode + " AND ");
-		
-		if (userName == null || branchCode == null || (userName.trim()).equals(DAOConstants.EMPTY)|| (branchCode.trim()).equals(DAOConstants.EMPTY) ) {
-		    DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-		}
-		else {
-			referenceNo = (String) getJdbcTemplate().queryForObject(SQLConstants.PASSWORD_COUNT_REFERENCE,String.class);
-			logger.info("Refernce No::"+referenceNo); 
-			Object[] param ={referenceNo, userName, branchCode, type};
-			
-			for (int i = 0; i < param.length; i++) {
-			    logger.info("Parameters for Query is --> " + param[i]);
-			}
-			
-			int sqlType[] ={Types.VARCHAR, Types.VARCHAR, Types.VARCHAR, Types.VARCHAR};
-			int noOfRowsInserted = getJdbcTemplate().update(SQLConstants.INSERT_SBI_PASSWORD_COUNT, param, sqlType);
-			
-			if (noOfRowsInserted <= 0) {
-				DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-			}
-			
-			//changed for TXN pwd by Siva
-			if(type.equalsIgnoreCase("1")){
-				message = "Lost profile password request received from " + ". Username :" + userName + ".";
-			}
-			
-			if(type.equalsIgnoreCase("2")){
-				message = "Lost transaction password request received from " + ". Username :" + userName + ".";
-			}
-			
-			// Calling Method insertBranchMessage
-			status = insertBranchMessage(message, branchCode);
-		}
-		logger.info("insertPasswordCount(String userName, String branchCode,String type)"+ LoggingConstants.METHODEND);
-		logger.info("Value returned by Method is " + status);
-		return referenceNo;
-	}
-	
-	
-	
- public String getPasswordReferenceDetail(String userName,String branchCode,String type) throws DAOException 
-    {
-		logger.debug("getPasswordReferenceDetail(String userName,String branchCode,String type) throws DAOException method starts");
-		List<Map> referenceNoList=new ArrayList<Map>();
-		String referenceNo="";
-		Object[] params = {type, userName, branchCode };
-		String sqlQuery="";
-		try {
-			sqlQuery="select reference_no from sbi_password_count where status=1 and password_type=? and user_name=? and branch_code=? and password_changed_date is null order by creation_time desc";
-			//referenceNoList =getJdbcTemplate().queryForList(sqlQuery,params);
-			referenceNoList = new ConvertSpring3Util().convertMap(getJdbcTemplate().queryForList(sqlQuery,params));
-			if(referenceNoList.size()>0)
-			{
-				Map referenceNoMap=(Map)referenceNoList.get(0);
-				referenceNo=(String)referenceNoMap.get(new String("reference_no"));
-			}
-			logger.info("referenceNoList ::::"+referenceNoList);
-			logger.info("referenceNo ::::"+referenceNo);
-		} catch (DataAccessException ex) {
-			logger.error("Exception Occurred: ",ex);
-			DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
-		}       
-		logger.debug("getPasswordReferenceDetail(String userName,String branchCode,String type) throws DAOException method ends");
-		return referenceNo;
-	}
-	
-	
-can you please make the above code like below code i mean change it like its having try catch and using jdbc template remember there should have no change in code
+public Boolean isTransactionPwdEmpty(String userName, String corporateId) throws DAOException {
+    logger.debug("isTransactionPwdEmpty(String userName,String corporateId) throws DAOException method starts");
+    Boolean count = null;
+    try {
+        SqlParameterSource params = new MapSqlParameterSource()
+            .addValue("userName", userName)
+            .addValue("corporateId", corporateId);
+        
+        String sqlQuery = "select count(*) from bv_user_profile where user_id in " +
+                         "(select user_id from bv_user where user_alias=:userName " +
+                         "and transaction_password is null and corporate_id = :corporateId)";
+        
+        count = jdbcTemplate.queryForObject(sqlQuery, params, Boolean.class);
+        logger.info("referenceNo ::::" + count);
+    } catch (DataAccessException ex) {
+        logger.error("Exception Occurred: ", ex);
+        DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
+    }       
+    logger.debug("isTransactionPwdEmpty(String userName,String corporateId) throws DAOException method ends");
+    return count;
+}
 
-
-public Map lockAccountConfirm(String userName, String mobileNo ,String bankCode, String corporateID) {
-        logger.info("lockAccountConfirm(String userName, String mobileNo ,String branchCode) method begin");
-        logger.info("userName :" + userName + "mobileNo :" + mobileNo+ "branchCode :" + bankCode);
-        Map outParam = new HashMap();
-        Date creationTime = null;
-        int status = 0;
-        int status1 = 0;
-        int lockAccountConfirmCount = 0;
-        String referenceNo = null;
-        try {
-            if (userName != null) {
-                Object[] countparams = new Object[]{userName, mobileNo, bankCode};
-                SqlParameterSource sqlParameterSource = new MapSqlParameterSource().addValue("userName",userName).addValue("mobileNo",mobileNo).addValue("bankCode",bankCode);
-                String validUserQuery = "select count(1) from bv_user a,bv_user_profile b where a.user_alias =:userName and a.user_id = b.user_id  and a.user_state = 0 and b.mobile_no =:mobileNo and b.bank_code =:bankCode and not exists(select 1 from sbi_user_lock_account d where d.user_name =a.user_alias and locked_status ='Y')";
-                lockAccountConfirmCount = jdbcTemplate.queryForObject(validUserQuery, sqlParameterSource, Integer.class);
-                logger.info("count :" + lockAccountConfirmCount);
-                if (lockAccountConfirmCount == 1) {
-                    try {
-                        String query = "select 'UL'||LPAD(ACCOUNT_LOCK_SEQ.NEXTVAL,8,0)reference_no from dual";
-                        referenceNo = (String) jdbcTemplate.queryForObject(query,new HashMap<>(),String.class);
-                        SqlParameterSource sqlParameterSource1 = new MapSqlParameterSource().addValue("referenceNo",referenceNo).addValue("userName",userName).addValue("mobileNo",mobileNo).addValue("corporateID",corporateID);
-                        int sqlTypes[] = {Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
-                                Types.VARCHAR, Types.VARCHAR};
-                        logger.info("referenceNo:::" + referenceNo + "mobileNo :"
-                                + mobileNo);
-                        String query_for_user = "INSERT INTO sbi_user_lock_account(REFERENCE_NO,USER_NAME,ACCOUNT_NO,BRANCH_CODE,MOBILE_NO,LOCKED_STATUS,REACTIVATED_BY,CREATION_TIME,CORPORATE_ID) "
-                                + "values(? ,?,null,(select branch_code from bv_user_profile "
-                                + "where user_id in (select user_id from bv_user where user_alias=?)),?,'Y',NULL,SYSDATE,?)";
-                        status1 = jdbcTemplate.update(query_for_user, sqlParameterSource1);
-                        logger.info("status " + status1);
-                        creationTime = new Date();
-                        SqlParameterSource sqlParameterSource2 = new MapSqlParameterSource().addValue("userName",userName);
-                        if (status1 == 1) {
-                            String updateQuery = "UPDATE bv_user set user_state = '1' where user_alias =:userName";
-                            int updateCount = 0;
-                            updateCount = jdbcTemplate.update(updateQuery,sqlParameterSource2);
-                        }
-                        if (referenceNo != null) {
-                            logger.info("referenceNo :::" + referenceNo);
-                            outParam.put("reference_no", referenceNo);
-                            outParam.put("lockAccountConfirmCount", lockAccountConfirmCount);
-                        }
-                    } catch (DataAccessException ex) {
-                        throw new TechnicalException(" ",ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-                    }
-                } else {
-                    outParam.put("isUserLocked", "Yes");
-                }
-            } else {
-                throw new TechnicalException(" ",ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
-            }
-            if (logger.isDebugEnabled()) {
-                logger.debug("status :" + status);
-            }
-            return outParam;
-        } catch (DataAccessException ex) {
-            logger.error("lockAccountConfirm() exception occurred: {}", ex.getMessage());
-            throw new TechnicalException(" ",ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
+public String insertPasswordCount(String userName, String branchCode, String type) throws DAOException {
+    logger.info("insertPasswordCount(String userName, String branchCode,String type)" + LoggingConstants.METHODBEGIN);
+    logger.info("username , linkedUserName, fullName : " + userName + " AND " + branchCode + " AND ");
+    
+    String referenceNo = null;
+    try {
+        if (userName == null || branchCode == null || 
+            (userName.trim()).equals(DAOConstants.EMPTY) || (branchCode.trim()).equals(DAOConstants.EMPTY)) {
+            DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
         }
+        
+        referenceNo = jdbcTemplate.queryForObject(SQLConstants.PASSWORD_COUNT_REFERENCE, new HashMap<>(), String.class);
+        logger.info("Refernce No::" + referenceNo); 
+        
+        SqlParameterSource params = new MapSqlParameterSource()
+            .addValue("referenceNo", referenceNo)
+            .addValue("userName", userName)
+            .addValue("branchCode", branchCode)
+            .addValue("type", type);
+        
+        for (String paramName : new String[]{"referenceNo", "userName", "branchCode", "type"}) {
+            logger.info("Parameters for Query is --> " + ((MapSqlParameterSource)params).getValue(paramName));
+        }
+        
+        int noOfRowsInserted = jdbcTemplate.update(SQLConstants.INSERT_SBI_PASSWORD_COUNT, params);
+        
+        if (noOfRowsInserted <= 0) {
+            DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
+        }
+        
+        String message = "";
+        if (type.equalsIgnoreCase("1")) {
+            message = "Lost profile password request received from . Username :" + userName + ".";
+        } else if (type.equalsIgnoreCase("2")) {
+            message = "Lost transaction password request received from . Username :" + userName + ".";
+        }
+        
+        boolean status = insertBranchMessage(message, branchCode);
+    } catch (DataAccessException ex) {
+        logger.error("Exception occurred in insertPasswordCount: ", ex);
+        DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
     }
-	
+    
+    logger.info("insertPasswordCount(String userName, String branchCode,String type)" + LoggingConstants.METHODEND);
+    return referenceNo;
+}
+
+public String getPasswordReferenceDetail(String userName, String branchCode, String type) throws DAOException {
+    logger.debug("getPasswordReferenceDetail(String userName,String branchCode,String type) throws DAOException method starts");
+    String referenceNo = "";
+    try {
+        SqlParameterSource params = new MapSqlParameterSource()
+            .addValue("type", type)
+            .addValue("userName", userName)
+            .addValue("branchCode", branchCode);
+        
+        String sqlQuery = "select reference_no from sbi_password_count where status=1 " +
+                         "and password_type=:type and user_name=:userName and branch_code=:branchCode " +
+                         "and password_changed_date is null order by creation_time desc";
+        
+        List<Map<String, Object>> referenceNoList = jdbcTemplate.queryForList(sqlQuery, params);
+        
+        if (referenceNoList.size() > 0) {
+            Map<String, Object> referenceNoMap = referenceNoList.get(0);
+            referenceNo = (String) referenceNoMap.get("reference_no");
+        }
+        
+        logger.info("referenceNoList ::::" + referenceNoList);
+        logger.info("referenceNo ::::" + referenceNo);
+    } catch (DataAccessException ex) {
+        logger.error("Exception Occurred: ", ex);
+        DAOException.throwException(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, ex);
+    }       
+    logger.debug("getPasswordReferenceDetail(String userName,String branchCode,String type) throws DAOException method ends");
+    return referenceNo;
+}
