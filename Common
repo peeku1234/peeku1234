@@ -1,101 +1,78 @@
-public Map callWebService(Map inparams) throws Exception
-	  {
-		String responseJson = "";
-		BufferedReader br = null;
-		StringBuffer response;
-		URL weburl;
-		HttpURLConnection conn = null;
-		Map map=null;
-		String status=null;
-		String statusDesc=null;
-		
-		double dbtAmt=0.0;
-		double creditAmt=0.0;
-		String debitAmount = null;
-		String resAmount=null;
-		try {
-			debitAmount = (String) inparams.get("debitAmount");
-			weburl = new URL(gemUrl);
-			String reqString=convertJsonString(inparams);
-			conn = (HttpURLConnection) weburl.openConnection(); 
-			conn.setConnectTimeout(10000);
-			conn.setReadTimeout(20000);
-			conn.setDoInput(true);
-			conn.setRequestProperty("Content-Type", "application/json");
-			conn.setRequestProperty("content-type", "application/json; charset=utf-8");
-			conn.setRequestMethod("POST");
-			conn.setDoOutput(true);
-			
-			if(conn.getResponseCode()==200){
-				br = new BufferedReader(new InputStreamReader((conn.getInputStream())));
-				response=new StringBuffer();
-				responseJson = response.toString();
-				map=responseMap(responseJson);
-				status=(String)map.get("status");
-				statusDesc=(String)map.get("status_desc");
-			resAmount=(String)map.get("total_amt");
-			 if("S".equals(status) && debitAmount!=null && resAmount!=null){
-				dbtAmt=Double.parseDouble(debitAmount);
-				creditAmt=Double.parseDouble((String)map.get("total_amt"));
-				  if(dbtAmt!=creditAmt){
-					  map.put("status", "F");
-					  map.put("errorCode", "GEM007");
-		          }					
-		     }	
-		
-			  if("F".equals(status) && "Transaction pending for Clearing".equals(statusDesc)){
-					map.put("errorCode", "GEM003");
-					
-					
-				}else if("F".equals(status) && "Transaction already Paid".equals(statusDesc)){
-					map.put("errorCode", "GEM004");
-					
-				}else if("F".equals(status) && "Invalid Reference Number".equals(statusDesc)){
-					map.put("errorCode", "GEM005");					
-				}
-				else if("F".equals(status) && "Challan expired".equals(statusDesc)){
-				map.put("errorCode", "GEM011");
-				
-				}
-			else if("F".equals(status) ){
-				map.put("errorCode", "GEM001");
-				
-			}
-			
-			}else{
-				SBIApplicationException.throwException("SE058");
-			}
-		 
-				
-		} catch(SocketTimeoutException te){
-			responseJson = "F1";	
-			SBIApplicationException.throwException("SE058",te); 
-		} catch(UnknownHostException une){
-			SBIApplicationException.throwException("SE058",une); 
-		} catch (IOException ioe) {
-			 SBIApplicationException.throwException("SE058",ioe); 
-		} catch (Exception ex) {
-			 
-			 SBIApplicationException.throwException("SE058",ex); 
-		}
-			
-			
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+import java.net.UnknownHostException;
+import java.util.Map;
 
-		finally {
-			try {
-				if (br != null) {
-					br.close();
-				}
-			}
-			catch (Exception e){
-				
-				throw e;
-				
-			}			
-		}
-		
-		
-	    return map;
-	  }
-	  
-	  can you please convert the above code in java 21
+public Map<String, Object> callWebService(Map<String, Object> inparams) throws Exception {
+    String responseJson;
+    Map<String, Object> map = null;
+    String status;
+    String statusDesc;
+    
+    String debitAmount = (String) inparams.get("debitAmount");
+    double dbtAmt = 0.0;
+    double creditAmt = 0.0;
+    String resAmount;
+
+    try {
+        URL weburl = new URL(gemUrl);
+        String reqString = convertJsonString(inparams);
+        
+        HttpURLConnection conn = (HttpURLConnection) weburl.openConnection();
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(20000);
+        conn.setDoInput(true);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("content-type", "application/json; charset=utf-8");
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+
+        if (conn.getResponseCode() == 200) {
+            try (var br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                responseJson = br.lines().collect(Collectors.joining());
+                map = responseMap(responseJson);
+                status = (String) map.get("status");
+                statusDesc = (String) map.get("status_desc");
+                resAmount = (String) map.get("total_amt");
+
+                if ("S".equals(status) && debitAmount != null && resAmount != null) {
+                    dbtAmt = Double.parseDouble(debitAmount);
+                    creditAmt = Double.parseDouble(resAmount);
+                    if (dbtAmt != creditAmt) {
+                        map.put("status", "F");
+                        map.put("errorCode", "GEM007");
+                    }
+                }
+
+                switch (status) {
+                    case "F" -> {
+                        switch (statusDesc) {
+                            case "Transaction pending for Clearing" -> map.put("errorCode", "GEM003");
+                            case "Transaction already Paid" -> map.put("errorCode", "GEM004");
+                            case "Invalid Reference Number" -> map.put("errorCode", "GEM005");
+                            case "Challan expired" -> map.put("errorCode", "GEM011");
+                            default -> map.put("errorCode", "GEM001");
+                        }
+                    }
+                }
+            }
+        } else {
+            SBIApplicationException.throwException("SE058");
+        }
+    } catch (SocketTimeoutException te) {
+        responseJson = "F1";
+        SBIApplicationException.throwException("SE058", te);
+    } catch (UnknownHostException une) {
+        SBIApplicationException.throwException("SE058", une);
+    } catch (IOException ioe) {
+        SBIApplicationException.throwException("SE058", ioe);
+    } catch (Exception ex) {
+        SBIApplicationException.throwException("SE058", ex);
+    }
+
+    return map;
+}
