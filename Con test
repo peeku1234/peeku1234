@@ -1,5 +1,135 @@
-package com.sbi.microservice.framework.utils;
+controller
+@PostMapping("/fetchAccountBalance")
+  public SBIApplicationResponse getAccountBalance(final HttpServletRequest request, final HttpServletResponse response) {
+    LOGGER.info("Fetch Account Balance Begin: Method-getAccountBalance");
+    SBIApplicationResponse sbiApplicationResponse;
+    ObjectMapper mapper = new ObjectMapper();
+    try {
+      String req = (String) request.getAttribute(Constants.PAYLOAD);
+      JsonFactory factory = mapper.getFactory();
+      JsonParser json = factory.createParser(req);
+      FetchAccountBalanceRequest accBalReq = mapper.readValue(json, FetchAccountBalanceRequest.class);
+      sbiApplicationResponse = accountBalanceService.fetchAccountBalance(accBalReq);
+    } catch (IOException ex) {
+      LOGGER.error("Exception occurred - SBIApplicationRequest & SBIApplicationResponse is not valid");
+      throw new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001);
+    }
+    LOGGER.info("Fetch Account Balance End: Method-getAccountBalance");
+    return sbiApplicationResponse;
+  }
+  
+  
+  
+Service
+  public SBIApplicationResponse fetchAccountBalance(final FetchAccountBalanceRequest accBalReq) {
+    LOGGER.info("Fetch Account Balance Begin: Method-accountBalance");
+    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
+    final FetchAccountBalanceResponse[] fetchAccountBalanceResponse = {null};
+    ObjectMapper mapper = new ObjectMapper();
+    try {
+      AccountDetails accountDetails = Optional.ofNullable(accountDetailsUtil.fetchAccountDetails(accBalReq.userName(), accBalReq.accountNo()))
+              .orElseThrow(() -> new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001));
 
+      Optional.ofNullable(accountDetails)
+              .map(AccountDetails::account)
+              .ifPresent(acc -> {
+                String productType = acc.productType().toUpperCase();
+                String productDesc = acc.productDescription().toUpperCase();
+                String currencyCode = Constants.CURRENCY_MESSGAE;
+                String accBalance = switch (productType.toUpperCase(Locale.ENGLISH)) {
+                  case Constants.A1, Constants.A2, Constants.A3, Constants.A4 ->
+                          accountDetails.transactionAccountDetails().availableBalance();
+                  case Constants.A5 ->
+                          (productDesc.toUpperCase(Locale.ENGLISH).startsWith(Constants.RD) || productDesc.toUpperCase(Locale.ENGLISH).startsWith(Constants.FLEXI)) ? accountDetails.transactionAccountDetails().clearBalance().toString() : accountDetails.transactionAccountDetails().availableBalance();
+                  case Constants.A6 -> accountDetails.loanAccountDetails().amountOutStanding().toString();
+                  default -> Constants.ZERO_DOUBLE;
+                };
+
+                if (accountDetails.transactionAccountDetails() != null && accountDetails.transactionAccountDetails().currencyCode() != null && !accountDetails.transactionAccountDetails().currencyCode().isEmpty()) {
+                  currencyCode = accountDetails.transactionAccountDetails().currencyCode();
+                } else if (accountDetails.loanAccountDetails() != null && accountDetails.loanAccountDetails().currencyCode() != null && !accountDetails.loanAccountDetails().currencyCode().isEmpty()) {
+                  currencyCode = accountDetails.loanAccountDetails().currencyCode();
+                }
+                fetchAccountBalanceResponse[0] = new FetchAccountBalanceResponse(accBalance, currencyCode);
+              });
+
+      sbiApplicationResponse.setData(mapper.writeValueAsString(fetchAccountBalanceResponse[0]));
+      sbiApplicationResponse.setStatusCode(ErrorConstants.AS00000);
+      sbiApplicationResponse.setStatus(Constants.SUCCESS);
+      sbiApplicationResponse.setMessage("Account Balance fetched successfully");
+
+    } catch (JsonProcessingException ex) {
+      LOGGER.error("Error occurring Failed to retrieve the Account Balance");
+      sbiApplicationResponse.setStatusCode(ErrorConstants.ASAS0001);
+      sbiApplicationResponse.setStatus(Constants.FAILURE);
+      throw new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001);
+    }
+    LOGGER.info("Fetch Account Balance End: Method-FetchAccountBalance");
+    return sbiApplicationResponse;
+  }
+  
+  
+ fetchAccountDetails  this menthod wich is used in above class
+public AccountDetails fetchAccountDetails(final String userName, final String accountNo) {
+    LOGGER.info("AccountDetailsUtil Service Begin: Method-fetchUserAccountDetails");
+    AccountDetails accountDetails;
+    List<Account> accountList;
+    Optional<Account> matchedAccount = Optional.empty();
+    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
+    accountList = accountStatementDaoImpl.fetchAccountsByUsername(userName,accountNo);
+    if (accountList != null) {
+      matchedAccount = matchAccount(accountList, accountNo);
+    }
+    if (matchedAccount.isEmpty()) {
+      accountList = accountStatementDaoImpl.fetchBmAccount(userName, accountNo);
+      if (accountList != null) {
+        matchedAccount = matchAccount(accountList, accountNo);
+      }
+    }
+    if (matchedAccount.isEmpty()) {
+      accountList = accountStatementDaoImpl.fetchNriPisAccount(userName, accountNo);
+      if (accountList != null) {
+        matchedAccount = matchAccount(accountList, accountNo);
+      }
+    }
+    if (matchedAccount.isEmpty()) {
+      accountList = accountStatementDaoImpl.fetchClosedAccount(userName);
+    }
+
+    if (accountList != null && !accountList.isEmpty()) {
+      Optional<Account> matchAccount = accountList.stream()
+              .filter(acc -> acc.accountNo().equals(accountNo))
+              .findFirst();
+      if (matchAccount.isPresent()) {
+        accountDetails = matchAccount
+                .map(account -> {
+                  String productType = account.productType();
+                  AccountDetails details = switch (productType) {
+                    case Constants.A5 -> depositAccountDaoImpl.fetchAccountDetails(account);
+                    case Constants.A6 -> loanAccountDaoImpl.fetchAccountDetails(account);
+                    default -> transactionAccountDaoImpl.fetchAccountDetails(account);
+                  };
+                  return details.withAccount(account);
+                }).orElseThrow(() -> new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001));
+
+      } else {
+        sbiApplicationResponse.setStatusCode(ErrorConstants.ASAS0002);
+        sbiApplicationResponse.setStatus(Constants.FAILURE);
+        throw new BusinessException(ErrorConstants.ASAS0002, ErrorConstants.ASAS0002);
+      }
+    } else {
+      sbiApplicationResponse.setStatusCode(ErrorConstants.ASAS0005);
+      sbiApplicationResponse.setStatus(Constants.FAILURE);
+      throw new BusinessException(ErrorConstants.ASAS0005, ErrorConstants.ASAS0005);
+    }
+
+
+    LOGGER.info("AccountDetailsUtil Service End: Method-fetchUserAccountDetails");
+    return accountDetails;
+  }
+  
+  validation class which is in microservice framework and used as common code
+  package com.sbi.microservice.framework.utils;
 import com.sbi.microservice.framework.exception.ValidationException;
 import com.sbi.microservice.framework.model.ValidationApiRequest;
 import org.slf4j.Logger;
@@ -11,7 +141,7 @@ import java.util.regex.Pattern;
 
 @Component
 public class validation {
-    private static final Logger logger = LoggerFactory.getLogger(RequestValidator.class);
+    private static final Logger logger = LoggerFactory.getLogger(validation.class);
 
     public void validateRequest(Map<String, Object> inputParams, List<ValidationApiRequest> validationRules) {
         for (ValidationApiRequest rule : validationRules) {
@@ -20,30 +150,25 @@ public class validation {
             boolean isMandatory = rule.is_mandatory_attribute();
             int exactLength = rule.attribute_length();
             int maxLength = rule.max_value();
-            String regexPattern = rule.regex_pattern(); // Assuming this field exists in ValidationApiRequest
+            String regexPattern = rule.regex_pattern();
             validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength, regexPattern);
         }
     }
 
     private void validateAttribute(Map<String, Object> inputParams,
-                                  String attribute,
-                                  String dataType,
-                                  boolean isMandatory,
-                                  int exactLength,
-                                  int maxLength,
-                                  String regexPattern) {
+                                   String attribute,
+                                   String dataType,
+                                   boolean isMandatory,
+                                   int exactLength,
+                                   int maxLength,
+                                   String regexPattern
+    ) {
         if (isMandatory && !inputParams.containsKey(attribute)) {
             throw new ValidationException("400", attribute + " is mandatory");
         }
-        
-        // Skip validation if value is null and not mandatory
-        if (!inputParams.containsKey(attribute) || inputParams.get(attribute) == null) {
-            return;
-        }
-        
         Object value = inputParams.get(attribute);
         switch (dataType.toUpperCase()) {
-            case "STRING" -> validateString(value, attribute, exactLength, maxLength, regexPattern);
+            case "STRING" -> validateString(value, attribute, exactLength, maxLength,regexPattern);
             case "LIST" -> validateList(value, attribute, maxLength);
             case "NUMBER" -> validateInteger(value, attribute);
             case "BOOLEAN" -> validateBoolean(value, attribute);
@@ -65,10 +190,25 @@ public class validation {
                     attribute + " exceeds max length of " + maxLength);
         }
         if (regexPattern != null && !regexPattern.isEmpty()) {
-            if (!Pattern.matches(regexPattern, strValue)) {
-                throw new ValidationException("400",
-                        attribute + " does not match the required pattern");
+            validateRegex(strValue, attribute, regexPattern);
+        }
+        if (attribute.equalsIgnoreCase("branchCode") && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
+            throw new ValidationException("400", attribute + " contains A, " + attribute + " should have all numbers");
+        }
+
+    }
+
+    private void validateRegex(String value, String attribute, String regexPattern) {
+        if (value == null || regexPattern == null) {
+            return;
+        }
+        try {
+            if (!Pattern.matches(regexPattern, value)) {
+                throw new ValidationException("400", attribute + " does not match the required pattern");
             }
+        } catch (Exception e) {
+            logger.error("Regex validation failed for attribute: {}", attribute, e);
+            throw new ValidationException("400", "Invalid regex pattern for " + attribute);
         }
     }
 
