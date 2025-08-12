@@ -1,128 +1,37 @@
-package com.sbi.microservice.framework.utils;
+@Autowired
+private validation requestValidator; // from framework
 
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.ValidationApiRequest;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-import java.util.List;
-import java.util.Map;
-import java.util.regex.Pattern;
+@PostMapping("/fetchAccountBalance")
+public SBIApplicationResponse getAccountBalance(final HttpServletRequest request, final HttpServletResponse response) {
+    LOGGER.info("Fetch Account Balance Begin: Method-getAccountBalance");
+    SBIApplicationResponse sbiApplicationResponse;
+    ObjectMapper mapper = new ObjectMapper();
+    try {
+        String req = (String) request.getAttribute(Constants.PAYLOAD);
 
-@Component
-public class validation {
-    private static final Logger logger = LoggerFactory.getLogger(RequestValidator.class);
+        // Convert JSON string to Map for validation
+        Map<String, Object> inputParams = mapper.readValue(req, new TypeReference<Map<String, Object>>() {});
 
-    // Common regex patterns as constants
-    public static final String EMAIL_REGEX = "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$";
-    public static final String PHONE_REGEX = "^[+]?[0-9]{10,15}$";
-    public static final String ALPHANUMERIC_REGEX = "^[a-zA-Z0-9]*$";
-    public static final String DATE_YYYY_MM_DD = "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$";
+        // Load validation rules (this will depend on your project — could be from DB, config, or hardcoded for now)
+        List<ValidationApiRequest> validationRules = List.of(
+            new ValidationApiRequest("userName", "STRING", true, 0, 50, null),
+            new ValidationApiRequest("accountNo", "STRING", true, 10, 15, "^[0-9]+$")
+        );
 
-    public void validateRequest(Map<String, Object> inputParams, List<ValidationApiRequest> validationRules) {
-        for (ValidationApiRequest rule : validationRules) {
-            String attribute = rule.attribute_name();
-            String dataType = rule.attribute_data_type();
-            boolean isMandatory = rule.is_mandatory_attribute();
-            int exactLength = rule.attribute_length();
-            int maxLength = rule.max_value();
-            String regexPattern = rule.regex_pattern(); // Assuming this field exists in ValidationApiRequest
-            String regexErrorMessage = rule.regex_error_message(); // Custom error message
-            
-            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength, 
-                            regexPattern, regexErrorMessage);
-        }
+        // Call validation method
+        requestValidator.validateRequest(inputParams, validationRules);
+
+        // Now parse into your domain object
+        JsonFactory factory = mapper.getFactory();
+        JsonParser json = factory.createParser(req);
+        FetchAccountBalanceRequest accBalReq = mapper.readValue(json, FetchAccountBalanceRequest.class);
+
+        sbiApplicationResponse = accountBalanceService.fetchAccountBalance(accBalReq);
+
+    } catch (IOException ex) {
+        LOGGER.error("Exception occurred - SBIApplicationRequest & SBIApplicationResponse is not valid");
+        throw new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001);
     }
-
-    private void validateAttribute(Map<String, Object> inputParams,
-                                  String attribute,
-                                  String dataType,
-                                  boolean isMandatory,
-                                  int exactLength,
-                                  int maxLength,
-                                  String regexPattern,
-                                  String regexErrorMessage) {
-        if (isMandatory && !inputParams.containsKey(attribute)) {
-            throw new ValidationException("400", attribute + " is mandatory");
-        }
-        
-        // Skip validation if value is null and not mandatory
-        if (!inputParams.containsKey(attribute) || inputParams.get(attribute) == null) {
-            return;
-        }
-        
-        Object value = inputParams.get(attribute);
-        switch (dataType.toUpperCase()) {
-            case "STRING" -> validateString(value, attribute, exactLength, maxLength, regexPattern, regexErrorMessage);
-            case "LIST" -> validateList(value, attribute, maxLength);
-            case "NUMBER" -> validateInteger(value, attribute);
-            case "BOOLEAN" -> validateBoolean(value, attribute);
-            default -> throw new ValidationException("400",
-                    "Unsupported data type '" + dataType + "' for attribute: " + attribute);
-        }
-    }
-
-    private void validateString(Object value, String attribute, int exactLength, int maxLength, 
-                               String regexPattern, String regexErrorMessage) {
-        if (!(value instanceof String strValue)) {
-            throw new ValidationException("400", attribute + " should be a string");
-        }
-        if (exactLength > 0 && strValue.length() != exactLength) {
-            throw new ValidationException("400",
-                    attribute + " must be exactly " + exactLength + " characters");
-        }
-        if (maxLength > 0 && strValue.length() > maxLength) {
-            throw new ValidationException("400",
-                    attribute + " exceeds max length of " + maxLength);
-        }
-        if (regexPattern != null && !regexPattern.isEmpty()) {
-            validateRegex(strValue, attribute, regexPattern, regexErrorMessage);
-        }
-    }
-
-    /**
-     * Dedicated method for regex validation that can be reused
-     * @param value The string value to validate
-     * @param attribute The attribute name for error messages
-     * @param regexPattern The regex pattern to match against
-     * @param customErrorMessage Optional custom error message
-     */
-    public static void validateRegex(String value, String attribute, String regexPattern, String customErrorMessage) {
-        if (value == null || regexPattern == null) {
-            return;
-        }
-        
-        try {
-            if (!Pattern.matches(regexPattern, value)) {
-                String errorMessage = customErrorMessage != null ? customErrorMessage 
-                    : attribute + " does not match the required pattern";
-                throw new ValidationException("400", errorMessage);
-            }
-        } catch (Exception e) {
-            logger.error("Regex validation failed for attribute: {}", attribute, e);
-            throw new ValidationException("400", "Invalid regex pattern for " + attribute);
-        }
-    }
-
-    private void validateList(Object value, String attribute, int maxLength) {
-        if (!(value instanceof List<?> list)) {
-            throw new ValidationException("400", attribute + " should be a list");
-        }
-        if (maxLength > 0 && list.size() > maxLength) {
-            throw new ValidationException("400",
-                    attribute + " exceeds max size of " + maxLength);
-        }
-    }
-
-    private void validateInteger(Object value, String attribute) {
-        if (!(value instanceof Number)) {
-            throw new ValidationException("400", attribute + " should be a number");
-        }
-    }
-
-    private void validateBoolean(Object value, String attribute) {
-        if (!(value instanceof Boolean)) {
-            throw new ValidationException("400", attribute + " should be a boolean");
-        }
-    }
+    LOGGER.info("Fetch Account Balance End: Method-getAccountBalance");
+    return sbiApplicationResponse;
 }
