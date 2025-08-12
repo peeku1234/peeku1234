@@ -1,37 +1,239 @@
-@Autowired
-private validation requestValidator; // from framework
-
-@PostMapping("/fetchAccountBalance")
-public SBIApplicationResponse getAccountBalance(final HttpServletRequest request, final HttpServletResponse response) {
-    LOGGER.info("Fetch Account Balance Begin: Method-getAccountBalance");
-    SBIApplicationResponse sbiApplicationResponse;
-    ObjectMapper mapper = new ObjectMapper();
-    try {
-        String req = (String) request.getAttribute(Constants.PAYLOAD);
-
-        // Convert JSON string to Map for validation
-        Map<String, Object> inputParams = mapper.readValue(req, new TypeReference<Map<String, Object>>() {});
-
-        // Load validation rules (this will depend on your project — could be from DB, config, or hardcoded for now)
-        List<ValidationApiRequest> validationRules = List.of(
-            new ValidationApiRequest("userName", "STRING", true, 0, 50, null),
-            new ValidationApiRequest("accountNo", "STRING", true, 10, 15, "^[0-9]+$")
-        );
-
-        // Call validation method
-        requestValidator.validateRequest(inputParams, validationRules);
-
-        // Now parse into your domain object
-        JsonFactory factory = mapper.getFactory();
-        JsonParser json = factory.createParser(req);
-        FetchAccountBalanceRequest accBalReq = mapper.readValue(json, FetchAccountBalanceRequest.class);
-
-        sbiApplicationResponse = accountBalanceService.fetchAccountBalance(accBalReq);
-
-    } catch (IOException ex) {
-        LOGGER.error("Exception occurred - SBIApplicationRequest & SBIApplicationResponse is not valid");
-        throw new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001);
-    }
-    LOGGER.info("Fetch Account Balance End: Method-getAccountBalance");
-    return sbiApplicationResponse;
-}
+FUNCTION insertecheque (
+      p_debitleg          IN OUT   obj_corporate_leg,
+      p_creditleg         IN       col_corporate_leg,
+      p_transactionpath   IN       VARCHAR
+   )
+      RETURN VARCHAR2
+   AS
+      constvalue            NUMBER (1)                                   := 1;
+      constzerovalue        NUMBER (1)                                   := 0;
+      strrefno              sbicorp_echeque_master.echeque_no%TYPE;
+      strdebitacc           sbicorp_echeque_master.account_no%TYPE;
+      strdebitbr            sbicorp_echeque_master.branch_code%TYPE;
+      strdate               VARCHAR2 (10);
+      strtime               VARCHAR2 (10);
+      strcorporateid        VARCHAR2 (15);--                           := '99999';
+      strcorprefno          sbicorp_echeque_master.corp_ref_no%TYPE;
+      strmerchcode          sbicorp_echeque_master.merchant_code%TYPE;
+      strdesc               sbicorp_echeque_master.description%TYPE;
+      intoid                sbicorp_echeque_master.OID%TYPE;
+      echeque_date          DATE;
+      boolreturnvalue       VARCHAR2 (5);
+      strusername           sbicorp_echeque_master.maker%TYPE;
+      strmcprocessed        sbicorp_echeque_master.mc_processed%TYPE;
+      lngdebitamount        sbicorp_echeque_master.echeque_amount%TYPE;
+      schdate               DATE                                      := NULL;
+      schvalue              NUMBER (2)                                   := 1;
+      schprocessed          NUMBER (2)                                   := 0;
+      strsupplierid         VARCHAR2 (25);
+      strscheduled          VARCHAR2 (25);
+      strfilename           sbicorp_echeque_master.file_name%TYPE;
+      strcurrentauthlevel   sbicorp_echeque_master.current_auth_level%TYPE :=1;
+      sqlerrorcode          VARCHAR2 (255)                              := '';
+      additionalparams      dataarray_large;
+      paramkeyvalue         dataarray_large;
+      stroutrefname         sbicorp_echeque_supplier_param.param%TYPE;
+      stroutrefvalue        sbicorp_echeque_supplier_param.value%TYPE;
+      strbeneficiary        SBICORP_ECHEQUE_MASTER.BENEFICIARY%TYPE;
+      l_businessline_id     varchar2(10);
+      l_credit_status_code  SBICORP_ECHEQUE_MASTER.CREDIT_STATUS_CODE%TYPE; --Code added for GVF RTGS handling Commission transaction
+   BEGIN
+      IF p_debitleg IS NOT NULL
+      THEN
+         BEGIN
+            strrefno := p_debitleg.reference_no;
+            strdebitacc := p_debitleg.account_no;
+            strdebitbr := p_debitleg.branch_code;
+            lngdebitamount := TO_NUMBER (p_debitleg.amount);
+            IF p_debitleg.scheduled = 0
+            THEN
+               IF p_debitleg.scheduled_date IS NOT NULL
+               THEN
+                  echeque_date := p_debitleg.scheduled_date;
+               END IF;
+               schprocessed := 1;
+            ELSE
+               echeque_date := SYSDATE;
+               schprocessed := 0;
+            END IF;
+            strcorprefno := p_debitleg.thirdpartyref;
+            strmerchcode := p_debitleg.merchant_code;
+            strdesc := p_debitleg.remarks;
+            strusername := p_debitleg.username;
+            l_businessline_id := p_debitleg.businessline_id;
+            IF    p_transactionpath = 'CC'
+               OR p_transactionpath = 'NCNC'
+               OR SUBSTR (strrefno, 1, 2) = 'ID'
+            THEN
+               strmcprocessed := 0;
+            ELSIF    p_transactionpath = 'CNC'
+                  OR p_transactionpath = 'NCC'
+                  OR p_transactionpath = 'CMC'
+                  OR p_transactionpath = 'NCMC'
+            THEN
+               strmcprocessed := 1;
+            END IF;
+            strcurrentauthlevel := p_debitleg.current_auth_level;
+            schvalue := p_debitleg.scheduled;
+            IF schvalue = 0 THEN
+                schdate := p_debitleg.scheduled_date;
+            ELSE
+                schdate := SYSDATE;
+            END IF;
+            strcorporateid :=p_debitleg.corporate_id;
+            strsupplierid :=p_debitleg.supplier_id;
+            IF SUBSTR (strrefno, 1, 2) = 'CB'
+            THEN
+               strmcprocessed := 0;
+            ELSE
+               strmcprocessed := 1;
+            END IF;
+            strbeneficiary :=p_debitleg.beneficiary;
+/*            IF p_creditleg.COUNT > 0
+            THEN
+               IF strmerchcode IS NOT NULL
+               THEN
+                  BEGIN
+                     SELECT a.merchant_name
+                       INTO strbeneficiary
+                       FROM sbi_merchant_master a
+                      WHERE a.merchant_code = strmerchcode;
+                     p_debitleg.beneficiary := strbeneficiary;
+                  EXCEPTION
+                     WHEN OTHERS
+                     THEN
+                        NULL;
+                  END;
+               END IF;
+            END IF;
+*/
+            sp_msg := strrefno || ' | Getting oid from oid_sequence';
+            writelogs (sp_nick,
+                       sp_seq,
+                       sp_level,
+                       bulktxnpacktemp.constinfomsglvl,
+                       sp_msg
+                      );
+            SELECT oid_sequence.NEXTVAL
+              INTO intoid
+              FROM DUAL;
+            sp_msg := 'OID to be inserted : ' || intoid;
+            writelogs (sp_nick,
+                       sp_seq,
+                       sp_level,
+                       bulktxnpacktemp.constinfomsglvl,
+                       sp_msg
+                      );
+            sp_msg :=
+                   strrefno || ' | Inserting record in SBICORP_ECHEQUE_MASTER';
+            writelogs (sp_nick,
+                       sp_seq,
+                       sp_level,
+                       bulktxnpacktemp.constinfomsglvl,
+                       sp_msg
+                      );
+               --Code added for GVF RTGS handling Commission transaction
+               IF SUBSTR(strrefno,1,2) IN ('CR','CN') AND strcorporateid LIKE 'IM%' THEN
+               
+                    SELECT decode(COUNT(1),0,null,'gvf_process_eod') into l_credit_status_code
+                    FROM SBI_GVF_VENDOR_MASTER WHERE VENDOR_CODE = l_businessline_id;
+                 
+               END IF;
+               --End of Code added for GVF RTGS handling Commission transaction
+                    
+            --Code modified for GVF RTGS handling Commission transaction                      
+            INSERT INTO sbicorp_echeque_master
+                        (OID, echeque_no, store_id, creation_time, status,
+                         deleted, last_mod_time, account_no, branch_code,
+                         echeque_date, echeque_amount, description, audited,
+                         maker, current_auth_level, audited_by,
+                         system_edited, system_edited_reason, READ,
+                         corporate_id, auth_type, corrupted,
+                         corruption_reason, scheduled, scheduled_date,
+                         processed, beneficiary, auth_option,
+                         corp_ref_no, file_name, supplier_id, reference_no,
+                         mc_processed, merchant_code, auth1_name, auth2_name,
+                         businessline_id, email_sent, scheduled_date_string,credit_status_code 
+                        )
+                --Code modified for GVF RTGS handling Commission transaction
+                 VALUES (intoid, strrefno, 101, SYSDATE, 1,
+                         0, SYSDATE, strdebitacc, strdebitbr,
+                         echeque_date, lngdebitamount, strdesc, constvalue,
+                         strusername, strcurrentauthlevel, null,
+                         constvalue, NULL, constvalue,
+                         strcorporateid, constzerovalue, constvalue,
+                         NULL, schvalue, schdate,
+                         schprocessed, strbeneficiary, constvalue,
+                         strcorprefno, strfilename, strsupplierid, strrefno,
+                         strmcprocessed, strmerchcode, NULL, NULL,
+                         l_businessline_id, constvalue, NULL,l_credit_status_code
+                        );
+            sp_msg :=
+               strrefno
+               || ' | Insert into SBICORP_ECHEQUE_MASTER - Successful';
+            writelogs (sp_nick,
+                       sp_seq,
+                       sp_level,
+                       bulktxnpacktemp.constinfomsglvl,
+                       sp_msg
+                      );
+            sp_msg :=
+                p_debitleg.additionalparams || '  p_DebitLeg.additionalparams';
+            writelogs (sp_nick,
+                       sp_seq,
+                       sp_level,
+                       bulktxnpacktemp.constinfomsglvl,
+                       sp_msg
+                      );
+            IF (p_debitleg.additionalparams IS NOT NULL)
+            THEN
+               additionalparams :=
+                          splittext (p_debitleg.additionalparams, '#|#');
+               sp_msg :=
+                     p_debitleg.additionalparams
+                  || ' | p_DebitLeg.additionalparams';
+               writelogs (sp_nick,
+                          sp_seq,
+                          sp_level,
+                          bulktxnpacktemp.constinfomsglvl,
+                          sp_msg
+                         );
+               FOR intcount IN 2 .. additionalparams.COUNT - 1
+               LOOP
+                 paramkeyvalue := splittext (additionalparams(intcount),'`~`');
+                 -- stroutrefname := 'outref' || TO_NUMBER (intcount - 1);
+                  writelogs (sp_nick,
+                          sp_seq,
+                          sp_level,
+                          bulktxnpacktemp.constinfomsglvl,
+                          'paramkeyvalue(1) : ' || paramkeyvalue(1) || ' , paramkeyvalue(2) ' || paramkeyvalue(2)
+                         );
+                         stroutrefname :=paramkeyvalue(1);
+                         stroutrefvalue :=paramkeyvalue(2);
+                  INSERT INTO sbicorp_echeque_supplier_param
+                              (OID, param,
+                               VALUE, reference_no
+                              )
+                       VALUES (intoid, stroutrefname,
+                               stroutrefvalue, strrefno
+                              );
+               END LOOP;
+            END IF;
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               sp_msg :=
+                     strrefno
+                  || ' | Error inserting in SBICORP_ECHEQUE_MASTER '
+                  || SQLERRM;
+               writelogs (sp_nick,
+                          sp_seq,
+                          sp_level,
+                          bulktxnpacktemp.consterrmsglvl,
+                          sp_msg
+                         );
+               sqlerrorcode := SQLERRM;
+         END;
+      END IF;
+      RETURN sqlerrorcode;
+   END insertecheque;
