@@ -1,78 +1,637 @@
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.SocketTimeoutException;
-import java.net.URL;
-import java.net.UnknownHostException;
-import java.util.Map;
+import java.sql.*;
+import java.util.*;
+import java.text.SimpleDateFormat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public Map<String, Object> callWebService(Map<String, Object> inparams) throws Exception {
-    String responseJson;
-    Map<String, Object> map = null;
-    String status;
-    String statusDesc;
+public class EChequeService {
+    private static final Logger logger = LoggerFactory.getLogger(EChequeService.class);
     
-    String debitAmount = (String) inparams.get("debitAmount");
-    double dbtAmt = 0.0;
-    double creditAmt = 0.0;
-    String resAmount;
+    // Constants
+    private static final int CONST_VALUE = 1;
+    private static final int CONST_ZERO_VALUE = 0;
+    private static final int DEFAULT_STORE_ID = 101;
+    private static final int DEFAULT_STATUS = 1;
+    
+    // TODO: Inject this in production
+    private DataSource dataSource;
+    
+    public String insertECheque(CorporateLeg pDebitLeg, List<CorporateLeg> pCreditLeg, 
+                              String pTransactionPath) {
+        // Input validation
+        if (pDebitLeg == null) {
+            logger.error("Debit leg cannot be null");
+            return "Debit leg cannot be null";
+        }
 
-    try {
-        URL weburl = new URL(gemUrl);
-        String reqString = convertJsonString(inparams);
+        Connection connection = null;
+        String sqlErrorCode = "";
         
-        HttpURLConnection conn = (HttpURLConnection) weburl.openConnection();
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(20000);
-        conn.setDoInput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("content-type", "application/json; charset=utf-8");
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
+        try {
+            connection = dataSource.getConnection();
+            connection.setAutoCommit(false);
+            
+            // Process the e-cheque
+            sqlErrorCode = processECheque(pDebitLeg, pCreditLeg, pTransactionPath, connection);
+            
+            if (sqlErrorCode.isEmpty()) {
+                connection.commit();
+            } else {
+                connection.rollback();
+            }
+        } catch (SQLException e) {
+            logger.error("Database error: ", e);
+            sqlErrorCode = e.getMessage();
+            try {
+                if (connection != null) connection.rollback();
+            } catch (SQLException ex) {
+                logger.error("Error during rollback: ", ex);
+            }
+        } finally {
+            try {
+                if (connection != null) connection.close();
+            } catch (SQLException e) {
+                logger.error("Error closing connection: ", e);
+            }
+        }
+        
+        return sqlErrorCode;
+    }
 
-        if (conn.getResponseCode() == 200) {
-            try (var br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                responseJson = br.lines().collect(Collectors.joining());
-                map = responseMap(responseJson);
-                status = (String) map.get("status");
-                statusDesc = (String) map.get("status_desc");
-                resAmount = (String) map.get("total_amt");
+    private String processECheque(CorporateLeg pDebitLeg, List<CorporateLeg> pCreditLeg,
+                                String pTransactionPath, Connection connection) {
+        // Initialize variables
+        String strRefNo = pDebitLeg.getReferenceNo();
+        String strDebitAcc = pDebitLeg.getAccountNo();
+        String strDebitBr = pDebitLeg.getBranchCode();
+        double lngDebitAmount = Double.parseDouble(pDebitLeg.getAmount());
+        Date echequeDate;
+        int schValue = pDebitLeg.getScheduled();
+        int schProcessed;
+        Date schDate;
 
-                if ("S".equals(status) && debitAmount != null && resAmount != null) {
-                    dbtAmt = Double.parseDouble(debitAmount);
-                    creditAmt = Double.parseDouble(resAmount);
-                    if (dbtAmt != creditAmt) {
-                        map.put("status", "F");
-                        map.put("errorCode", "GEM007");
-                    }
+        // Determine dates based on scheduled flag
+        if (schValue == 0) {
+            echequeDate = pDebitLeg.getScheduledDate() != null ? 
+                         pDebitLeg.getScheduledDate() : new Date();
+            schProcessed = 1;
+            schDate = pDebitLeg.getScheduledDate();
+        } else {
+            echequeDate = new Date();
+            schProcessed = 0;
+            schDate = new Date();
+        }
+
+        // Set other fields from debit leg
+        String strCorpRefNo = pDebitLeg.getThirdPartyRef();
+        String strMerchCode = pDebitLeg.getMerchantCode();
+        String strDesc = pDebitLeg.getRemarks();
+        String strUsername = pDebitLeg.getUsername();
+        String lBusinesslineId = pDebitLeg.getBusinesslineId();
+        int strCurrentAuthLevel = pDebitLeg.getCurrentAuthLevel();
+        String strCorporateId = pDebitLeg.getCorporateId();
+        String strSupplierId = pDebitLeg.getSupplierId();
+        String strBeneficiary = pDebitLeg.getBeneficiary();
+        String strFileName = null; // TODO: Determine if this needs to be set
+
+        // Determine mc_processed value
+        String strMcProcessed = determineMcProcessed(pTransactionPath, strRefNo);
+
+        // Get next OID from sequence
+        logger.info("{} | Getting oid from oid_sequence", strRefNo);
+        Long intoid = getNextOid(connection);
+        logger.info("OID to be inserted : {}", intoid);
+
+        // Handle GVF RTGS commission transaction
+        String lCreditStatusCode = null;
+        if (strRefNo != null && (strRefNo.startsWith("CR") || strRefNo.startsWith("CN")) 
+            && strCorporateId != null && strCorporateId.startsWith("IM")) {
+            lCreditStatusCode = getCreditStatusCode(connection, lBusinesslineId);
+        }
+
+        // Insert into SBICORP_ECHEQUE_MASTER
+        logger.info("{} | Inserting record in SBICORP_ECHEQUE_MASTER", strRefNo);
+        insertEchequeMaster(connection, intoid, strRefNo, strDebitAcc, strDebitBr, 
+                          echequeDate, lngDebitAmount, strDesc, strUsername, 
+                          strCurrentAuthLevel, strCorporateId, schValue, schDate, 
+                          schProcessed, strBeneficiary, strCorpRefNo, strFileName, 
+                          strSupplierId, strMcProcessed, strMerchCode, lBusinesslineId, 
+                          lCreditStatusCode);
+
+        // Handle additional parameters
+        handleAdditionalParameters(connection, pDebitLeg.getAdditionalParams(), intoid, strRefNo);
+
+        return "";
+    }
+
+    private String determineMcProcessed(String pTransactionPath, String strRefNo) {
+        if ("CC".equals(pTransactionPath) || "NCNC".equals(pTransactionPath) 
+            || (strRefNo != null && strRefNo.startsWith("ID"))) {
+            return "0";
+        } else if ("CNC".equals(pTransactionPath) || "NCC".equals(pTransactionPath) 
+                 || "CMC".equals(pTransactionPath) || "NCMC".equals(pTransactionPath)) {
+            return "1";
+        }
+        
+        if (strRefNo != null && strRefNo.startsWith("CB")) {
+            return "0";
+        }
+        return "1";
+    }
+
+    private Long getNextOid(Connection connection) throws SQLException {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT oid_sequence.NEXTVAL FROM DUAL")) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+            throw new SQLException("Unable to get next OID from sequence");
+        }
+    }
+
+    private String getCreditStatusCode(Connection connection, String businesslineId) throws SQLException {
+        String sql = "SELECT decode(COUNT(1),0,null,'gvf_process_eod') " +
+                    "FROM SBI_GVF_VENDOR_MASTER WHERE VENDOR_CODE = ?";
+        
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, businesslineId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
                 }
+                return null;
+            }
+        }
+    }
 
-                switch (status) {
-                    case "F" -> {
-                        switch (statusDesc) {
-                            case "Transaction pending for Clearing" -> map.put("errorCode", "GEM003");
-                            case "Transaction already Paid" -> map.put("errorCode", "GEM004");
-                            case "Invalid Reference Number" -> map.put("errorCode", "GEM005");
-                            case "Challan expired" -> map.put("errorCode", "GEM011");
-                            default -> map.put("errorCode", "GEM001");
+    private void insertEchequeMaster(Connection connection, Long intoid, String strRefNo, 
+                                   String strDebitAcc, String strDebitBr, Date echequeDate,
+                                   double lngDebitAmount, String strDesc, String strUsername,
+                                   int strCurrentAuthLevel, String strCorporateId, int schValue,
+                                   Date schDate, int schProcessed, String strBeneficiary,
+                                   String strCorpRefNo, String strFileName, String strSupplierId,
+                                   String strMcProcessed, String strMerchCode, String lBusinesslineId,
+                                   String lCreditStatusCode) throws SQLException {
+        String insertSql = "INSERT INTO sbicorp_echeque_master " +
+            "(OID, echeque_no, store_id, creation_time, status, " +
+            "deleted, last_mod_time, account_no, branch_code, " +
+            "echeque_date, echeque_amount, description, audited, " +
+            "maker, current_auth_level, audited_by, " +
+            "system_edited, system_edited_reason, READ, " +
+            "corporate_id, auth_type, corrupted, " +
+            "corruption_reason, scheduled, scheduled_date, " +
+            "processed, beneficiary, auth_option, " +
+            "corp_ref_no, file_name, supplier_id, reference_no, " +
+            "mc_processed, merchant_code, auth1_name, auth2_name, " +
+            "businessline_id, email_sent, scheduled_date_string, credit_status_code) " +
+            "VALUES (?, ?, ?, SYSDATE, ?, " +
+            "?, SYSDATE, ?, ?, " +
+            "?, ?, ?, ?, " +
+            "?, ?, null, " +
+            "?, NULL, ?, " +
+            "?, ?, ?, " +
+            "NULL, ?, ?, " +
+            "?, ?, ?, " +
+            "?, ?, ?, ?, " +
+            "?, ?, NULL, NULL, " +
+            "?, ?, NULL, ?)";
+        
+        try (PreparedStatement pstmt = connection.prepareStatement(insertSql)) {
+            int paramIndex = 1;
+            pstmt.setLong(paramIndex++, intoid);
+            pstmt.setString(paramIndex++, strRefNo);
+            pstmt.setInt(paramIndex++, DEFAULT_STORE_ID);
+            pstmt.setInt(paramIndex++, DEFAULT_STATUS);
+            pstmt.setInt(paramIndex++, CONST_ZERO_VALUE);
+            pstmt.setString(paramIndex++, strDebitAcc);
+            pstmt.setString(paramIndex++, strDebitBr);
+            pstmt.setTimestamp(paramIndex++, new Timestamp(echequeDate.getTime()));
+            pstmt.setDouble(paramIndex++, lngDebitAmount);
+            pstmt.setString(paramIndex++, strDesc);
+            pstmt.setInt(paramIndex++, CONST_VALUE);
+            pstmt.setString(paramIndex++, strUsername);
+            pstmt.setInt(paramIndex++, strCurrentAuthLevel);
+            pstmt.setInt(paramIndex++, CONST_VALUE);
+            pstmt.setInt(paramIndex++, CONST_VALUE);
+            pstmt.setString(paramIndex++, strCorporateId);
+            pstmt.setInt(paramIndex++, CONST_ZERO_VALUE);
+            pstmt.setInt(paramIndex++, CONST_VALUE);
+            pstmt.setInt(paramIndex++, schValue);
+            pstmt.setTimestamp(paramIndex++, new Timestamp(schDate.getTime()));
+            pstmt.setInt(paramIndex++, schProcessed);
+            pstmt.setString(paramIndex++, strBeneficiary);
+            pstmt.setInt(paramIndex++, CONST_VALUE);
+            pstmt.setString(paramIndex++, strCorpRefNo);
+            pstmt.setString(paramIndex++, strFileName);
+            pstmt.setString(paramIndex++, strSupplierId);
+            pstmt.setString(paramIndex++, strRefNo);
+            pstmt.setString(paramIndex++, strMcProcessed);
+            pstmt.setString(paramIndex++, strMerchCode);
+            pstmt.setString(paramIndex++, lBusinesslineId);
+            pstmt.setInt(paramIndex++, CONST_VALUE);
+            pstmt.setString(paramIndex++, lCreditStatusCode);
+            
+            pstmt.executeUpdate();
+            
+            logger.info("{} | Insert into SBICORP_ECHEQUE_MASTER - Successful", strRefNo);
+        }
+    }
+
+    private void handleAdditionalParameters(Connection connection, String additionalParams, 
+                                         Long intoid, String strRefNo) throws SQLException {
+        if (additionalParams == null || additionalParams.isEmpty()) {
+            return;
+        }
+        
+        logger.info("{} | Processing additional parameters", strRefNo);
+        
+        String[] paramsArray = additionalParams.split("#\\|#");
+        if (paramsArray.length <= 1) {
+            return;
+        }
+        
+        // TODO: Consider using batch insert for better performance
+        for (int i = 1; i < paramsArray.length; i++) {
+            String[] keyValue = paramsArray[i].split("`~`");
+            if (keyValue.length < 2) {
+                logger.warn("Invalid parameter format: {}", paramsArray[i]);
+                continue;
+            }
+            
+            String strOutRefName = keyValue[0];
+            String strOutRefValue = keyValue[1];
+            
+            logger.debug("paramkeyvalue(1) : {}, paramkeyvalue(2) {}", 
+                        strOutRefName, strOutRefValue);
+            
+            insertSupplierParam(connection, intoid, strOutRefName, strOutRefValue, strRefNo);
+        }
+    }
+
+    private void insertSupplierParam(Connection connection, Long intoid, String paramName,
+                                   String paramValue, String referenceNo) throws SQLException {
+        String paramSql = "INSERT INTO sbicorp_echeque_supplier_param " +
+            "(OID, param, VALUE, reference_no) VALUES (?, ?, ?, ?)";
+        
+        try (PreparedStatement paramStmt = connection.prepareStatement(paramSql)) {
+            paramStmt.setLong(1, intoid);
+            paramStmt.setString(2, paramName);
+            paramStmt.setString(3, paramValue);
+            paramStmt.setString(4, referenceNo);
+            
+            paramStmt.executeUpdate();
+        }
+    }
+
+    // TODO: Move to separate file in production
+    public static class CorporateLeg {
+        private String referenceNo;
+        private String accountNo;
+        private String branchCode;
+        private String amount;
+        private int scheduled;
+        private Date scheduledDate;
+        private String thirdPartyRef;
+        private String merchantCode;
+        private String remarks;
+        private String username;
+        private String businesslineId;
+        private int currentAuthLevel;
+        private String corporateId;
+        private String supplierId;
+        private String beneficiary;
+        private String additionalParams;
+
+        // Getters and setters
+        public String getReferenceNo() { return referenceNo; }
+        public void setReferenceNo(String referenceNo) { this.referenceNo = referenceNo; }
+        
+        public String getAccountNo() { return accountNo; }
+        public void setAccountNo(String accountNo) { this.accountNo = accountNo; }
+        
+        public String getBranchCode() { return branchCode; }
+        public void setBranchCode(String branchCode) { this.branchCode = branchCode; }
+        
+        public String getAmount() { return amount; }
+        public void setAmount(String amount) { this.amount = amount; }
+        
+        public int getScheduled() { return scheduled; }
+        public void setScheduled(int scheduled) { this.scheduled = scheduled; }
+        
+        public Date getScheduledDate() { return scheduledDate; }
+        public void setScheduledDate(Date scheduledDate) { this.scheduledDate = scheduledDate; }
+        
+        public String getThirdPartyRef() { return thirdPartyRef; }
+        public void setThirdPartyRef(String thirdPartyRef) { this.thirdPartyRef = thirdPartyRef; }
+        
+        public String getMerchantCode() { return merchantCode; }
+        public void setMerchantCode(String merchantCode) { this.merchantCode = merchantCode; }
+        
+        public String getRemarks() { return remarks; }
+        public void setRemarks(String remarks) { this.remarks = remarks; }
+        
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        
+        public String getBusinesslineId() { return businesslineId; }
+        public void setBusinesslineId(String businesslineId) { this.businesslineId = businesslineId; }
+        
+        public int getCurrentAuthLevel() { return currentAuthLevel; }
+        public void setCurrentAuthLevel(int currentAuthLevel) { this.currentAuthLevel = currentAuthLevel; }
+        
+        public String getCorporateId() { return corporateId; }
+        public void setCorporateId(String corporateId) { this.corporateId = corporateId; }
+        
+        public String getSupplierId() { return supplierId; }
+        public void setSupplierId(String supplierId) { this.supplierId = supplierId; }
+        
+        public String getBeneficiary() { return beneficiary; }
+        public void setBeneficiary(String beneficiary) { this.beneficiary = beneficiary; }
+        
+        public String getAdditionalParams() { return additionalParams; }
+        public void setAdditionalParams(String additionalParams) { this.additionalParams = additionalParams; }
+    }
+
+    // TODO: Implement proper dependency injection in production
+    public void setDataSource(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+import java.sql.*;
+import java.util.*;
+import java.text.SimpleDateFormat;
+
+public class EChequeService {
+    
+    private static final int CONST_VALUE = 1;
+    private static final int CONST_ZERO_VALUE = 0;
+    
+    private String spNick;
+    private int spSeq;
+    private int spLevel;
+    private BulkTxnPackTemp bulktxnpacktemp = new BulkTxnPackTemp();
+    private String spMsg;
+    
+    public String insertECheque(CorporateLeg pDebitLeg, List<CorporateLeg> pCreditLeg, 
+                              String pTransactionPath, Connection connection) {
+        
+        String strRefNo = null;
+        String strDebitAcc = null;
+        String strDebitBr = null;
+        String strDate = null;
+        String strTime = null;
+        String strCorporateId = null;
+        String strCorpRefNo = null;
+        String strMerchCode = null;
+        String strDesc = null;
+        Long intoid = null;
+        Date echequeDate = null;
+        String boolReturnValue = null;
+        String strUsername = null;
+        String strMcProcessed = null;
+        Double lngDebitAmount = null;
+        Date schDate = null;
+        int schValue = 1;
+        int schProcessed = 0;
+        String strSupplierId = null;
+        String strScheduled = null;
+        String strFileName = null;
+        int strCurrentAuthLevel = 1;
+        String sqlErrorCode = "";
+        String strBeneficiary = null;
+        String lBusinesslineId = null;
+        String lCreditStatusCode = null;
+        
+        if (pDebitLeg != null) {
+            try {
+                // Initialize variables from pDebitLeg
+                strRefNo = pDebitLeg.getReferenceNo();
+                strDebitAcc = pDebitLeg.getAccountNo();
+                strDebitBr = pDebitLeg.getBranchCode();
+                lngDebitAmount = Double.parseDouble(pDebitLeg.getAmount());
+                
+                if (pDebitLeg.getScheduled() == 0) {
+                    if (pDebitLeg.getScheduledDate() != null) {
+                        echequeDate = pDebitLeg.getScheduledDate();
+                    }
+                    schProcessed = 1;
+                } else {
+                    echequeDate = new Date(); // Current date/time
+                    schProcessed = 0;
+                }
+                
+                strCorpRefNo = pDebitLeg.getThirdPartyRef();
+                strMerchCode = pDebitLeg.getMerchantCode();
+                strDesc = pDebitLeg.getRemarks();
+                strUsername = pDebitLeg.getUsername();
+                lBusinesslineId = pDebitLeg.getBusinesslineId();
+                
+                if ("CC".equals(pTransactionPath) || "NCNC".equals(pTransactionPath) 
+                    || (strRefNo != null && strRefNo.startsWith("ID"))) {
+                    strMcProcessed = "0";
+                } else if ("CNC".equals(pTransactionPath) || "NCC".equals(pTransactionPath) 
+                         || "CMC".equals(pTransactionPath) || "NCMC".equals(pTransactionPath)) {
+                    strMcProcessed = "1";
+                }
+                
+                strCurrentAuthLevel = pDebitLeg.getCurrentAuthLevel();
+                schValue = pDebitLeg.getScheduled();
+                
+                if (schValue == 0) {
+                    schDate = pDebitLeg.getScheduledDate();
+                } else {
+                    schDate = new Date();
+                }
+                
+                strCorporateId = pDebitLeg.getCorporateId();
+                strSupplierId = pDebitLeg.getSupplierId();
+                
+                if (strRefNo != null && strRefNo.startsWith("CB")) {
+                    strMcProcessed = "0";
+                } else {
+                    strMcProcessed = "1";
+                }
+                
+                strBeneficiary = pDebitLeg.getBeneficiary();
+                
+                // Get next OID from sequence
+                logMessage(strRefNo + " | Getting oid from oid_sequence");
+                intoid = getNextOid(connection);
+                logMessage("OID to be inserted : " + intoid);
+                
+                // Code for GVF RTGS handling Commission transaction
+                if ((strRefNo != null && (strRefNo.startsWith("CR") || strRefNo.startsWith("CN")) 
+                    && strCorporateId != null && strCorporateId.startsWith("IM")) {
+                    
+                    lCreditStatusCode = getCreditStatusCode(connection, lBusinesslineId);
+                }
+                
+                // Insert into SBICORP_ECHEQUE_MASTER
+                logMessage(strRefNo + " | Inserting record in SBICORP_ECHEQUE_MASTER");
+                
+                String insertSql = "INSERT INTO sbicorp_echeque_master " +
+                    "(OID, echeque_no, store_id, creation_time, status, " +
+                    "deleted, last_mod_time, account_no, branch_code, " +
+                    "echeque_date, echeque_amount, description, audited, " +
+                    "maker, current_auth_level, audited_by, " +
+                    "system_edited, system_edited_reason, READ, " +
+                    "corporate_id, auth_type, corrupted, " +
+                    "corruption_reason, scheduled, scheduled_date, " +
+                    "processed, beneficiary, auth_option, " +
+                    "corp_ref_no, file_name, supplier_id, reference_no, " +
+                    "mc_processed, merchant_code, auth1_name, auth2_name, " +
+                    "businessline_id, email_sent, scheduled_date_string, credit_status_code) " +
+                    "VALUES (?, ?, 101, SYSDATE, 1, " +
+                    "0, SYSDATE, ?, ?, " +
+                    "?, ?, ?, ?, " +
+                    "?, ?, null, " +
+                    "?, NULL, ?, " +
+                    "?, ?, ?, " +
+                    "NULL, ?, ?, " +
+                    "?, ?, ?, " +
+                    "?, ?, ?, ?, " +
+                    "?, ?, NULL, NULL, " +
+                    "?, ?, NULL, ?)";
+                
+                try (PreparedStatement pstmt = connection.prepareStatement(insertSql)) {
+                    pstmt.setLong(1, intoid);
+                    pstmt.setString(2, strRefNo);
+                    pstmt.setString(3, strDebitAcc);
+                    pstmt.setString(4, strDebitBr);
+                    pstmt.setDate(5, new java.sql.Date(echequeDate.getTime()));
+                    pstmt.setDouble(6, lngDebitAmount);
+                    pstmt.setString(7, strDesc);
+                    pstmt.setInt(8, CONST_VALUE);
+                    pstmt.setString(9, strUsername);
+                    pstmt.setInt(10, strCurrentAuthLevel);
+                    pstmt.setInt(11, CONST_VALUE);
+                    pstmt.setInt(12, CONST_VALUE);
+                    pstmt.setString(13, strCorporateId);
+                    pstmt.setInt(14, CONST_ZERO_VALUE);
+                    pstmt.setInt(15, CONST_VALUE);
+                    pstmt.setInt(16, schValue);
+                    pstmt.setDate(17, new java.sql.Date(schDate.getTime()));
+                    pstmt.setInt(18, schProcessed);
+                    pstmt.setString(19, strBeneficiary);
+                    pstmt.setInt(20, CONST_VALUE);
+                    pstmt.setString(21, strCorpRefNo);
+                    pstmt.setString(22, strFileName);
+                    pstmt.setString(23, strSupplierId);
+                    pstmt.setString(24, strRefNo);
+                    pstmt.setString(25, strMcProcessed);
+                    pstmt.setString(26, strMerchCode);
+                    pstmt.setString(27, lBusinesslineId);
+                    pstmt.setInt(28, CONST_VALUE);
+                    pstmt.setString(29, lCreditStatusCode);
+                    
+                    pstmt.executeUpdate();
+                    
+                    logMessage(strRefNo + " | Insert into SBICORP_ECHEQUE_MASTER - Successful");
+                }
+                
+                // Handle additional parameters
+                String additionalParams = pDebitLeg.getAdditionalParams();
+                logMessage(additionalParams + "  p_DebitLeg.additionalparams");
+                
+                if (additionalParams != null && !additionalParams.isEmpty()) {
+                    String[] paramsArray = additionalParams.split("#\\|#");
+                    
+                    logMessage(additionalParams + " | p_DebitLeg.additionalparams");
+                    
+                    for (int i = 1; i < paramsArray.length; i++) {
+                        String[] keyValue = paramsArray[i].split("`~`");
+                        
+                        logMessage("paramkeyvalue(1) : " + keyValue[0] + " , paramkeyvalue(2) " + keyValue[1]);
+                        
+                        String strOutRefName = keyValue[0];
+                        String strOutRefValue = keyValue[1];
+                        
+                        String paramSql = "INSERT INTO sbicorp_echeque_supplier_param " +
+                            "(OID, param, VALUE, reference_no) VALUES (?, ?, ?, ?)";
+                        
+                        try (PreparedStatement paramStmt = connection.prepareStatement(paramSql)) {
+                            paramStmt.setLong(1, intoid);
+                            paramStmt.setString(2, strOutRefName);
+                            paramStmt.setString(3, strOutRefValue);
+                            paramStmt.setString(4, strRefNo);
+                            
+                            paramStmt.executeUpdate();
                         }
                     }
                 }
+            } catch (Exception e) {
+                logMessage(strRefNo + " | Error inserting in SBICORP_ECHEQUE_MASTER " + e.getMessage());
+                sqlErrorCode = e.getMessage();
             }
-        } else {
-            SBIApplicationException.throwException("SE058");
         }
-    } catch (SocketTimeoutException te) {
-        responseJson = "F1";
-        SBIApplicationException.throwException("SE058", te);
-    } catch (UnknownHostException une) {
-        SBIApplicationException.throwException("SE058", une);
-    } catch (IOException ioe) {
-        SBIApplicationException.throwException("SE058", ioe);
-    } catch (Exception ex) {
-        SBIApplicationException.throwException("SE058", ex);
+        
+        return sqlErrorCode;
     }
-
-    return map;
+    
+    private Long getNextOid(Connection connection) throws SQLException {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT oid_sequence.NEXTVAL FROM DUAL")) {
+            if (rs.next()) {
+                return rs.getLong(1);
+            }
+            throw new SQLException("Unable to get next OID from sequence");
+        }
+    }
+    
+    private String getCreditStatusCode(Connection connection, String businesslineId) throws SQLException {
+        String sql = "SELECT decode(COUNT(1),0,null,'gvf_process_eod') " +
+                    "FROM SBI_GVF_VENDOR_MASTER WHERE VENDOR_CODE = ?";
+        
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, businesslineId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+                return null;
+            }
+        }
+    }
+    
+    private void logMessage(String message) {
+        // Implementation of logging would go here
+        System.out.println(message);
+    }
+    
+    // Supporting classes
+    public static class CorporateLeg {
+        private String referenceNo;
+        private String accountNo;
+        private String branchCode;
+        private String amount;
+        private int scheduled;
+        private Date scheduledDate;
+        private String thirdPartyRef;
+        private String merchantCode;
+        private String remarks;
+        private String username;
+        private String businesslineId;
+        private int currentAuthLevel;
+        private String corporateId;
+        private String supplierId;
+        private String beneficiary;
+        private String additionalParams;
+        
+        // Getters and setters would go here
+    }
+    
+    public static class BulkTxnPackTemp {
+        public int getConstinfomsglvl() { return 1; }
+        public int getConsterrmsglvl() { return 2; }
+    }
 }
