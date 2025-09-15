@@ -1,244 +1,253 @@
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
-import org.springframework.jdbc.support.KeyHolder;
+package com.sbi.yb.controller;
 
-import java.sql.Timestamp;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.SBIApplicationResponse;
+import com.sbi.microservice.framework.model.Status;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import com.sbi.yb.constant.ErrorConstants;
+import com.sbi.yb.constant.UtilsConstant;
+import com.sbi.yb.model.*;
+import com.sbi.yb.service.ApproveTestService;
+import com.sbi.yb.service.FileStoreService;
+import com.sbi.yb.service.ViewTransactionTestFileService;
+import com.sbi.yb.util.ServiceUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
-public class EChequeService {
-    
-    private NamedParameterJdbcTemplate jdbcTemplate;
-    
-    public String insertEcheque(CorporateLeg debitLeg, List<CorporateLeg> creditLeg, String transactionPath) {
-        final int constValue = 1;
-        final int constZeroValue = 0;
-        
-        String strRefNo = "";
-        String strDebitAcc = "";
-        String strDebitBr = "";
-        String strDate = "";
-        String strTime = "";
-        String strCorporateId = "";
-        String strCorpRefNo = "";
-        String strMerchCode = "";
-        String strDesc = "";
-        Long intoid = 0L;
-        Date echequeDate = new Date();
-        String boolReturnValue = "";
-        String strUsername = "";
-        String strMcProcessed = "";
-        Double lngDebitAmount = 0.0;
-        Date schDate = null;
-        int schValue = 1;
-        int schProcessed = 0;
-        String strSupplierId = "";
-        String strScheduled = "";
-        String strFileName = "";
-        int strCurrentAuthLevel = 1;
-        String sqlErrorCode = "";
-        String strBeneficiary = "";
-        String businessLineId = "";
-        String creditStatusCode = null;
-        
-        if (debitLeg != null) {
-            try {
-                strRefNo = debitLeg.getReferenceNo();
-                strDebitAcc = debitLeg.getAccountNo();
-                strDebitBr = debitLeg.getBranchCode();
-                lngDebitAmount = Double.parseDouble(debitLeg.getAmount());
-                
-                if (debitLeg.getScheduled() == 0) {
-                    if (debitLeg.getScheduledDate() != null) {
-                        echequeDate = debitLeg.getScheduledDate();
-                    }
-                    schProcessed = 1;
-                } else {
-                    echequeDate = new Date();
-                    schProcessed = 0;
-                }
-                
-                strCorpRefNo = debitLeg.getThirdPartyRef();
-                strMerchCode = debitLeg.getMerchantCode();
-                strDesc = debitLeg.getRemarks();
-                strUsername = debitLeg.getUsername();
-                businessLineId = debitLeg.getBusinessLineId();
-                
-                if ("CC".equals(transactionPath) || "NCNC".equals(transactionPath) 
-                    || strRefNo.startsWith("ID")) {
-                    strMcProcessed = "0";
-                } else if ("CNC".equals(transactionPath) || "NCC".equals(transactionPath) 
-                    || "CMC".equals(transactionPath) || "NCMC".equals(transactionPath)) {
-                    strMcProcessed = "1";
-                }
-                
-                strCurrentAuthLevel = debitLeg.getCurrentAuthLevel();
-                schValue = debitLeg.getScheduled();
-                
-                if (schValue == 0) {
-                    schDate = debitLeg.getScheduledDate();
-                } else {
-                    schDate = new Date();
-                }
-                
-                strCorporateId = debitLeg.getCorporateId();
-                strSupplierId = debitLeg.getSupplierId();
-                
-                if (strRefNo.startsWith("CB")) {
-                    strMcProcessed = "0";
-                } else {
-                    strMcProcessed = "1";
-                }
-                
-                strBeneficiary = debitLeg.getBeneficiary();
-                
-                // Get OID from sequence
-                KeyHolder keyHolder = new GeneratedKeyHolder();
-                MapSqlParameterSource params = new MapSqlParameterSource();
-                
-                // For GVF RTGS handling Commission transaction
-                if ((strRefNo.startsWith("CR") || strRefNo.startsWith("CN")) 
-                    && strCorporateId != null && strCorporateId.startsWith("IM")) {
-                    
-                    String sql = "SELECT DECODE(COUNT(1), 0, null, 'gvf_process_eod') " +
-                                "FROM SBI_GVF_VENDOR_MASTER WHERE VENDOR_CODE = :businessLineId";
-                    
-                    creditStatusCode = jdbcTemplate.queryForObject(
-                        sql,
-                        new MapSqlParameterSource("businessLineId", businessLineId),
-                        String.class
-                    );
-                }
-                
-                // Insert into SBICORP_ECHEQUE_MASTER
-                String insertSql = "INSERT INTO sbicorp_echeque_master " +
-                    "(OID, echeque_no, store_id, creation_time, status, deleted, last_mod_time, " +
-                    "account_no, branch_code, echeque_date, echeque_amount, description, audited, " +
-                    "maker, current_auth_level, audited_by, system_edited, system_edited_reason, " +
-                    "READ, corporate_id, auth_type, corrupted, corruption_reason, scheduled, " +
-                    "scheduled_date, processed, beneficiary, auth_option, corp_ref_no, file_name, " +
-                    "supplier_id, reference_no, mc_processed, merchant_code, auth1_name, auth2_name, " +
-                    "businessline_id, email_sent, scheduled_date_string, credit_status_code) " +
-                    "VALUES (oid_sequence.NEXTVAL, :echequeNo, 101, SYSDATE, 1, 0, SYSDATE, " +
-                    ":accountNo, :branchCode, :echequeDate, :amount, :description, :constValue, " +
-                    ":username, :currentAuthLevel, null, :constValue, NULL, :constValue, " +
-                    ":corporateId, :constZeroValue, :constValue, NULL, :schValue, :schDate, " +
-                    ":schProcessed, :beneficiary, :constValue, :corpRefNo, :fileName, :supplierId, " +
-                    ":referenceNo, :mcProcessed, :merchantCode, NULL, NULL, :businessLineId, " +
-                    ":constValue, NULL, :creditStatusCode)";
-                
-                params.addValue("echequeNo", strRefNo);
-                params.addValue("accountNo", strDebitAcc);
-                params.addValue("branchCode", strDebitBr);
-                params.addValue("echequeDate", new Timestamp(echequeDate.getTime()));
-                params.addValue("amount", lngDebitAmount);
-                params.addValue("description", strDesc);
-                params.addValue("constValue", constValue);
-                params.addValue("username", strUsername);
-                params.addValue("currentAuthLevel", strCurrentAuthLevel);
-                params.addValue("corporateId", strCorporateId);
-                params.addValue("constZeroValue", constZeroValue);
-                params.addValue("schValue", schValue);
-                params.addValue("schDate", schDate != null ? new Timestamp(schDate.getTime()) : null);
-                params.addValue("schProcessed", schProcessed);
-                params.addValue("beneficiary", strBeneficiary);
-                params.addValue("corpRefNo", strCorpRefNo);
-                params.addValue("fileName", strFileName);
-                params.addValue("supplierId", strSupplierId);
-                params.addValue("referenceNo", strRefNo);
-                params.addValue("mcProcessed", strMcProcessed);
-                params.addValue("merchantCode", strMerchCode);
-                params.addValue("businessLineId", businessLineId);
-                params.addValue("creditStatusCode", creditStatusCode);
-                
-                jdbcTemplate.update(insertSql, params, keyHolder, new String[]{"OID"});
-                intoid = keyHolder.getKey().longValue();
-                
-                // Handle additional parameters
-                if (debitLeg.getAdditionalParams() != null && !debitLeg.getAdditionalParams().isEmpty()) {
-                    String[] additionalParams = debitLeg.getAdditionalParams().split("#\\|#");
-                    
-                    for (int i = 1; i < additionalParams.length; i++) {
-                        String[] paramKeyValue = additionalParams[i].split("`~`");
-                        if (paramKeyValue.length >= 2) {
-                            String strOutRefName = paramKeyValue[0];
-                            String strOutRefValue = paramKeyValue[1];
-                            
-                            String paramSql = "INSERT INTO sbicorp_echeque_supplier_param " +
-                                "(OID, param, VALUE, reference_no) VALUES (:oid, :param, :value, :refNo)";
-                            
-                            MapSqlParameterSource paramParams = new MapSqlParameterSource();
-                            paramParams.addValue("oid", intoid);
-                            paramParams.addValue("param", strOutRefName);
-                            paramParams.addValue("value", strOutRefValue);
-                            paramParams.addValue("refNo", strRefNo);
-                            
-                            jdbcTemplate.update(paramSql, paramParams);
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                sqlErrorCode = e.getMessage();
-                // Log error
-            }
-        }
-        
-        return sqlErrorCode;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class UploadApproveTestFileControllerTest {
+
+    @InjectMocks
+    private UploadApproveTestFileController uploadApproveTestFileController;
+
+    @Mock
+    private FileStoreService fileStoreService;
+
+    @Mock
+    private ViewTransactionTestFileService viewTransactionTestFileService;
+
+    @Mock
+    private FrameworkUtils frameworkUtils;
+
+    @Mock
+    private ApproveTestService approveTestService;
+
+    @Mock
+    private HttpServletRequest httpServletRequest;
+
+    @Mock
+    private HttpServletResponse httpServletResponse;
+
+    private ObjectMapper objectMapper = new ObjectMapper();
+
+    private TxnFileUploadRequest txnFileUploadRequest;
+    private ViewTestFileRequest viewTestFileRequest;
+    private ApproveTestFileRequest approveTestFileRequest;
+    private SBIApplicationResponse mockAppResponse;
+
+    @BeforeEach
+    void setup() throws JsonProcessingException {
+        // Setup test requests
+        txnFileUploadRequest = new TxnFileUploadRequest();
+        txnFileUploadRequest.setFileName("testfile.txt");
+        txnFileUploadRequest.setFileType("TEST");
+
+        viewTestFileRequest = new ViewTestFileRequest();
+        viewTestFileRequest.setFileReferenceNo("123456");
+
+        approveTestFileRequest = new ApproveTestFileRequest();
+        approveTestFileRequest.setFileReferenceNo("123456");
+        approveTestFileRequest.setStatus("APPROVED");
+
+        // Setup mock response
+        mockAppResponse = new SBIApplicationResponse();
+        mockAppResponse.setStatus(Status.SUCCESS.getStatusValue());
+        mockAppResponse.setStatusCode(UtilsConstant.SUCCESSCODE);
     }
-}
 
-// Supporting classes
-class CorporateLeg {
-    private String referenceNo;
-    private String accountNo;
-    private String branchCode;
-    private String amount;
-    private int scheduled;
-    private Date scheduledDate;
-    private String thirdPartyRef;
-    private String merchantCode;
-    private String remarks;
-    private String username;
-    private String businessLineId;
-    private int currentAuthLevel;
-    private String corporateId;
-    private String supplierId;
-    private String beneficiary;
-    private String additionalParams;
-    
-    // Getters and setters
-    public String getReferenceNo() { return referenceNo; }
-    public void setReferenceNo(String referenceNo) { this.referenceNo = referenceNo; }
-    public String getAccountNo() { return accountNo; }
-    public void setAccountNo(String accountNo) { this.accountNo = accountNo; }
-    public String getBranchCode() { return branchCode; }
-    public void setBranchCode(String branchCode) { this.branchCode = branchCode; }
-    public String getAmount() { return amount; }
-    public void setAmount(String amount) { this.amount = amount; }
-    public int getScheduled() { return scheduled; }
-    public void setScheduled(int scheduled) { this.scheduled = scheduled; }
-    public Date getScheduledDate() { return scheduledDate; }
-    public void setScheduledDate(Date scheduledDate) { this.scheduledDate = scheduledDate; }
-    public String getThirdPartyRef() { return thirdPartyRef; }
-    public void setThirdPartyRef(String thirdPartyRef) { this.thirdPartyRef = thirdPartyRef; }
-    public String getMerchantCode() { return merchantCode; }
-    public void setMerchantCode(String merchantCode) { this.merchantCode = merchantCode; }
-    public String getRemarks() { return remarks; }
-    public void setRemarks(String remarks) { this.remarks = remarks; }
-    public String getUsername() { return username; }
-    public void setUsername(String username) { this.username = username; }
-    public String getBusinessLineId() { return businessLineId; }
-    public void setBusinessLineId(String businessLineId) { this.businessLineId = businessLineId; }
-    public int getCurrentAuthLevel() { return currentAuthLevel; }
-    public void setCurrentAuthLevel(int currentAuthLevel) { this.currentAuthLevel = currentAuthLevel; }
-    public String getCorporateId() { return corporateId; }
-    public void setCorporateId(String corporateId) { this.corporateId = corporateId; }
-    public String getSupplierId() { return supplierId; }
-    public void setSupplierId(String supplierId) { this.supplierId = supplierId; }
-    public String getBeneficiary() { return beneficiary; }
-    public void setBeneficiary(String beneficiary) { this.beneficiary = beneficiary; }
-    public String getAdditionalParams() { return additionalParams; }
-    public void setAdditionalParams(String additionalParams) { this.additionalParams = additionalParams; }
+    @Test
+    void testUploadTestFile_Success() throws JsonProcessingException {
+        TxnFileUploadResponse txnFileUploadResponse = new TxnFileUploadResponse();
+        txnFileUploadResponse.setFileReferenceNo("101726");
+        txnFileUploadResponse.setFileName("testfile.txt");
+        
+        String payload = objectMapper.writeValueAsString(txnFileUploadRequest);
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
+        when(fileStoreService.uploadFileStore(any(TxnFileUploadRequest.class), anyString())).thenReturn(txnFileUploadResponse);
+        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
+
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.uploadTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
+        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+    }
+
+    @Test
+    void testUploadTestFile_JsonProcessingException() throws JsonProcessingException {
+        String invalidPayload = "invalid json";
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
+        
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.uploadTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
+        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
+    }
+
+    @Test
+    void testUploadTestFile_ValidationException() {
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(null);
+        
+        Assertions.assertThrows(ValidationException.class, () -> 
+            uploadApproveTestFileController.uploadTestFile(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testViewTestFile_Success() throws JsonProcessingException {
+        ViewTestFileResponse response1 = new ViewTestFileResponse();
+        response1.setFileReferenceNo("123456");
+        ViewTestFileResponse response2 = new ViewTestFileResponse();
+        response2.setFileReferenceNo("789012");
+        List<ViewTestFileResponse> viewTestFileResponses = Arrays.asList(response1, response2);
+        
+        String payload = objectMapper.writeValueAsString(viewTestFileRequest);
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
+        when(viewTransactionTestFileService.viewTransactionTestFileDetails(any(ViewTestFileRequest.class))).thenReturn(viewTestFileResponses);
+        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
+
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
+        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+    }
+
+    @Test
+    void testViewTestFile_JsonProcessingException() throws JsonProcessingException {
+        String invalidPayload = "invalid json";
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
+        
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
+        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
+    }
+
+    @Test
+    void testViewTestFile_ValidationException() {
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn("");
+        
+        Assertions.assertThrows(ValidationException.class, () -> 
+            uploadApproveTestFileController.viewTestFile(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testViewEchequeDetails_Success() throws JsonProcessingException {
+        ViewTestFileEchequeListResponse echequeResponse = new ViewTestFileEchequeListResponse();
+        echequeResponse.setTotalRecords(5);
+        
+        String payload = objectMapper.writeValueAsString(viewTestFileRequest);
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
+        when(viewTransactionTestFileService.viewEchequeDetails(any(ViewTestFileRequest.class))).thenReturn(echequeResponse);
+        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
+
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewEchequeDetails(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
+        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+    }
+
+    @Test
+    void testViewEchequeDetails_JsonProcessingException() throws JsonProcessingException {
+        String invalidPayload = "invalid json";
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
+        
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewEchequeDetails(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
+        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
+    }
+
+    @Test
+    void testViewEchequeDetails_ValidationException() {
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn("   ");
+        
+        Assertions.assertThrows(ValidationException.class, () -> 
+            uploadApproveTestFileController.viewEchequeDetails(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testApproveTestFile_Success() throws JsonProcessingException {
+        ApproveTestFileResponse approveResponse = new ApproveTestFileResponse();
+        approveResponse.setStatus("APPROVED");
+        approveResponse.setFileReferenceNo("123456");
+        
+        String payload = objectMapper.writeValueAsString(approveTestFileRequest);
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
+        when(approveTestService.updateTestFileConfig(any(ApproveTestFileRequest.class))).thenReturn(approveResponse);
+        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
+
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
+        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+    }
+
+    @Test
+    void testApproveTestFile_JsonProcessingException() throws JsonProcessingException {
+        String invalidPayload = "invalid json";
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
+        
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
+        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
+    }
+
+    @Test
+    void testApproveTestFile_ValidationException() {
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(null);
+        
+        Assertions.assertThrows(ValidationException.class, () -> 
+            uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse));
+    }
+
+    @Test
+    void testApproveTestFile_NullServiceResponse() throws JsonProcessingException {
+        String payload = objectMapper.writeValueAsString(approveTestFileRequest);
+        
+        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
+        when(approveTestService.updateTestFileConfig(any(ApproveTestFileRequest.class))).thenReturn(null);
+
+        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse);
+        
+        Assertions.assertNotNull(response);
+        Assertions.assertEquals(HttpStatus.OK, response.getStatusCode());
+        Assertions.assertNull(response.getBody().getData());
+    }
 }
