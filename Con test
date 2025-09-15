@@ -1,236 +1,88 @@
-controller
-@PostMapping("/fetchAccountBalance")
-  public SBIApplicationResponse getAccountBalance(final HttpServletRequest request, final HttpServletResponse response) {
-    LOGGER.info("Fetch Account Balance Begin: Method-getAccountBalance");
-    SBIApplicationResponse sbiApplicationResponse;
-    ObjectMapper mapper = new ObjectMapper();
-    try {
-      String req = (String) request.getAttribute(Constants.PAYLOAD);
-      JsonFactory factory = mapper.getFactory();
-      JsonParser json = factory.createParser(req);
-      FetchAccountBalanceRequest accBalReq = mapper.readValue(json, FetchAccountBalanceRequest.class);
-      sbiApplicationResponse = accountBalanceService.fetchAccountBalance(accBalReq);
-    } catch (IOException ex) {
-      LOGGER.error("Exception occurred - SBIApplicationRequest & SBIApplicationResponse is not valid");
-      throw new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001);
-    }
-    LOGGER.info("Fetch Account Balance End: Method-getAccountBalance");
-    return sbiApplicationResponse;
+package com.sbi.yb.controller;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.microservice.framework.model.SBIApplicationResponse;
+import com.sbi.microservice.framework.model.Status;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import com.sbi.yb.model.FileUploadRequest;
+import com.sbi.yb.model.FileUploadResponse;
+import com.sbi.yb.service.FileUploadService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import java.util.Base64;
+import static com.sbi.yb.constant.FileUploadConstants.PLAIN_PAYLOAD;
+import static com.sbi.yb.constant.StatusCode.API000000;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class FileUploadControllerTest {
+  @InjectMocks
+  private FileUploadController fileUploadController;
+  @Mock
+  private FileUploadService fileUploadService;
+  @Mock
+  private HttpServletRequest httpServletRequest;
+  @Mock
+  private HttpServletResponse httpServletResponse;
+  @Mock
+  private FrameworkUtils frameworkUtils;
+
+  ObjectMapper objectMapper = new ObjectMapper();
+  private final FileUploadRequest request = new FileUploadRequest();
+  private SBIApplicationResponse mockAppResponse;
+  private FileUploadResponse fileUploadResponse;
+
+  @BeforeEach
+  void setup() throws JsonProcessingException {
+    request.setFileType("3P");
+    request.setFileName("testfile.txt");
+    request.setFileContent(Base64.getEncoder().encodeToString("content".getBytes()));
+    request.setUserName("YBM1Admin");
+    request.setCorporateAlias("250251");
+
+    fileUploadResponse = new FileUploadResponse("101726", "junitTest.txt","15 March, 2024 18:00:30","Pending");
+    mockAppResponse = new SBIApplicationResponse();
+    mockAppResponse.setStatus(Status.SUCCESS.getStatusValue());
+    mockAppResponse.setStatusCode(API000000);
+    mockAppResponse.setData(objectMapper.writeValueAsString(fileUploadResponse));
   }
-  
-  
-  
-Service
-  public SBIApplicationResponse fetchAccountBalance(final FetchAccountBalanceRequest accBalReq) {
-    LOGGER.info("Fetch Account Balance Begin: Method-accountBalance");
-    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
-    final FetchAccountBalanceResponse[] fetchAccountBalanceResponse = {null};
-    ObjectMapper mapper = new ObjectMapper();
-    try {
-      AccountDetails accountDetails = Optional.ofNullable(accountDetailsUtil.fetchAccountDetails(accBalReq.userName(), accBalReq.accountNo()))
-              .orElseThrow(() -> new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001));
 
-      Optional.ofNullable(accountDetails)
-              .map(AccountDetails::account)
-              .ifPresent(acc -> {
-                String productType = acc.productType().toUpperCase();
-                String productDesc = acc.productDescription().toUpperCase();
-                String currencyCode = Constants.CURRENCY_MESSGAE;
-                String accBalance = switch (productType.toUpperCase(Locale.ENGLISH)) {
-                  case Constants.A1, Constants.A2, Constants.A3, Constants.A4 ->
-                          accountDetails.transactionAccountDetails().availableBalance();
-                  case Constants.A5 ->
-                          (productDesc.toUpperCase(Locale.ENGLISH).startsWith(Constants.RD) || productDesc.toUpperCase(Locale.ENGLISH).startsWith(Constants.FLEXI)) ? accountDetails.transactionAccountDetails().clearBalance().toString() : accountDetails.transactionAccountDetails().availableBalance();
-                  case Constants.A6 -> accountDetails.loanAccountDetails().amountOutStanding().toString();
-                  default -> Constants.ZERO_DOUBLE;
-                };
-
-                if (accountDetails.transactionAccountDetails() != null && accountDetails.transactionAccountDetails().currencyCode() != null && !accountDetails.transactionAccountDetails().currencyCode().isEmpty()) {
-                  currencyCode = accountDetails.transactionAccountDetails().currencyCode();
-                } else if (accountDetails.loanAccountDetails() != null && accountDetails.loanAccountDetails().currencyCode() != null && !accountDetails.loanAccountDetails().currencyCode().isEmpty()) {
-                  currencyCode = accountDetails.loanAccountDetails().currencyCode();
-                }
-                fetchAccountBalanceResponse[0] = new FetchAccountBalanceResponse(accBalance, currencyCode);
-              });
-
-      sbiApplicationResponse.setData(mapper.writeValueAsString(fetchAccountBalanceResponse[0]));
-      sbiApplicationResponse.setStatusCode(ErrorConstants.AS00000);
-      sbiApplicationResponse.setStatus(Constants.SUCCESS);
-      sbiApplicationResponse.setMessage("Account Balance fetched successfully");
-
-    } catch (JsonProcessingException ex) {
-      LOGGER.error("Error occurring Failed to retrieve the Account Balance");
-      sbiApplicationResponse.setStatusCode(ErrorConstants.ASAS0001);
-      sbiApplicationResponse.setStatus(Constants.FAILURE);
-      throw new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001);
-    }
-    LOGGER.info("Fetch Account Balance End: Method-FetchAccountBalance");
-    return sbiApplicationResponse;
+  @Test
+  void testUploadFile() throws JsonProcessingException {
+    Mockito.when((FileUploadRequest) frameworkUtils.validateAndGetRequest(httpServletRequest, PLAIN_PAYLOAD, FileUploadRequest.class)).thenReturn(request);
+    Mockito.when(fileUploadService.uploadFile(any(),any())).thenReturn(fileUploadResponse);
+    Mockito.when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
+    ResponseEntity<SBIApplicationResponse> response = fileUploadController.uploadFile(httpServletRequest, httpServletResponse);
+    Assertions.assertEquals(API000000, response.getBody().getStatusCode());
+    Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+    FileUploadResponse result = objectMapper.readValue(response.getBody().getData(), FileUploadResponse.class);
+    Assertions.assertEquals("101726",result.fileReferenceNo());
   }
-  
-  
- fetchAccountDetails  this menthod wich is used in above class
-public AccountDetails fetchAccountDetails(final String userName, final String accountNo) {
-    LOGGER.info("AccountDetailsUtil Service Begin: Method-fetchUserAccountDetails");
-    AccountDetails accountDetails;
-    List<Account> accountList;
-    Optional<Account> matchedAccount = Optional.empty();
-    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
-    accountList = accountStatementDaoImpl.fetchAccountsByUsername(userName,accountNo);
-    if (accountList != null) {
-      matchedAccount = matchAccount(accountList, accountNo);
-    }
-    if (matchedAccount.isEmpty()) {
-      accountList = accountStatementDaoImpl.fetchBmAccount(userName, accountNo);
-      if (accountList != null) {
-        matchedAccount = matchAccount(accountList, accountNo);
-      }
-    }
-    if (matchedAccount.isEmpty()) {
-      accountList = accountStatementDaoImpl.fetchNriPisAccount(userName, accountNo);
-      if (accountList != null) {
-        matchedAccount = matchAccount(accountList, accountNo);
-      }
-    }
-    if (matchedAccount.isEmpty()) {
-      accountList = accountStatementDaoImpl.fetchClosedAccount(userName);
-    }
 
-    if (accountList != null && !accountList.isEmpty()) {
-      Optional<Account> matchAccount = accountList.stream()
-              .filter(acc -> acc.accountNo().equals(accountNo))
-              .findFirst();
-      if (matchAccount.isPresent()) {
-        accountDetails = matchAccount
-                .map(account -> {
-                  String productType = account.productType();
-                  AccountDetails details = switch (productType) {
-                    case Constants.A5 -> depositAccountDaoImpl.fetchAccountDetails(account);
-                    case Constants.A6 -> loanAccountDaoImpl.fetchAccountDetails(account);
-                    default -> transactionAccountDaoImpl.fetchAccountDetails(account);
-                  };
-                  return details.withAccount(account);
-                }).orElseThrow(() -> new BusinessException(ErrorConstants.ASAS0001, ErrorConstants.ASAS0001));
+  @Test
+  void testUploadFileRequestNull() {
+    Mockito.when((FileUploadRequest) frameworkUtils.validateAndGetRequest(httpServletRequest, PLAIN_PAYLOAD, FileUploadRequest.class)).thenReturn(null);
+    Assertions.assertThrows(TechnicalException.class, () -> fileUploadController.uploadFile(httpServletRequest, httpServletResponse));  }
 
-      } else {
-        sbiApplicationResponse.setStatusCode(ErrorConstants.ASAS0002);
-        sbiApplicationResponse.setStatus(Constants.FAILURE);
-        throw new BusinessException(ErrorConstants.ASAS0002, ErrorConstants.ASAS0002);
-      }
-    } else {
-      sbiApplicationResponse.setStatusCode(ErrorConstants.ASAS0005);
-      sbiApplicationResponse.setStatus(Constants.FAILURE);
-      throw new BusinessException(ErrorConstants.ASAS0005, ErrorConstants.ASAS0005);
-    }
-
-
-    LOGGER.info("AccountDetailsUtil Service End: Method-fetchUserAccountDetails");
-    return accountDetails;
+  @Test
+  void testUploadFileContentEmpty() {
+    request.setFileContent("");
+    Mockito.when((FileUploadRequest) frameworkUtils.validateAndGetRequest(httpServletRequest, PLAIN_PAYLOAD, FileUploadRequest.class)).thenReturn(request);
+    ResponseEntity<SBIApplicationResponse> response = fileUploadController.uploadFile(httpServletRequest, httpServletResponse);
+    Assertions.assertNotNull(response);
+    Assertions.assertEquals(HttpStatus.OK, response.getStatusCode());
   }
-  
-  validation class which is in microservice framework and used as common code
-  package com.sbi.microservice.framework.utils;
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.ValidationApiRequest;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-import java.util.List;
-import java.util.Map;
-import java.util.regex.Pattern;
-
-@Component
-public class validation {
-    private static final Logger logger = LoggerFactory.getLogger(validation.class);
-
-    public void validateRequest(Map<String, Object> inputParams, List<ValidationApiRequest> validationRules) {
-        for (ValidationApiRequest rule : validationRules) {
-            String attribute = rule.attribute_name();
-            String dataType = rule.attribute_data_type();
-            boolean isMandatory = rule.is_mandatory_attribute();
-            int exactLength = rule.attribute_length();
-            int maxLength = rule.max_value();
-            String regexPattern = rule.regex_pattern();
-            validateAttribute(inputParams, attribute, dataType, isMandatory, exactLength, maxLength, regexPattern);
-        }
-    }
-
-    private void validateAttribute(Map<String, Object> inputParams,
-                                   String attribute,
-                                   String dataType,
-                                   boolean isMandatory,
-                                   int exactLength,
-                                   int maxLength,
-                                   String regexPattern
-    ) {
-        if (isMandatory && !inputParams.containsKey(attribute)) {
-            throw new ValidationException("400", attribute + " is mandatory");
-        }
-        Object value = inputParams.get(attribute);
-        switch (dataType.toUpperCase()) {
-            case "STRING" -> validateString(value, attribute, exactLength, maxLength,regexPattern);
-            case "LIST" -> validateList(value, attribute, maxLength);
-            case "NUMBER" -> validateInteger(value, attribute);
-            case "BOOLEAN" -> validateBoolean(value, attribute);
-            default -> throw new ValidationException("400",
-                    "Unsupported data type '" + dataType + "' for attribute: " + attribute);
-        }
-    }
-
-    private void validateString(Object value, String attribute, int exactLength, int maxLength, String regexPattern) {
-        if (!(value instanceof String strValue)) {
-            throw new ValidationException("400", attribute + " should be a string");
-        }
-        if (exactLength > 0 && strValue.length() != exactLength) {
-            throw new ValidationException("400",
-                    attribute + " must be exactly " + exactLength + " characters");
-        }
-        if (maxLength > 0 && strValue.length() > maxLength) {
-            throw new ValidationException("400",
-                    attribute + " exceeds max length of " + maxLength);
-        }
-        if (regexPattern != null && !regexPattern.isEmpty()) {
-            validateRegex(strValue, attribute, regexPattern);
-        }
-        if (attribute.equalsIgnoreCase("branchCode") && !strValue.isBlank() && strValue.toUpperCase().contains("A")) {
-            throw new ValidationException("400", attribute + " contains A, " + attribute + " should have all numbers");
-        }
-
-    }
-
-    private void validateRegex(String value, String attribute, String regexPattern) {
-        if (value == null || regexPattern == null) {
-            return;
-        }
-        try {
-            if (!Pattern.matches(regexPattern, value)) {
-                throw new ValidationException("400", attribute + " does not match the required pattern");
-            }
-        } catch (Exception e) {
-            logger.error("Regex validation failed for attribute: {}", attribute, e);
-            throw new ValidationException("400", "Invalid regex pattern for " + attribute);
-        }
-    }
-
-    private void validateList(Object value, String attribute, int maxLength) {
-        if (!(value instanceof List<?> list)) {
-            throw new ValidationException("400", attribute + " should be a list");
-        }
-        if (maxLength > 0 && list.size() > maxLength) {
-            throw new ValidationException("400",
-                    attribute + " exceeds max size of " + maxLength);
-        }
-    }
-
-    private void validateInteger(Object value, String attribute) {
-        if (!(value instanceof Number)) {
-            throw new ValidationException("400", attribute + " should be a number");
-        }
-    }
-
-    private void validateBoolean(Object value, String attribute) {
-        if (!(value instanceof Boolean)) {
-            throw new ValidationException("400", attribute + " should be a boolean");
-        }
-    }
 }
