@@ -1,28 +1,192 @@
-public Integer getEncryptedForCorporate(String corporateId, String configType) {
-    logger.info("getEncryptedForCorporate(corporateId: {}, configType: {}) - begin", corporateId, configType);
+package com.sbi.yb.controller;
 
-    Integer value = null;
-    Object[] params = new Object[]{corporateId, "S", configType, "4"};
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sbi.microservice.framework.exception.ValidationException;
+import com.sbi.microservice.framework.model.SBIApplicationResponse;
+import com.sbi.microservice.framework.utils.FrameworkUtils;
+import com.sbi.yb.constant.ErrorConstants;
+import com.sbi.yb.constant.UtilsConstant;
+import com.sbi.yb.model.*;
+import com.sbi.yb.service.ApproveTestService;
+import com.sbi.yb.service.FileStoreService;
+import com.sbi.yb.service.ViewTransactionTestFileService;
+import com.sbi.yb.util.FileUploadUtil;
+import com.sbi.yb.util.ServiceUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+import java.util.Optional;
+
+
+@RestController
+@RequestMapping("/v1.0.0")
+public class UploadApproveTestFileController {
+
+  /**
+   * LOGGER
+   */
+  private static final Logger LOGGER = LoggerFactory.getLogger(UploadApproveTestFileController.class);
+
+  private final FileStoreService fileStoreService;
+
+  private final ViewTransactionTestFileService viewTransactionTestFileService;
+
+  private final ApproveTestService approveTestService;
+
+  /**
+   * framework service
+   */
+  private final FrameworkUtils frameworkUtils;
+
+  @Autowired
+  public UploadApproveTestFileController(final FileStoreService fileStoreService, final ViewTransactionTestFileService viewTransactionTestFileService,
+                                         final FrameworkUtils frameworkUtils, final ApproveTestService approveTestService) {
+    this.fileStoreService = fileStoreService;
+    this.viewTransactionTestFileService = viewTransactionTestFileService;
+    this.frameworkUtils = frameworkUtils;
+    this.approveTestService = approveTestService;
+
+  }
+
+  @PostMapping("/testFileUpload")
+  public ResponseEntity<SBIApplicationResponse> uploadTestFile(final HttpServletRequest request, final HttpServletResponse response) {
+    LOGGER.info("uploadTestFile(HttpServletRequest request,HttpServletResponse response)-begin");
+    SBIApplicationResponse applicationResponse = new SBIApplicationResponse();
+    TxnFileUploadResponse txnFileUploadResponse;
     try {
-        List<Map<String, Object>> valueList = getJdbcTemplate().queryForList(
-            SQLConstants.GET_ENCRYPTED_FOR_CORPORATE, params
-        );
 
-        logger.info("Result: {}", valueList);
+      String payload = Optional.ofNullable(ServiceUtils.safeGetParameter(request, UtilsConstant.PLAIN_PAYLOAD)).filter(FileUploadUtil::isNotNullString)
+              .orElseThrow(() -> new ValidationException("Payload is not input valid", ErrorConstants.NO_VALID_INPUT));
 
-        if (valueList != null && !valueList.isEmpty()) {
-            var valueMap = valueList.get(0);
+      LOGGER.info("Payload From UploadtestFile Request:: {}", payload);
 
-            if (valueMap != null && valueMap.containsKey("ENCRYPTED") && valueMap.get("ENCRYPTED") != null) {
-                value = Integer.valueOf(valueMap.get("ENCRYPTED").toString());
-            }
-        }
-    } catch (DataAccessException e) {
-        logger.error("Error occurred while fetching encrypted value for corporateId: {}, configType: {}", corporateId, configType, e);
-        throw new DMOException(ErrorConstants.FATAL_EXCEPTION_ERROR_CODE, e);
+      ObjectMapper mapper = new ObjectMapper();
+
+      TxnFileUploadRequest txnFileUploadRequest = mapper.readValue(payload, TxnFileUploadRequest.class);
+
+
+      txnFileUploadResponse = fileStoreService.uploadFileStore(txnFileUploadRequest, "");
+
+      if (Optional.ofNullable(txnFileUploadResponse).isPresent()) {
+        applicationResponse = frameworkUtils.buildSuccessResponse(txnFileUploadResponse, UtilsConstant.SUCCESSCODE);
+      }
+
+      LOGGER.info("UploadTestfileController UploadTestFile applicationResponse::{}", applicationResponse.getData());
+    } catch (JsonProcessingException e) {
+      applicationResponse.setStatus(UtilsConstant.FAILURE);
+      applicationResponse.setStatusCode(ErrorConstants.NO_VALID_INPUT);
     }
+    LOGGER.info("uploadTestFile(final HttpServletRequest request, final HttpServletResponse response) -end");
+    return new ResponseEntity<>(applicationResponse, HttpStatus.OK);
+  }
 
-    logger.info("getEncryptedForCorporate(corporateId: {}, configType: {}) - end", corporateId, configType);
-    return value;
+
+  @PostMapping("/viewTestFileList")
+  public ResponseEntity<SBIApplicationResponse> viewTestFile(final HttpServletRequest request, final HttpServletResponse response) {
+    LOGGER.info("viewTestFile(HttpServletRequest request,HttpServletResponse response)-begin");
+    SBIApplicationResponse applicationResponse = new SBIApplicationResponse();
+    try {
+
+
+      String payload = Optional.ofNullable(ServiceUtils.safeGetParameter(request, UtilsConstant.PLAIN_PAYLOAD)).filter(FileUploadUtil::isNotNullString)
+              .orElseThrow(() -> new ValidationException("Payload is not valid.", ErrorConstants.NO_VALID_INPUT));
+
+      LOGGER.info("Payload From Request:: {}", payload);
+
+      ObjectMapper mapper = new ObjectMapper();
+
+      ViewTestFileRequest viewTestFile = mapper.readValue(payload, ViewTestFileRequest.class);
+      LOGGER.info("UploadTestFileController data--> {}", viewTestFile);
+
+      List<ViewTestFileResponse> viewTestFileResponses = viewTransactionTestFileService.viewTransactionTestFileDetails(viewTestFile);
+
+      if (Optional.ofNullable(viewTestFileResponses).isPresent()) {
+        applicationResponse = frameworkUtils.buildSuccessResponse(viewTestFileResponses, UtilsConstant.SUCCESSCODE);
+      }
+
+    } catch (JsonProcessingException e) {
+      applicationResponse.setStatus(UtilsConstant.FAILURE);
+      applicationResponse.setStatusCode(ErrorConstants.NO_VALID_INPUT);
+    }
+    LOGGER.info("viewTestFile(HttpServletRequest request,HttpServletResponse response)-end");
+    return new ResponseEntity<>(applicationResponse, HttpStatus.OK);
+  }
+
+  @PostMapping("/viewTestFileEcheque")
+  public ResponseEntity<SBIApplicationResponse> viewEchequeDetails(final HttpServletRequest request, final HttpServletResponse response) {
+    LOGGER.info("viewTestFile(HttpServletRequest request,HttpServletResponse response) -begin");
+    ViewTestFileEchequeListResponse viewTestFileEchequeListResponse = null;
+    SBIApplicationResponse sbiApplicationResponse = new SBIApplicationResponse();
+    try {
+
+
+      String payload = Optional.ofNullable(ServiceUtils.safeGetParameter(request, UtilsConstant.PLAIN_PAYLOAD)).filter(FileUploadUtil::isNotNullString)
+              .orElseThrow(() -> new ValidationException("Payload is not valid...", ErrorConstants.NO_VALID_INPUT));
+
+      LOGGER.info("Payload From Request::: {}", payload);
+
+      ObjectMapper mapper = new ObjectMapper();
+
+      ViewTestFileRequest viewTestFile = mapper.readValue(payload, ViewTestFileRequest.class);
+      LOGGER.info("UploadTestFileController data:--> {}", viewTestFile);
+
+      viewTestFileEchequeListResponse = viewTransactionTestFileService.viewEchequeDetails(viewTestFile);
+
+      if (Optional.ofNullable(viewTestFileEchequeListResponse).isPresent()) {
+        sbiApplicationResponse = frameworkUtils.buildSuccessResponse(viewTestFileEchequeListResponse, UtilsConstant.SUCCESSCODE);
+      }
+
+    } catch (JsonProcessingException e) {
+      sbiApplicationResponse.setStatus(UtilsConstant.FAILURE);
+      sbiApplicationResponse.setStatusCode(ErrorConstants.NO_VALID_INPUT);
+    }
+    LOGGER.info("viewTestFile(HttpServletRequest request,HttpServletResponse response)-end.");
+    return new ResponseEntity<>(sbiApplicationResponse, HttpStatus.OK);
+  }
+
+
+  @PostMapping("/approveTestFile")
+  public ResponseEntity<SBIApplicationResponse>  approveTestFile(final HttpServletRequest request, final HttpServletResponse response) {
+    LOGGER.info("approveTestFile(final HttpServletRequest request, final HttpServletResponse response) --begin");
+    SBIApplicationResponse applicationResponse = new SBIApplicationResponse();
+    ApproveTestFileResponse approveTestFileResponse;
+    try {
+      String payload = Optional.ofNullable(ServiceUtils.safeGetParameter(request, UtilsConstant.PLAIN_PAYLOAD)).filter(FileUploadUtil::isNotNullString)
+              .orElseThrow(() -> new ValidationException("Payload is not valid", ErrorConstants.NO_VALID_INPUT));
+      LOGGER.info("plain payload in FileApprovalEchequeController {} ", payload);
+      ObjectMapper mapper = new ObjectMapper();
+      ApproveTestFileRequest fileApprovalRequestModel = mapper.readValue(payload, ApproveTestFileRequest.class);
+
+      approveTestFileResponse = approveTestService.updateTestFileConfig(fileApprovalRequestModel);
+
+      if (Optional.ofNullable(approveTestFileResponse).isPresent()) {
+        applicationResponse = frameworkUtils.buildSuccessResponse(approveTestFileResponse, UtilsConstant.SUCCESSCODE);
+      }
+
+      LOGGER.info("approveTestFile(final HttpServletRequest request, final HttpServletResponse response) --end");
+
+
+    } catch (JsonProcessingException e) {
+      applicationResponse.setStatus(UtilsConstant.FAILURE);
+      applicationResponse.setStatusCode(ErrorConstants.NO_VALID_INPUT);
+    }
+    return new ResponseEntity<>(applicationResponse, HttpStatus.OK);
+  }
+
+
 }
+
+
+
+
+
