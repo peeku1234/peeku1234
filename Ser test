@@ -1,239 +1,295 @@
-FUNCTION insertecheque (
-      p_debitleg          IN OUT   obj_corporate_leg,
-      p_creditleg         IN       col_corporate_leg,
-      p_transactionpath   IN       VARCHAR
-   )
-      RETURN VARCHAR2
-   AS
-      constvalue            NUMBER (1)                                   := 1;
-      constzerovalue        NUMBER (1)                                   := 0;
-      strrefno              sbicorp_echeque_master.echeque_no%TYPE;
-      strdebitacc           sbicorp_echeque_master.account_no%TYPE;
-      strdebitbr            sbicorp_echeque_master.branch_code%TYPE;
-      strdate               VARCHAR2 (10);
-      strtime               VARCHAR2 (10);
-      strcorporateid        VARCHAR2 (15);--                           := '99999';
-      strcorprefno          sbicorp_echeque_master.corp_ref_no%TYPE;
-      strmerchcode          sbicorp_echeque_master.merchant_code%TYPE;
-      strdesc               sbicorp_echeque_master.description%TYPE;
-      intoid                sbicorp_echeque_master.OID%TYPE;
-      echeque_date          DATE;
-      boolreturnvalue       VARCHAR2 (5);
-      strusername           sbicorp_echeque_master.maker%TYPE;
-      strmcprocessed        sbicorp_echeque_master.mc_processed%TYPE;
-      lngdebitamount        sbicorp_echeque_master.echeque_amount%TYPE;
-      schdate               DATE                                      := NULL;
-      schvalue              NUMBER (2)                                   := 1;
-      schprocessed          NUMBER (2)                                   := 0;
-      strsupplierid         VARCHAR2 (25);
-      strscheduled          VARCHAR2 (25);
-      strfilename           sbicorp_echeque_master.file_name%TYPE;
-      strcurrentauthlevel   sbicorp_echeque_master.current_auth_level%TYPE :=1;
-      sqlerrorcode          VARCHAR2 (255)                              := '';
-      additionalparams      dataarray_large;
-      paramkeyvalue         dataarray_large;
-      stroutrefname         sbicorp_echeque_supplier_param.param%TYPE;
-      stroutrefvalue        sbicorp_echeque_supplier_param.value%TYPE;
-      strbeneficiary        SBICORP_ECHEQUE_MASTER.BENEFICIARY%TYPE;
-      l_businessline_id     varchar2(10);
-      l_credit_status_code  SBICORP_ECHEQUE_MASTER.CREDIT_STATUS_CODE%TYPE; --Code added for GVF RTGS handling Commission transaction
-   BEGIN
-      IF p_debitleg IS NOT NULL
-      THEN
-         BEGIN
-            strrefno := p_debitleg.reference_no;
-            strdebitacc := p_debitleg.account_no;
-            strdebitbr := p_debitleg.branch_code;
-            lngdebitamount := TO_NUMBER (p_debitleg.amount);
-            IF p_debitleg.scheduled = 0
-            THEN
-               IF p_debitleg.scheduled_date IS NOT NULL
-               THEN
-                  echeque_date := p_debitleg.scheduled_date;
-               END IF;
-               schprocessed := 1;
-            ELSE
-               echeque_date := SYSDATE;
-               schprocessed := 0;
-            END IF;
-            strcorprefno := p_debitleg.thirdpartyref;
-            strmerchcode := p_debitleg.merchant_code;
-            strdesc := p_debitleg.remarks;
-            strusername := p_debitleg.username;
-            l_businessline_id := p_debitleg.businessline_id;
-            IF    p_transactionpath = 'CC'
-               OR p_transactionpath = 'NCNC'
-               OR SUBSTR (strrefno, 1, 2) = 'ID'
-            THEN
-               strmcprocessed := 0;
-            ELSIF    p_transactionpath = 'CNC'
-                  OR p_transactionpath = 'NCC'
-                  OR p_transactionpath = 'CMC'
-                  OR p_transactionpath = 'NCMC'
-            THEN
-               strmcprocessed := 1;
-            END IF;
-            strcurrentauthlevel := p_debitleg.current_auth_level;
-            schvalue := p_debitleg.scheduled;
-            IF schvalue = 0 THEN
-                schdate := p_debitleg.scheduled_date;
-            ELSE
-                schdate := SYSDATE;
-            END IF;
-            strcorporateid :=p_debitleg.corporate_id;
-            strsupplierid :=p_debitleg.supplier_id;
-            IF SUBSTR (strrefno, 1, 2) = 'CB'
-            THEN
-               strmcprocessed := 0;
-            ELSE
-               strmcprocessed := 1;
-            END IF;
-            strbeneficiary :=p_debitleg.beneficiary;
-/*            IF p_creditleg.COUNT > 0
-            THEN
-               IF strmerchcode IS NOT NULL
-               THEN
-                  BEGIN
-                     SELECT a.merchant_name
-                       INTO strbeneficiary
-                       FROM sbi_merchant_master a
-                      WHERE a.merchant_code = strmerchcode;
-                     p_debitleg.beneficiary := strbeneficiary;
-                  EXCEPTION
-                     WHEN OTHERS
-                     THEN
-                        NULL;
-                  END;
-               END IF;
-            END IF;
-*/
-            sp_msg := strrefno || ' | Getting oid from oid_sequence';
-            writelogs (sp_nick,
-                       sp_seq,
-                       sp_level,
-                       bulktxnpacktemp.constinfomsglvl,
-                       sp_msg
-                      );
-            SELECT oid_sequence.NEXTVAL
-              INTO intoid
-              FROM DUAL;
-            sp_msg := 'OID to be inserted : ' || intoid;
-            writelogs (sp_nick,
-                       sp_seq,
-                       sp_level,
-                       bulktxnpacktemp.constinfomsglvl,
-                       sp_msg
-                      );
-            sp_msg :=
-                   strrefno || ' | Inserting record in SBICORP_ECHEQUE_MASTER';
-            writelogs (sp_nick,
-                       sp_seq,
-                       sp_level,
-                       bulktxnpacktemp.constinfomsglvl,
-                       sp_msg
-                      );
-               --Code added for GVF RTGS handling Commission transaction
-               IF SUBSTR(strrefno,1,2) IN ('CR','CN') AND strcorporateid LIKE 'IM%' THEN
-               
-                    SELECT decode(COUNT(1),0,null,'gvf_process_eod') into l_credit_status_code
-                    FROM SBI_GVF_VENDOR_MASTER WHERE VENDOR_CODE = l_businessline_id;
-                 
-               END IF;
-               --End of Code added for GVF RTGS handling Commission transaction
-                    
-            --Code modified for GVF RTGS handling Commission transaction                      
-            INSERT INTO sbicorp_echeque_master
-                        (OID, echeque_no, store_id, creation_time, status,
-                         deleted, last_mod_time, account_no, branch_code,
-                         echeque_date, echeque_amount, description, audited,
-                         maker, current_auth_level, audited_by,
-                         system_edited, system_edited_reason, READ,
-                         corporate_id, auth_type, corrupted,
-                         corruption_reason, scheduled, scheduled_date,
-                         processed, beneficiary, auth_option,
-                         corp_ref_no, file_name, supplier_id, reference_no,
-                         mc_processed, merchant_code, auth1_name, auth2_name,
-                         businessline_id, email_sent, scheduled_date_string,credit_status_code 
-                        )
-                --Code modified for GVF RTGS handling Commission transaction
-                 VALUES (intoid, strrefno, 101, SYSDATE, 1,
-                         0, SYSDATE, strdebitacc, strdebitbr,
-                         echeque_date, lngdebitamount, strdesc, constvalue,
-                         strusername, strcurrentauthlevel, null,
-                         constvalue, NULL, constvalue,
-                         strcorporateid, constzerovalue, constvalue,
-                         NULL, schvalue, schdate,
-                         schprocessed, strbeneficiary, constvalue,
-                         strcorprefno, strfilename, strsupplierid, strrefno,
-                         strmcprocessed, strmerchcode, NULL, NULL,
-                         l_businessline_id, constvalue, NULL,l_credit_status_code
-                        );
-            sp_msg :=
-               strrefno
-               || ' | Insert into SBICORP_ECHEQUE_MASTER - Successful';
-            writelogs (sp_nick,
-                       sp_seq,
-                       sp_level,
-                       bulktxnpacktemp.constinfomsglvl,
-                       sp_msg
-                      );
-            sp_msg :=
-                p_debitleg.additionalparams || '  p_DebitLeg.additionalparams';
-            writelogs (sp_nick,
-                       sp_seq,
-                       sp_level,
-                       bulktxnpacktemp.constinfomsglvl,
-                       sp_msg
-                      );
-            IF (p_debitleg.additionalparams IS NOT NULL)
-            THEN
-               additionalparams :=
-                          splittext (p_debitleg.additionalparams, '#|#');
-               sp_msg :=
-                     p_debitleg.additionalparams
-                  || ' | p_DebitLeg.additionalparams';
-               writelogs (sp_nick,
-                          sp_seq,
-                          sp_level,
-                          bulktxnpacktemp.constinfomsglvl,
-                          sp_msg
-                         );
-               FOR intcount IN 2 .. additionalparams.COUNT - 1
-               LOOP
-                 paramkeyvalue := splittext (additionalparams(intcount),'`~`');
-                 -- stroutrefname := 'outref' || TO_NUMBER (intcount - 1);
-                  writelogs (sp_nick,
-                          sp_seq,
-                          sp_level,
-                          bulktxnpacktemp.constinfomsglvl,
-                          'paramkeyvalue(1) : ' || paramkeyvalue(1) || ' , paramkeyvalue(2) ' || paramkeyvalue(2)
-                         );
-                         stroutrefname :=paramkeyvalue(1);
-                         stroutrefvalue :=paramkeyvalue(2);
-                  INSERT INTO sbicorp_echeque_supplier_param
-                              (OID, param,
-                               VALUE, reference_no
-                              )
-                       VALUES (intoid, stroutrefname,
-                               stroutrefvalue, strrefno
-                              );
-               END LOOP;
-            END IF;
-         EXCEPTION
-            WHEN OTHERS
-            THEN
-               sp_msg :=
-                     strrefno
-                  || ' | Error inserting in SBICORP_ECHEQUE_MASTER '
-                  || SQLERRM;
-               writelogs (sp_nick,
-                          sp_seq,
-                          sp_level,
-                          bulktxnpacktemp.consterrmsglvl,
-                          sp_msg
-                         );
-               sqlerrorcode := SQLERRM;
-         END;
-      END IF;
-      RETURN sqlerrorcode;
-   END insertecheque;
+package com.sbi.yb.services.repository.impl;
+
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.services.constants.ErrorConstants;
+import com.sbi.yb.services.constants.SQLConstants;
+import com.sbi.yb.services.constants.UtilsConstant;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class HolidayMasterDAOImplTest {
+
+    @Mock
+    private NamedParameterJdbcTemplate jdbcTemplate;
+
+    @InjectMocks
+    private HolidayMasterDAOImpl holidayMasterDAO;
+
+    private String dateTime;
+    private String merchantCode;
+
+    @BeforeEach
+    void setUp() {
+        dateTime = "2024-01-01";
+        merchantCode = "RTGS";
+    }
+
+    @Test
+    void testFindHoliday_WithRTGSMerchantCode_ShouldReturnHolidayDetails() {
+        // Arrange
+        Map<String, Object> expectedResult = new HashMap<>();
+        expectedResult.put("count", "1");
+        expectedResult.put("date", java.sql.Date.valueOf("2024-01-01"));
+
+        when(jdbcTemplate.queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class))
+        ).thenReturn(expectedResult);
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNotNull(result);
+        assertEquals("1", result.get("count"));
+        verify(jdbcTemplate, times(1)).queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithNEFTMerchantCode_ShouldReturnHolidayDetails() {
+        // Arrange
+        merchantCode = "NEFT";
+        Map<String, Object> expectedResult = new HashMap<>();
+        expectedResult.put("count", "1");
+        expectedResult.put("date", java.sql.Date.valueOf("2024-01-01"));
+
+        when(jdbcTemplate.queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class))
+        ).thenReturn(expectedResult);
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNotNull(result);
+        verify(jdbcTemplate, times(1)).queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithBankHolidayMerchantCode_ShouldReturnHolidayDetails() {
+        // Arrange
+        merchantCode = "BANK_HOLIDAY";
+        Map<String, Object> expectedResult = new HashMap<>();
+        expectedResult.put("count", "1");
+        expectedResult.put("date", java.sql.Date.valueOf("2024-01-01"));
+
+        when(jdbcTemplate.queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class))
+        ).thenReturn(expectedResult);
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNotNull(result);
+        verify(jdbcTemplate, times(1)).queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithInvalidMerchantCode_ShouldReturnNull() {
+        // Arrange
+        merchantCode = "INVALID";
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNull(result);
+        verify(jdbcTemplate, never()).queryForObject(
+            anyString(),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithCaseInsensitiveMerchantCode_ShouldReturnHolidayDetails() {
+        // Arrange
+        merchantCode = "rtgs"; // lowercase
+        Map<String, Object> expectedResult = new HashMap<>();
+        expectedResult.put("count", "1");
+        expectedResult.put("date", java.sql.Date.valueOf("2024-01-01"));
+
+        when(jdbcTemplate.queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class))
+        ).thenReturn(expectedResult);
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNotNull(result);
+        verify(jdbcTemplate, times(1)).queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WhenDataAccessExceptionOccurs_ShouldThrowTechnicalException() {
+        // Arrange
+        when(jdbcTemplate.queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class))
+        ).thenThrow(new DataAccessException("Database error") {});
+
+        // Act & Assert
+        TechnicalException exception = assertThrows(TechnicalException.class, 
+            () -> holidayMasterDAO.findHoliday(dateTime, merchantCode));
+        
+        assertEquals("Failed to connect to Db", exception.getMessage());
+        assertEquals(ErrorConstants.FATAL_EXCEPTION_ERRORCODE, exception.getErrorCode());
+        
+        verify(jdbcTemplate, times(1)).queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithNullDateTime_ShouldHandleGracefully() {
+        // Arrange
+        dateTime = null;
+        Map<String, Object> expectedResult = new HashMap<>();
+        expectedResult.put("count", "0");
+        expectedResult.put("date", null);
+
+        when(jdbcTemplate.queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class))
+        ).thenReturn(expectedResult);
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNotNull(result);
+        verify(jdbcTemplate, times(1)).queryForObject(
+            eq(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithNullMerchantCode_ShouldReturnNull() {
+        // Arrange
+        merchantCode = null;
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNull(result);
+        verify(jdbcTemplate, never()).queryForObject(
+            anyString(),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testFindHoliday_WithEmptyMerchantCode_ShouldReturnNull() {
+        // Arrange
+        merchantCode = "";
+
+        // Act
+        Map<String, Object> result = holidayMasterDAO.findHoliday(dateTime, merchantCode);
+
+        // Assert
+        assertNull(result);
+        verify(jdbcTemplate, never()).queryForObject(
+            anyString(),
+            any(MapSqlParameterSource.class),
+            any(HolidayMasterDAOImpl.HolidayRowMapper.class)
+        );
+    }
+
+    @Test
+    void testHolidayRowMapper_ShouldMapResultSetCorrectly() throws SQLException {
+        // Arrange
+        HolidayMasterDAOImpl.HolidayRowMapper rowMapper = new HolidayMasterDAOImpl.HolidayRowMapper();
+        ResultSet resultSet = mock(ResultSet.class);
+        
+        when(resultSet.getString("count")).thenReturn("1");
+        when(resultSet.getDate("schdate")).thenReturn(java.sql.Date.valueOf("2024-01-01"));
+
+        // Act
+        Map<String, Object> result = rowMapper.mapRow(resultSet, 1);
+
+        // Assert
+        assertNotNull(result);
+        assertEquals("1", result.get("count"));
+        assertEquals(java.sql.Date.valueOf("2024-01-01"), result.get("date"));
+    }
+
+    @Test
+    void testHolidayRowMapper_WithNullValues_ShouldHandleGracefully() throws SQLException {
+        // Arrange
+        HolidayMasterDAOImpl.HolidayRowMapper rowMapper = new HolidayMasterDAOImpl.HolidayRowMapper();
+        ResultSet resultSet = mock(ResultSet.class);
+        
+        when(resultSet.getString("count")).thenReturn(null);
+        when(resultSet.getDate("schdate")).thenReturn(null);
+
+        // Act
+        Map<String, Object> result = rowMapper.mapRow(resultSet, 1);
+
+        // Assert
+        assertNotNull(result);
+        assertNull(result.get("count"));
+        assertNull(result.get("date"));
+    }
+
+    @Test
+    void testConstructor() {
+        // Arrange
+        NamedParameterJdbcTemplate template = mock(NamedParameterJdbcTemplate.class);
+        
+        // Act
+        HolidayMasterDAOImpl dao = new HolidayMasterDAOImpl(template);
+        
+        // Assert
+        assertNotNull(dao);
+    }
+}
