@@ -1,537 +1,91 @@
-package com.sbi.yb.services.service.impl;
+package com.sbi.yb.services.repository.impl;
 
-import com.sbi.yb.services.cache.ReferenceDataCache;
+
+import com.sbi.microservice.framework.exception.TechnicalException;
+
+import com.sbi.yb.services.constants.ErrorConstants;
+import com.sbi.yb.services.constants.SQLConstants;
 import com.sbi.yb.services.constants.UtilsConstant;
 import com.sbi.yb.services.repository.HolidayMasterDAO;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
+/**
+ * This interface is used to fetch the holiday details of NEFT or RTGS.
+ *
+ * @author V1017583
+ * @version 1.0
+ */
+@Repository
+public class HolidayMasterDAOImpl implements HolidayMasterDAO {
+  /**
+   * LOGGER.
+   **/
+  private static final Logger LOGGER = LoggerFactory.getLogger(HolidayMasterDAOImpl.class);
+  /**
+   * NamedParameterJdbcTemplate.
+   **/
+  private NamedParameterJdbcTemplate jdbcTemplate;
 
-@ExtendWith(MockitoExtension.class)
-class CutoffTimeServiceTest {
+  /**
+   * Invoke constructor call.
+   *
+   * @param namedparamJdbcTemplate injecting jdbcTemplate
+   */
+  @Autowired
+  public HolidayMasterDAOImpl(final NamedParameterJdbcTemplate namedparamJdbcTemplate) {
+    this.jdbcTemplate = namedparamJdbcTemplate;
+  }
 
-    @Mock
-    private HolidayMasterDAO holidayMasterDAOImpl;
+  /**
+   * Holiday details .
+   *
+   * @param dateTime     dateTime
+   * @param merchantCode merchantCode
+   * @return returning holiday details
+   *
+   */
+  public Map<String, Object> findHoliday(String dateTime, String merchantCode) {
+    LOGGER.debug("findHoliday - method begin. DateTime : {} , MerchantCode: {}", dateTime, merchantCode);
+    Map<String, Object> resultMap = null;
+    try {
+      MapSqlParameterSource params = new MapSqlParameterSource();
 
-    @Mock
-    private ReferenceDataCache referenceDataCache;
+      params.addValue("dateTime", dateTime).addValue("dateTime", dateTime).addValue("merchantCode", merchantCode);
 
-    private CutoffTimeService cutoffTimeService;
+      LOGGER.info("findHoliday param ::{}", params);
 
-    @BeforeEach
-    void setUp() {
-        cutoffTimeService = new CutoffTimeService(holidayMasterDAOImpl, referenceDataCache);
+      if (merchantCode.equalsIgnoreCase(UtilsConstant.RTGS) || merchantCode.equalsIgnoreCase(UtilsConstant.NEFT)
+              || merchantCode.equalsIgnoreCase("BANK_HOLIDAY")) {
+        resultMap = jdbcTemplate.queryForObject(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE, params, new HolidayRowMapper());
+      }
+    } catch (DataAccessException ex) {
+      LOGGER.error("DataAccessException Occurred {}", ex.getMessage());
+      throw new TechnicalException("Failed to connect to Db", ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
     }
+    LOGGER.debug("findHoliday(String dateTime, String merchantCode) - method end");
+    return resultMap;
+  }
 
-    @Test
-    void testIsValidDateAndTime_WhenHolidayCountIsZeroAndValidTime() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30); // Monday
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Object> holiday = new HashMap<>();
-        holiday.put(UtilsConstant.COUNT, "0");
-        
-        when(holidayMasterDAOImpl.findHoliday(anyString(), anyString())).thenReturn(holiday);
-        
-        // Mock cutoff values for valid time
-        Map<String, Integer> cutoffData = new HashMap<>();
-        cutoffData.put("intHour", 10);
-        cutoffData.put("intMinute", 30);
-        cutoffData.put("startHour", 9);
-        cutoffData.put("startMinute", 0);
-        cutoffData.put("endHour", 17);
-        cutoffData.put("endMinute", 0);
-        
-        // Use reflection to test private method or verify through public method behavior
-        // For this test, we'll verify the overall behavior
-        
-        // Act
-        boolean result = cutoffTimeService.isValidDateAndTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertTrue(result);
-        verify(holidayMasterDAOImpl).findHoliday("15/01/2024", paymentMode);
+  private static class HolidayRowMapper implements RowMapper<Map<String, Object>> {
+    public Map<String, Object> mapRow(ResultSet rs, int arg1) throws SQLException {
+      Map<String, Object> dateMap = new HashMap<>();
+      dateMap.put("count", rs.getString("count"));
+      dateMap.put("date", rs.getDate("schdate"));
+      return dateMap;
     }
+  }
 
-    @Test
-    void testIsValidDateAndTime_WhenHolidayCountIsNotZero() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Object> holiday = new HashMap<>();
-        holiday.put(UtilsConstant.COUNT, "1");
-        
-        when(holidayMasterDAOImpl.findHoliday(anyString(), anyString())).thenReturn(holiday);
-        
-        // Act
-        boolean result = cutoffTimeService.isValidDateAndTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertFalse(result);
-        verify(holidayMasterDAOImpl).findHoliday("15/01/2024", paymentMode);
-    }
 
-    @Test
-    void testIsValidDateAndTime_WhenHolidayCountIsNull() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Object> holiday = new HashMap<>();
-        holiday.put(UtilsConstant.COUNT, null);
-        
-        when(holidayMasterDAOImpl.findHoliday(anyString(), anyString())).thenReturn(holiday);
-        
-        // Act
-        boolean result = cutoffTimeService.isValidDateAndTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void testCutoffValues_WeekdayRTGS() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30); // Monday
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("RTGS_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("RTGS_CUTOFF_END_TIME_SBI001", "17:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Integer> result = cutoffTimeService.cutoffValues(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(10, result.get("intHour"));
-        assertEquals(30, result.get("intMinute"));
-        assertEquals(9, result.get("startHour"));
-        assertEquals(0, result.get("startMinute"));
-        assertEquals(17, result.get("endHour"));
-        assertEquals(0, result.get("endMinute"));
-    }
-
-    @Test
-    void testCutoffValues_SaturdayRTGS() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 13, 10, 30); // Saturday
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("RTGS_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("RTGS_CUTOFF_END_TIME_SBI001", "17:00");
-        referenceData.put("RTGS_SAT_CUTOFF_START_TIME_SBI001", "10:00");
-        referenceData.put("RTGS_SAT_CUTOFF_END_TIME_SBI001", "14:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Integer> result = cutoffTimeService.cutoffValues(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(10, result.get("startHour")); // Saturday start time
-        assertEquals(0, result.get("startMinute"));
-        assertEquals(14, result.get("endHour")); // Saturday end time
-        assertEquals(0, result.get("endMinute"));
-    }
-
-    @Test
-    void testCutoffValues_SaturdayNEFT() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 13, 10, 30); // Saturday
-        String paymentMode = "NEFT";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("NEFT_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("NEFT_CUTOFF_END_TIME_SBI001", "17:00");
-        referenceData.put("NEFT_SAT_CUTOFF_START_TIME_SBI001", "10:00");
-        referenceData.put("NEFT_SAT_CUTOFF_END_TIME_SBI001", "14:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Integer> result = cutoffTimeService.cutoffValues(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(10, result.get("startHour")); // Saturday start time
-        assertEquals(0, result.get("startMinute"));
-        assertEquals(14, result.get("endHour")); // Saturday end time
-        assertEquals(0, result.get("endMinute"));
-    }
-
-    @Test
-    void testCutoffValues_NonRTGSNEFT() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 13, 10, 30); // Saturday
-        String paymentMode = "IMPS";
-        String bankCode = "SBI001";
-        
-        // Act
-        Map<String, Integer> result = cutoffTimeService.cutoffValues(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        // Should use default behavior without Saturday specific times
-    }
-
-    @Test
-    void testIsAuthorizingTime_WithinTimeRange() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Integer> cutoffData = new HashMap<>();
-        cutoffData.put("intHour", 10);
-        cutoffData.put("intMinute", 30);
-        cutoffData.put("startHour", 9);
-        cutoffData.put("startMinute", 0);
-        cutoffData.put("endHour", 17);
-        cutoffData.put("endMinute", 0);
-        
-        // Mock the cutoffValues method
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(cutoffData).when(spyService).cutoffValues(today, paymentMode, bankCode);
-        
-        // Act
-        boolean result = spyService.isAuthorizingTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertTrue(result);
-    }
-
-    @Test
-    void testIsAuthorizingTime_AtStartTime() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 9, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Integer> cutoffData = new HashMap<>();
-        cutoffData.put("intHour", 9);
-        cutoffData.put("intMinute", 30);
-        cutoffData.put("startHour", 9);
-        cutoffData.put("startMinute", 0);
-        cutoffData.put("endHour", 17);
-        cutoffData.put("endMinute", 0);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(cutoffData).when(spyService).cutoffValues(today, paymentMode, bankCode);
-        
-        // Act
-        boolean result = spyService.isAuthorizingTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertTrue(result);
-    }
-
-    @Test
-    void testIsAuthorizingTime_AtEndTime() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 17, 0);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Integer> cutoffData = new HashMap<>();
-        cutoffData.put("intHour", 17);
-        cutoffData.put("intMinute", 0);
-        cutoffData.put("startHour", 9);
-        cutoffData.put("startMinute", 0);
-        cutoffData.put("endHour", 17);
-        cutoffData.put("endMinute", 0);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(cutoffData).when(spyService).cutoffValues(today, paymentMode, bankCode);
-        
-        // Act
-        boolean result = spyService.isAuthorizingTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertTrue(result);
-    }
-
-    @Test
-    void testIsAuthorizingTime_BeforeStartTime() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 8, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Integer> cutoffData = new HashMap<>();
-        cutoffData.put("intHour", 8);
-        cutoffData.put("intMinute", 30);
-        cutoffData.put("startHour", 9);
-        cutoffData.put("startMinute", 0);
-        cutoffData.put("endHour", 17);
-        cutoffData.put("endMinute", 0);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(cutoffData).when(spyService).cutoffValues(today, paymentMode, bankCode);
-        
-        // Act
-        boolean result = spyService.isAuthorizingTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void testIsAuthorizingTime_AfterEndTime() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 17, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Integer> cutoffData = new HashMap<>();
-        cutoffData.put("intHour", 17);
-        cutoffData.put("intMinute", 30);
-        cutoffData.put("startHour", 9);
-        cutoffData.put("startMinute", 0);
-        cutoffData.put("endHour", 17);
-        cutoffData.put("endMinute", 0);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(cutoffData).when(spyService).cutoffValues(today, paymentMode, bankCode);
-        
-        // Act
-        boolean result = spyService.isAuthorizingTime(today, paymentMode, bankCode);
-        
-        // Assert
-        assertFalse(result);
-    }
-
-    @Test
-    void testGetNextWorkingDate_CurrentDateValid() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Object> holiday = new HashMap<>();
-        holiday.put("count", "0");
-        
-        when(holidayMasterDAOImpl.findHoliday(anyString(), anyString())).thenReturn(holiday);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(true).when(spyService).isValidDateAndTime(any(LocalDateTime.class), anyString(), anyString());
-        doReturn(true).when(spyService).isSameDay(any(LocalDateTime.class), anyString(), anyString());
-        
-        // Act
-        LocalDateTime result = spyService.getNextWorkingDate(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        verify(spyService).getNextDate(today, 0, paymentMode, bankCode);
-    }
-
-    @Test
-    void testGetNextWorkingDate_CurrentDateHoliday() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Object> holiday = new HashMap<>();
-        holiday.put("count", "1"); // Holiday
-        
-        when(holidayMasterDAOImpl.findHoliday(anyString(), anyString())).thenReturn(holiday);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(true).when(spyService).isValidDateAndTime(any(LocalDateTime.class), anyString(), anyString());
-        
-        // Act
-        LocalDateTime result = spyService.getNextWorkingDate(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        verify(spyService).getNextDate(today, 1, paymentMode, bankCode);
-    }
-
-    @Test
-    void testGetNextWorkingDate_MultipleIterationsNeeded() {
-        // Arrange
-        LocalDateTime today = LocalDateTime.of(2024, 1, 15, 10, 30);
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, Object> holiday = new HashMap<>();
-        holiday.put("count", "0");
-        
-        when(holidayMasterDAOImpl.findHoliday(anyString(), anyString())).thenReturn(holiday);
-        
-        CutoffTimeService spyService = spy(cutoffTimeService);
-        doReturn(false, false, true).when(spyService).isValidDateAndTime(any(LocalDateTime.class), anyString(), anyString());
-        doReturn(true).when(spyService).isSameDay(any(LocalDateTime.class), anyString(), anyString());
-        
-        // Act
-        LocalDateTime result = spyService.getNextWorkingDate(today, paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        verify(spyService, times(2)).getNextDate(any(LocalDateTime.class), eq(1), anyString(), anyString());
-    }
-
-    @Test
-    void testDisplayCutoffValues_RTGS() {
-        // Arrange
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("RTGS_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("RTGS_CUTOFF_END_TIME_SBI001", "17:00");
-        referenceData.put("RTGS_SAT_CUTOFF_START_TIME_SBI001", "10:00");
-        referenceData.put("RTGS_SAT_CUTOFF_END_TIME_SBI001", "14:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Object> result = cutoffTimeService.displayCutoffValues(paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(9, result.get("RTGS_startHour"));
-        assertEquals("00", result.get("RTGS_startMinute"));
-        assertEquals(5, result.get("RTGS_endHour")); // 17-12=5
-        assertEquals("00", result.get("RTGS_endMinute"));
-        assertEquals("A.M.", result.get("RTGS_startStamp"));
-        assertEquals("P.M.", result.get("RTGS_endStamp"));
-        
-        // Saturday values
-        assertEquals(10, result.get("RTGS_sat_startHour"));
-        assertEquals("00", result.get("RTGS_sat_startMinute"));
-        assertEquals(2, result.get("RTGS_sat_endHour")); // 14-12=2
-        assertEquals("00", result.get("RTGS_sat_endMinute"));
-    }
-
-    @Test
-    void testDisplayCutoffValues_NEFT() {
-        // Arrange
-        String paymentMode = "NEFT";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("NEFT_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("NEFT_CUTOFF_END_TIME_SBI001", "17:00");
-        referenceData.put("NEFT_SAT_CUTOFF_START_TIME_SBI001", "10:00");
-        referenceData.put("NEFT_SAT_CUTOFF_END_TIME_SBI001", "14:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Object> result = cutoffTimeService.displayCutoffValues(paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        // Verify Saturday values are present for NEFT
-        assertTrue(result.containsKey("NEFT_sat_startHour"));
-    }
-
-    @Test
-    void testDisplayCutoffValues_NonRTGSNEFT() {
-        // Arrange
-        String paymentMode = "IMPS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("IMPS_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("IMPS_CUTOFF_END_TIME_SBI001", "17:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Object> result = cutoffTimeService.displayCutoffValues(paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        // Should not have Saturday values for non-RTGS/NEFT
-        assertFalse(result.containsKey("IMPS_sat_startHour"));
-    }
-
-    @Test
-    void testDisplayCutoffValues_TimeConversionAMPM() {
-        // Arrange
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("RTGS_CUTOFF_START_TIME_SBI001", "00:00"); // 12 AM
-        referenceData.put("RTGS_CUTOFF_END_TIME_SBI001", "12:00"); // 12 PM
-        referenceData.put("RTGS_SAT_CUTOFF_START_TIME_SBI001", "13:00"); // 1 PM
-        referenceData.put("RTGS_SAT_CUTOFF_END_TIME_SBI001", "00:00"); // 12 AM
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        Map<String, Object> result = cutoffTimeService.displayCutoffValues(paymentMode, bankCode);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(12, result.get("RTGS_startHour")); // 00 becomes 12
-        assertEquals("A.M.", result.get("RTGS_startStamp"));
-        assertEquals(12, result.get("RTGS_endHour")); // 12 remains 12
-        assertEquals("P.M.", result.get("RTGS_endStamp"));
-        
-        assertEquals(1, result.get("RTGS_sat_startHour")); // 13-12=1
-        assertEquals("P.M.", result.get("RTGS_sat_startStamp"));
-        assertEquals(12, result.get("RTGS_sat_endHour")); // 00 becomes 12
-        assertEquals("A.M.", result.get("RTGS_sat_endStamp"));
-    }
-
-    @Test
-    void testIsScheduleTrue_WhenTimesExist() {
-        // Arrange
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("RTGS_CUTOFF_START_TIME_SBI001", "09:00");
-        referenceData.put("RTGS_CUTOFF_END_TIME_SBI001", "17:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        // Act
-        boolean result = cutoffTimeService.isScheduleTrue(paymentMode, bankCode);
-        
-        // Assert
-        assertTrue(result);
-    }
-
-    @Test
-    void testIsScheduleTrue_WhenStartTimeNull() {
-        // Arrange
-        String paymentMode = "RTGS";
-        String bankCode = "SBI001";
-        
-        Map<String, String> referenceData = new HashMap<>();
-        referenceData.put("RTGS_CUTOFF_START_TIME_SBI001", null);
-        referenceData.put("RTGS_CUTOFF_END_TIME_SBI001", "17:00");
-        
-        when(referenceDataCache.getCutOffTime()).thenReturn(referenceData);
-        
-        /
+}
