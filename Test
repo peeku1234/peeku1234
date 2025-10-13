@@ -1,253 +1,288 @@
-package com.sbi.yb.controller;
+package com.sbi.yb.services.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sbi.microservice.framework.exception.ValidationException;
-import com.sbi.microservice.framework.model.SBIApplicationResponse;
-import com.sbi.microservice.framework.model.Status;
-import com.sbi.microservice.framework.utils.FrameworkUtils;
-import com.sbi.yb.constant.ErrorConstants;
-import com.sbi.yb.constant.UtilsConstant;
-import com.sbi.yb.model.*;
-import com.sbi.yb.service.ApproveTestService;
-import com.sbi.yb.service.FileStoreService;
-import com.sbi.yb.service.ViewTransactionTestFileService;
-import com.sbi.yb.util.ServiceUtils;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 
-import java.util.Arrays;
-import java.util.List;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
+import com.sbi.yb.services.cache.ReferenceDataCache;
+import com.sbi.yb.services.constants.UtilsConstant;
+import com.sbi.yb.services.repository.HolidayMasterDAO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
 
-@ExtendWith(MockitoExtension.class)
-class UploadApproveTestFileControllerTest {
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
 
-    @InjectMocks
-    private UploadApproveTestFileController uploadApproveTestFileController;
+/**
+ * @author V1017583
+ * @version 1.0
+ */
+@Service
+public class CutoffTimeService {
 
-    @Mock
-    private FileStoreService fileStoreService;
 
-    @Mock
-    private ViewTransactionTestFileService viewTransactionTestFileService;
+  private final Logger logger = LoggerFactory.getLogger(CutoffTimeService.class);
 
-    @Mock
-    private FrameworkUtils frameworkUtils;
 
-    @Mock
-    private ApproveTestService approveTestService;
+  private HolidayMasterDAO holidayMasterDAOImpl;
 
-    @Mock
-    private HttpServletRequest httpServletRequest;
 
-    @Mock
-    private HttpServletResponse httpServletResponse;
+  private ReferenceDataCache referenceDataCache;
 
-    private ObjectMapper objectMapper = new ObjectMapper();
+  @Autowired
+  public CutoffTimeService(HolidayMasterDAO holidayMasterDAOImpl, ReferenceDataCache referenceDataCache){
+    this.holidayMasterDAOImpl = holidayMasterDAOImpl;
+    this.referenceDataCache = referenceDataCache;
+  }
 
-    private TxnFileUploadRequest txnFileUploadRequest;
-    private ViewTestFileRequest viewTestFileRequest;
-    private ApproveTestFileRequest approveTestFileRequest;
-    private SBIApplicationResponse mockAppResponse;
+  public boolean isValidDateAndTime(LocalDateTime today, String paymentMode, String bankCode) {
+    logger.info("isValidDateAndTime method begins. strDate : {} , Payment Mode :{} ", today, paymentMode);
+    boolean blFlag = false;
 
-    @BeforeEach
-    void setup() throws JsonProcessingException {
-        // Setup test requests
-        txnFileUploadRequest = new TxnFileUploadRequest();
-        txnFileUploadRequest.setFileName("testfile.txt");
-        txnFileUploadRequest.setFileType("TEST");
-
-        viewTestFileRequest = new ViewTestFileRequest();
-        viewTestFileRequest.setFileReferenceNo("123456");
-
-        approveTestFileRequest = new ApproveTestFileRequest();
-        approveTestFileRequest.setFileReferenceNo("123456");
-        approveTestFileRequest.setStatus("APPROVED");
-
-        // Setup mock response
-        mockAppResponse = new SBIApplicationResponse();
-        mockAppResponse.setStatus(Status.SUCCESS.getStatusValue());
-        mockAppResponse.setStatusCode(UtilsConstant.SUCCESSCODE);
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    String strDate = simpleDateFormat.format(today);
+    Map<String, Object> holiday = holidayMasterDAOImpl.findHoliday(strDate, paymentMode);
+    if (holiday.get(UtilsConstant.COUNT) != null && holiday.get(UtilsConstant.COUNT).equals("0")) {
+      blFlag = isAuthorizingTime(today, paymentMode, bankCode);
     }
 
-    @Test
-    void testUploadTestFile_Success() throws JsonProcessingException {
-        TxnFileUploadResponse txnFileUploadResponse = new TxnFileUploadResponse();
-        txnFileUploadResponse.setFileReferenceNo("101726");
-        txnFileUploadResponse.setFileName("testfile.txt");
-        
-        String payload = objectMapper.writeValueAsString(txnFileUploadRequest);
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
-        when(fileStoreService.uploadFileStore(any(TxnFileUploadRequest.class), anyString())).thenReturn(txnFileUploadResponse);
-        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
+    logger.info("isValidDateAndTime method returns : {}", blFlag);
 
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.uploadTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
-        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
+    return blFlag;
+  }
+
+  public Map<String, Integer> cutoffValues(LocalDateTime today, String paymentMode, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("Inside cutoffValues method begin:: {}, ::paymentMode {}", today, paymentMode);
+    int intHour = 0;
+    int intMinute = 0;
+    String strDay = null;
+    Map<String, Integer> dataValueMap = new HashMap<>();
+
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("E/MM/yyyy/HH/mm");
+    String strTxnDate = simpleDateFormat.format(today);
+    String[] dateArray = strTxnDate.split("/");
+    strDay = dateArray[0];
+    intHour = Integer.parseInt(dateArray[3]);
+    intMinute = Integer.parseInt(dateArray[4]);
+    Map<String, String> data = getReferenceMap(paymentMode);
+    String startTime = String.valueOf(data.get(paymentMode + "_CUTOFF_START_TIME_" + bankCode));
+    String endTime = String.valueOf(data.get(paymentMode + "_CUTOFF_END_TIME_" + bankCode));
+    if (strDay.equalsIgnoreCase("Sat") && (paymentMode.equals("RTGS") || paymentMode.equals("NEFT"))) {
+      startTime = String.valueOf(data.get(paymentMode + "_SAT_CUTOFF_START_TIME_" + bankCode));
+      endTime = String.valueOf(data.get(paymentMode + "_SAT_CUTOFF_END_TIME_" + bankCode));
+    }
+    logger.info("Start time = {} ;End Time= {}", startTime, endTime);
+    String[] startTimeArray = startTime.split(":");
+    int startHour = Integer.parseInt(startTimeArray[0]);
+    int startMinute = Integer.parseInt(startTimeArray[1]);
+    String[] endTimeArray = endTime.split(":");
+    int endHour = Integer.parseInt(endTimeArray[0]);
+    int endMinute = Integer.parseInt(endTimeArray[1]);
+    dataValueMap.put("intHour", intHour);
+    dataValueMap.put("intMinute", intMinute);
+    dataValueMap.put("startHour", startHour);
+    dataValueMap.put("startMinute", startMinute);
+    dataValueMap.put("endHour", endHour);
+    dataValueMap.put("endMinute",endMinute);
+
+    return dataValueMap;
+
+  }
+
+  public boolean isAuthorizingTime(LocalDateTime today, String type, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("isAuthorizingTime method - begin. Time : {} , Type : {}", today, type);
+    boolean validDayTime = false;
+    String strDay = null;
+    int intHour = 0;
+    int intMinute = 0;
+
+    Map<String, Integer> data = cutoffValues(today, type, bankCode);
+    intHour = data.get("intHour");
+    intMinute = data.get("intMinute");
+    int startHour = data.get("startHour");
+    int startMinute = data.get("startMinute");
+    int endHour = data.get("endHour");
+    int endMinute = data.get("endMinute");
+    if (((intHour > startHour && intHour < endHour) && (intMinute <= 59)) ||
+            ((intHour == endHour) && intMinute <= endMinute) ||
+            ((intHour == startHour) && intMinute >= startMinute))
+      validDayTime = true;
+
+    if (logger.isDebugEnabled())
+      logger.debug(" isAuthorizingTime returns : {} , for Day : {} , hour : {} , minute : {}", validDayTime, strDay, intHour, intMinute);
+    return validDayTime;
+  }
+
+  public void getNextDate(LocalDateTime date, int days, String paymentMode, String bankCode) {
+
+    date = date.plusDays(days);
+
+    Map<String, Integer> data;
+    data = cutoffValues(date, paymentMode, bankCode);
+    int startHour = data.get("startHour");
+    int startMinute = data.get("startMinute");
+
+    date = LocalDateTime.of(LocalDate.now(), LocalTime.of(startHour, startMinute, 0));
+
+    logger.info("getNextDate method date : {}", date);
+  }
+
+  public LocalDateTime getNextWorkingDate(LocalDateTime date, String paymentMode, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("getNextWorkingDate - begins for date : {} , Payment Mode : {} ", date, paymentMode);
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    String strDate = simpleDateFormat.format(date);
+    Map<String, Object> holiday = holidayMasterDAOImpl.findHoliday(strDate, paymentMode);
+    if (holiday.get("count") != null && holiday.get("count").equals("0")) {
+      if (isSameDay(date, paymentMode, bankCode)) {
+        getNextDate(date, 0, paymentMode, bankCode);
+      } else {
+        getNextDate(date, 1, paymentMode, bankCode);
+      }
+    } else {
+      getNextDate(date, 1, paymentMode, bankCode);
+    }
+    boolean blnFlag = isValidDateAndTime(date, paymentMode, bankCode);
+    while (!blnFlag) {
+      getNextDate(date, 1, paymentMode, bankCode);
+      blnFlag = isValidDateAndTime(date, paymentMode, bankCode);
+    }
+    if (logger.isDebugEnabled())
+      logger.debug("getNextWorkingDate - ends and date scheduled : {}", date);
+    return date;
+  }
+
+  private boolean isSameDay(LocalDateTime today, String paymentMode, String bankCode) {
+
+    logger.info(" isSameDay method begins for date : {} ", today);
+    boolean validDayTime = false;
+
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("E/MM/yyyy/HH/mm");
+    String strTxnDate = simpleDateFormat.format(today);
+    String[] dateArray = strTxnDate.split("/");
+    String strDay = dateArray[0];
+    int intHour = Integer.parseInt(dateArray[3]);
+    int intMinute = Integer.parseInt(dateArray[4]);
+    Map<String, Integer> data = cutoffValues(today, paymentMode, bankCode);
+    int startHour = data.get("startHour");
+    int startMinute = data.get("startMinute");
+    if (intHour < startHour || (intHour == startHour && intMinute <= startMinute))
+      validDayTime = true;
+    if (logger.isDebugEnabled())
+      logger.debug("isSameDay Method ends Day : {} ,hour : {},minute :{}", strDay, intHour, intMinute);
+
+    logger.info("isSameDay method returns {}", validDayTime);
+    return validDayTime;
+  }
+
+  public Map<String, Object> displayCutoffValues(String paymentMode, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("Inside displayCutoffValues method begin::{}", paymentMode);
+    Map<String, Object> dataValueMap = new HashMap<>();
+    String startStamp = "A.M.";
+    String endStamp = "A.M.";
+    String satStartStamp = "A.M.";
+    String satEndStamp = "A.M.";
+
+    Map<String, String> data = getReferenceMap(paymentMode);
+    String startTime = data.get(paymentMode + "_CUTOFF_START_TIME_" + bankCode);
+    String endTime = data.get(paymentMode + "_CUTOFF_END_TIME_" + bankCode);
+    String[] startTimeArray = startTime.split(":");
+    int startHour = Integer.parseInt(startTimeArray[0]);
+    String startMinute = startTimeArray[1];
+    String[] endTimeArray = endTime.split(":");
+    int endHour = Integer.parseInt(endTimeArray[0]);
+    String endMinute = endTimeArray[1];
+    logger.info("startHour :{} ,startMinute : {},endHour :{} , endMinute :{}", startHour, startMinute, endHour, endMinute);
+    if (endHour >= 12) {
+      if (endHour > 12)
+        endHour = endHour - 12;
+      endStamp = "P.M.";
+    }
+    if (startHour >= 12) {
+      if (startHour > 12)
+        startHour = startHour - 12;
+      startStamp = "P.M.";
+    }
+    if (endHour == 00)
+      endHour = 12;
+    if (startHour == 00)
+      startHour = 12;
+    dataValueMap.put(paymentMode + "_startHour", startHour);
+    dataValueMap.put(paymentMode + "_startMinute", startMinute);
+    dataValueMap.put(paymentMode + "_endHour", endHour);
+    dataValueMap.put(paymentMode + "_endMinute", endMinute);
+
+    dataValueMap.put(paymentMode + "_startStamp", startStamp);
+    dataValueMap.put(paymentMode + "_endStamp", endStamp);
+
+    if (paymentMode.equalsIgnoreCase("NEFT") || paymentMode.equalsIgnoreCase("RTGS")) {
+      String satStartTime = data.get(paymentMode + "_SAT_CUTOFF_START_TIME_" + bankCode);
+      String satEndTime = data.get(paymentMode + "_SAT_CUTOFF_END_TIME_" + bankCode);
+      String[] satStartTimeArray = satStartTime.split(":");
+      int satStartHour = Integer.parseInt(satStartTimeArray[0]);
+      String satStartMinute = satStartTimeArray[1];
+      String[] satEndTimeArray = satEndTime.split(":");
+      int satEndHour = Integer.parseInt(satEndTimeArray[0]);
+      String satEndMinute = satEndTimeArray[1];
+      if (satEndHour >= 12) {
+        if (satEndHour > 12)
+          satEndHour = satEndHour - 12;
+        satStartStamp = "P.M.";
+      }
+      if (satStartHour >= 12) {
+        if (satStartHour > 12)
+          satStartHour = satStartHour - 12;
+        satEndStamp = "P.M.";
+      }
+      if (satEndHour == 00)
+        satEndHour = 12;
+      if (satStartHour == 00)
+        satStartHour = 12;
+      dataValueMap.put(paymentMode + "_sat_startHour", satStartHour);
+      dataValueMap.put(paymentMode + "_sat_startMinute", satStartMinute);
+      dataValueMap.put(paymentMode + "_sat_endHour", satEndHour);
+      dataValueMap.put(paymentMode + "_sat_endMinute", satEndMinute);
+      dataValueMap.put(paymentMode + "_sat_startStamp", satStartStamp);
+      dataValueMap.put(paymentMode + "_sat_endStamp", satEndStamp);
     }
 
-    @Test
-    void testUploadTestFile_JsonProcessingException() throws JsonProcessingException {
-        String invalidPayload = "invalid json";
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
-        
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.uploadTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
-        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
+    if (logger.isDebugEnabled())
+      logger.debug("DATA VALUE MAP {}", dataValueMap);
+
+    logger.debug("Inside displayCutoffValues method ends");
+    return dataValueMap;
+  }
+
+  public boolean isScheduleTrue(String paymentMode, String bankCode) {
+    logger.info(" isScheduleTrue method begins for merchant:{} ", paymentMode);
+    boolean scheduling = false;
+
+    Map<String, String> data = getReferenceMap(paymentMode);
+    String startTime = data.get(paymentMode + "_CUTOFF_START_TIME_" + bankCode);
+    String endTime = data.get(paymentMode + "_CUTOFF_END_TIME_" + bankCode);
+    if (startTime != null && endTime != null) {
+      scheduling = true;
     }
+    logger.info("isScheduleTrue method  ends {}", scheduling);
+    return scheduling;
+  }
 
-    @Test
-    void testUploadTestFile_ValidationException() {
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(null);
-        
-        Assertions.assertThrows(ValidationException.class, () -> 
-            uploadApproveTestFileController.uploadTestFile(httpServletRequest, httpServletResponse));
+
+  private Map<String, String> getReferenceMap(String paymentMode) {
+
+    Map<String, String> cutOffTime = new HashMap<>();
+
+    if (paymentMode.equals("RTGS") || paymentMode.equals("NEFT")) {
+      cutOffTime = referenceDataCache.getCutOffTime();
     }
+    return cutOffTime;
+  }
 
-    @Test
-    void testViewTestFile_Success() throws JsonProcessingException {
-        ViewTestFileResponse response1 = new ViewTestFileResponse();
-        response1.setFileReferenceNo("123456");
-        ViewTestFileResponse response2 = new ViewTestFileResponse();
-        response2.setFileReferenceNo("789012");
-        List<ViewTestFileResponse> viewTestFileResponses = Arrays.asList(response1, response2);
-        
-        String payload = objectMapper.writeValueAsString(viewTestFileRequest);
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
-        when(viewTransactionTestFileService.viewTransactionTestFileDetails(any(ViewTestFileRequest.class))).thenReturn(viewTestFileResponses);
-        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
-
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
-        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
-    }
-
-    @Test
-    void testViewTestFile_JsonProcessingException() throws JsonProcessingException {
-        String invalidPayload = "invalid json";
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
-        
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
-        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
-    }
-
-    @Test
-    void testViewTestFile_ValidationException() {
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn("");
-        
-        Assertions.assertThrows(ValidationException.class, () -> 
-            uploadApproveTestFileController.viewTestFile(httpServletRequest, httpServletResponse));
-    }
-
-    @Test
-    void testViewEchequeDetails_Success() throws JsonProcessingException {
-        ViewTestFileEchequeListResponse echequeResponse = new ViewTestFileEchequeListResponse();
-        echequeResponse.setTotalRecords(5);
-        
-        String payload = objectMapper.writeValueAsString(viewTestFileRequest);
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
-        when(viewTransactionTestFileService.viewEchequeDetails(any(ViewTestFileRequest.class))).thenReturn(echequeResponse);
-        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
-
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewEchequeDetails(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
-        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
-    }
-
-    @Test
-    void testViewEchequeDetails_JsonProcessingException() throws JsonProcessingException {
-        String invalidPayload = "invalid json";
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
-        
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.viewEchequeDetails(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
-        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
-    }
-
-    @Test
-    void testViewEchequeDetails_ValidationException() {
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn("   ");
-        
-        Assertions.assertThrows(ValidationException.class, () -> 
-            uploadApproveTestFileController.viewEchequeDetails(httpServletRequest, httpServletResponse));
-    }
-
-    @Test
-    void testApproveTestFile_Success() throws JsonProcessingException {
-        ApproveTestFileResponse approveResponse = new ApproveTestFileResponse();
-        approveResponse.setStatus("APPROVED");
-        approveResponse.setFileReferenceNo("123456");
-        
-        String payload = objectMapper.writeValueAsString(approveTestFileRequest);
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
-        when(approveTestService.updateTestFileConfig(any(ApproveTestFileRequest.class))).thenReturn(approveResponse);
-        when(frameworkUtils.buildSuccessResponse(any(), anyString())).thenReturn(mockAppResponse);
-
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(UtilsConstant.SUCCESSCODE, response.getBody().getStatusCode());
-        Assertions.assertEquals(Status.SUCCESS.getStatusValue(), response.getBody().getStatus());
-    }
-
-    @Test
-    void testApproveTestFile_JsonProcessingException() throws JsonProcessingException {
-        String invalidPayload = "invalid json";
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(invalidPayload);
-        
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertEquals(ErrorConstants.NO_VALID_INPUT, response.getBody().getStatusCode());
-        Assertions.assertEquals(UtilsConstant.FAILURE, response.getBody().getStatus());
-    }
-
-    @Test
-    void testApproveTestFile_ValidationException() {
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(null);
-        
-        Assertions.assertThrows(ValidationException.class, () -> 
-            uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse));
-    }
-
-    @Test
-    void testApproveTestFile_NullServiceResponse() throws JsonProcessingException {
-        String payload = objectMapper.writeValueAsString(approveTestFileRequest);
-        
-        when(ServiceUtils.safeGetParameter(httpServletRequest, UtilsConstant.PLAIN_PAYLOAD)).thenReturn(payload);
-        when(approveTestService.updateTestFileConfig(any(ApproveTestFileRequest.class))).thenReturn(null);
-
-        ResponseEntity<SBIApplicationResponse> response = uploadApproveTestFileController.approveTestFile(httpServletRequest, httpServletResponse);
-        
-        Assertions.assertNotNull(response);
-        Assertions.assertEquals(HttpStatus.OK, response.getStatusCode());
-        Assertions.assertNull(response.getBody().getData());
-    }
 }
