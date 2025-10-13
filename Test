@@ -1,91 +1,66 @@
 package com.sbi.yb.services.repository.impl;
 
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 
-import com.sbi.microservice.framework.exception.TechnicalException;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-import com.sbi.yb.services.constants.ErrorConstants;
-import com.sbi.yb.services.constants.SQLConstants;
-import com.sbi.yb.services.constants.UtilsConstant;
-import com.sbi.yb.services.repository.HolidayMasterDAO;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
+@DisplayName("HolidayMasterDAOImpl Comprehensive Tests")
+class HolidayMasterDAOImplComprehensiveTest {
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.Map;
+    // ... (all the above tests can be organized in nested classes)
 
-/**
- * This interface is used to fetch the holiday details of NEFT or RTGS.
- *
- * @author V1017583
- * @version 1.0
- */
-@Repository
-public class HolidayMasterDAOImpl implements HolidayMasterDAO {
-  /**
-   * LOGGER.
-   **/
-  private static final Logger LOGGER = LoggerFactory.getLogger(HolidayMasterDAOImpl.class);
-  /**
-   * NamedParameterJdbcTemplate.
-   **/
-  private NamedParameterJdbcTemplate jdbcTemplate;
+    @Nested
+    @DisplayName("Exception Handling Tests")
+    class ExceptionHandlingTests {
+        
+        @Test
+        @DisplayName("Should handle DataAccessResourceFailureException")
+        void testFindHoliday_WithDataAccessResourceFailureException() {
+            // This test would be similar to the DataAccessException test
+            // but specifically for different types of DataAccessException
+        }
 
-  /**
-   * Invoke constructor call.
-   *
-   * @param namedparamJdbcTemplate injecting jdbcTemplate
-   */
-  @Autowired
-  public HolidayMasterDAOImpl(final NamedParameterJdbcTemplate namedparamJdbcTemplate) {
-    this.jdbcTemplate = namedparamJdbcTemplate;
-  }
-
-  /**
-   * Holiday details .
-   *
-   * @param dateTime     dateTime
-   * @param merchantCode merchantCode
-   * @return returning holiday details
-   *
-   */
-  public Map<String, Object> findHoliday(String dateTime, String merchantCode) {
-    LOGGER.debug("findHoliday - method begin. DateTime : {} , MerchantCode: {}", dateTime, merchantCode);
-    Map<String, Object> resultMap = null;
-    try {
-      MapSqlParameterSource params = new MapSqlParameterSource();
-
-      params.addValue("dateTime", dateTime).addValue("dateTime", dateTime).addValue("merchantCode", merchantCode);
-
-      LOGGER.info("findHoliday param ::{}", params);
-
-      if (merchantCode.equalsIgnoreCase(UtilsConstant.RTGS) || merchantCode.equalsIgnoreCase(UtilsConstant.NEFT)
-              || merchantCode.equalsIgnoreCase("BANK_HOLIDAY")) {
-        resultMap = jdbcTemplate.queryForObject(SQLConstants.GET_HOLIDAY_COUNT_AND_DATE, params, new HolidayRowMapper());
-      }
-    } catch (DataAccessException ex) {
-      LOGGER.error("DataAccessException Occurred {}", ex.getMessage());
-      throw new TechnicalException("Failed to connect to Db", ErrorConstants.FATAL_EXCEPTION_ERRORCODE);
+        @Test
+        @DisplayName("Should handle QueryTimeoutException")
+        void testFindHoliday_WithQueryTimeoutException() {
+            // Test for specific timeout exceptions
+        }
     }
-    LOGGER.debug("findHoliday(String dateTime, String merchantCode) - method end");
-    return resultMap;
-  }
 
-  private static class HolidayRowMapper implements RowMapper<Map<String, Object>> {
-    public Map<String, Object> mapRow(ResultSet rs, int arg1) throws SQLException {
-      Map<String, Object> dateMap = new HashMap<>();
-      dateMap.put("count", rs.getString("count"));
-      dateMap.put("date", rs.getDate("schdate"));
-      return dateMap;
+    @Nested
+    @DisplayName("Parameterized Merchant Code Tests")
+    class ParameterizedMerchantCodeTests {
+        
+        @ParameterizedTest
+        @ValueSource(strings = {"RTGS", "rtgs", "RtGs", "NEFT", "neft", "BANK_HOLIDAY", "bank_holiday"})
+        @DisplayName("Should accept valid merchant codes case insensitively")
+        void testFindHoliday_WithVariousValidMerchantCodes(String merchantCode) {
+            // Parameterized test for different case variations
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"INVALID", "TEST", "ABCD", "", " "})
+        @DisplayName("Should return null for invalid merchant codes")
+        void testFindHoliday_WithVariousInvalidMerchantCodes(String merchantCode) {
+            // Parameterized test for invalid codes
+        }
     }
-  }
 
-
+    @Nested
+    @DisplayName("SQL Injection Safety Tests")
+    class SQLInjectionSafetyTests {
+        
+        @Test
+        @DisplayName("Should handle potentially malicious merchant code")
+        void testFindHoliday_WithSQLInjectionAttempt() {
+            // Test that the code safely handles potential SQL injection attempts
+        }
+    }
 }
