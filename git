@@ -1,695 +1,288 @@
+package com.sbi.yb.services.service.impl;
 
-package com.sbi.yb.services.repository.impl;
 
 
-import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.services.cache.ReferenceDataCache;
 import com.sbi.yb.services.constants.UtilsConstant;
-import com.sbi.yb.services.repository.BankSystemDAO;
+import com.sbi.yb.services.repository.HolidayMasterDAO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-
-@Component
-public class BankSystemDAOFactory{
-    private static final Logger logger = LoggerFactory.getLogger(BankSystemDAOFactory.class);
-
-    private final BankSystemDAO switchDAOImpl;
-    private final BankSystemDAO coreDAOImpl;
-
-    @Autowired
-    public BankSystemDAOFactory(@Qualifier("switchDAOImpl") final BankSystemDAO switchDAOImpl,
-                                @Qualifier("coreDAOImpl")final BankSystemDAO coreDAOImpl) {
-        this.switchDAOImpl = switchDAOImpl;
-        this.coreDAOImpl = coreDAOImpl;
-
-    }
-    public BankSystemDAO getBankSystemDAO(String txnPath) {
-
-        if (logger.isDebugEnabled())
-            logger.debug("getBankSystemDAO(String txnPath) ");
-
-        if (txnPath != null && !txnPath.trim().equalsIgnoreCase(UtilsConstant.EMPTY)) {
-
-            if (txnPath.equalsIgnoreCase(UtilsConstant.CORE_TO_CORE) || txnPath.equalsIgnoreCase(UtilsConstant.CORE_TO_NONCORE) || txnPath.equalsIgnoreCase("CMC")) {
-                if (logger.isDebugEnabled())
-                    logger.debug("getBankSystemDAO(String txnPath) ");
-                return coreDAOImpl;
-
-            } else {
-                if (logger.isDebugEnabled())
-                    logger.debug("getBankSystemDAO(String txnPath) ");
-                return switchDAOImpl;
-            }
-        } else {
-            throw new TechnicalException("Error Code", "Error Message");
-        }
-    }
-}
-
-
-
-
-
-
-package com.sbi.yb.services.repository.impl;
-
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.services.constants.UtilsConstant;
-import com.sbi.yb.services.repository.BankSystemDAO;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-class BankSystemDAOFactoryTest {
-
-    @Mock
-    private BankSystemDAO switchDAOImpl;
-
-    @Mock
-    private BankSystemDAO coreDAOImpl;
-
-    private BankSystemDAOFactory factory;
-
-    @BeforeEach
-    void setUp() {
-        MockitoAnnotations.openMocks(this);
-        factory = new BankSystemDAOFactory(switchDAOImpl, coreDAOImpl);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CoreToCore_ShouldReturnCoreDAOImpl() {
-        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_CORE);
-        assertEquals(coreDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CoreToNonCore_ShouldReturnCoreDAOImpl() {
-        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_NONCORE);
-        assertEquals(coreDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CMC_ShouldReturnCoreDAOImpl() {
-        BankSystemDAO result = factory.getBankSystemDAO("CMC");
-        assertEquals(coreDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_OtherTxn_ShouldReturnSwitchDAOImpl() {
-        BankSystemDAO result = factory.getBankSystemDAO("NONCORE_TO_SWITCH");
-        assertEquals(switchDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_NullTxn_ShouldThrowException() {
-        TechnicalException exception = assertThrows(TechnicalException.class, () -> {
-            factory.getBankSystemDAO(null);
-        });
-        assertEquals("Error Code", exception.getErrorCode());
-        assertEquals("Error Message", exception.getErrorMessage());
-    }
-
-    @Test
-    void testGetBankSystemDAO_EmptyTxn_ShouldThrowException() {
-        TechnicalException exception = assertThrows(TechnicalException.class, () -> {
-            factory.getBankSystemDAO("   "); // whitespace only
-        });
-        assertEquals("Error Code", exception.getErrorCode());
-        assertEquals("Error Message", exception.getErrorMessage());
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-package com.sbi.yb.services.repository.impl;
-
-
-/**
- *
- *  @version 1.0
- * @author V1017583
- *
- */
-
-
-import com.sbi.microservice.framework.constant.ErrorCodes;
-import com.sbi.microservice.framework.exception.TechnicalException;
-
-import com.sbi.yb.services.constants.SQLConstants;
-import com.sbi.yb.services.constants.UtilsConstant;
-import com.sbi.yb.services.repository.SBINameValueMasterDAO;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.RowMapper;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Repository;
-
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
+/**
+ * @author V1017583
+ * @version 1.0
+ */
+@Service
+public class CutoffTimeService {
 
-@Repository
-public class SBINameValueMasterDAOImpl implements SBINameValueMasterDAO {
-    private  static final Logger logger = LoggerFactory.getLogger(SBINameValueMasterDAOImpl.class);
 
-    private NamedParameterJdbcTemplate jdbcTemplate;
+  private final Logger logger = LoggerFactory.getLogger(CutoffTimeService.class);
 
-    @Autowired
-    public SBINameValueMasterDAOImpl(NamedParameterJdbcTemplate jdbcTemplate){
-        this.jdbcTemplate = jdbcTemplate;
+
+  private HolidayMasterDAO holidayMasterDAOImpl;
+
+
+  private ReferenceDataCache referenceDataCache;
+
+  @Autowired
+  public CutoffTimeService(HolidayMasterDAO holidayMasterDAOImpl, ReferenceDataCache referenceDataCache){
+    this.holidayMasterDAOImpl = holidayMasterDAOImpl;
+    this.referenceDataCache = referenceDataCache;
+  }
+
+  public boolean isValidDateAndTime(LocalDateTime today, String paymentMode, String bankCode) {
+    logger.info("isValidDateAndTime method begins. strDate : {} , Payment Mode :{} ", today, paymentMode);
+    boolean blFlag = false;
+
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    String strDate = simpleDateFormat.format(today);
+    Map<String, Object> holiday = holidayMasterDAOImpl.findHoliday(strDate, paymentMode);
+    if (holiday.get(UtilsConstant.COUNT) != null && holiday.get(UtilsConstant.COUNT).equals("0")) {
+      blFlag = isAuthorizingTime(today, paymentMode, bankCode);
     }
 
+    logger.info("isValidDateAndTime method returns : {}", blFlag);
 
-    /**
-     * This below method is used to fetch details of data stored in SBI_NAME_VALUE_MASTER
-     *
-     * @return
-     */
-    public Map<String, String> getNameValueMasterData()  {
+    return blFlag;
+  }
 
-        logger.info("getNameValueMasterData() {}" , UtilsConstant.METHODBEGIN);
-        Map<String, String> data = null;
-        try {
-            List<Map<String, String>> nameList = jdbcTemplate.query(SQLConstants.NAME_VALUE_DATA,
-                    new NameValueMasterDataRowMapper());
-            data = nameList.get(0);
-            logger.info("Data of query  {}" , data);
-            if (logger.isDebugEnabled()) {
-                logger.info("data : {}" , data);
-            }
+  public Map<String, Integer> cutoffValues(LocalDateTime today, String paymentMode, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("Inside cutoffValues method begin:: {}, ::paymentMode {}", today, paymentMode);
+    int intHour = 0;
+    int intMinute = 0;
+    String strDay = null;
+    Map<String, Integer> dataValueMap = new HashMap<>();
 
-        } catch(DataAccessException ex) {
-            logger.error("getNameValueMasterData() exception occured {}" ,ex.getMessage());
-            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH, ErrorCodes.DB_ACCESS_FAILURE);
-        }
-        logger.info("getNameValueMasterData() {}" , UtilsConstant.METHODEND);
-        return data;
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("E/MM/yyyy/HH/mm");
+    String strTxnDate = simpleDateFormat.format(today);
+    String[] dateArray = strTxnDate.split("/");
+    strDay = dateArray[0];
+    intHour = Integer.parseInt(dateArray[3]);
+    intMinute = Integer.parseInt(dateArray[4]);
+    Map<String, String> data = getReferenceMap(paymentMode);
+    String startTime = String.valueOf(data.get(paymentMode + "_CUTOFF_START_TIME_" + bankCode));
+    String endTime = String.valueOf(data.get(paymentMode + "_CUTOFF_END_TIME_" + bankCode));
+    if (strDay.equalsIgnoreCase("Sat") && (paymentMode.equals("RTGS") || paymentMode.equals("NEFT"))) {
+      startTime = String.valueOf(data.get(paymentMode + "_SAT_CUTOFF_START_TIME_" + bankCode));
+      endTime = String.valueOf(data.get(paymentMode + "_SAT_CUTOFF_END_TIME_" + bankCode));
+    }
+    logger.info("Start time = {} ;End Time= {}", startTime, endTime);
+    String[] startTimeArray = startTime.split(":");
+    int startHour = Integer.parseInt(startTimeArray[0]);
+    int startMinute = Integer.parseInt(startTimeArray[1]);
+    String[] endTimeArray = endTime.split(":");
+    int endHour = Integer.parseInt(endTimeArray[0]);
+    int endMinute = Integer.parseInt(endTimeArray[1]);
+    dataValueMap.put("intHour", intHour);
+    dataValueMap.put("intMinute", intMinute);
+    dataValueMap.put("startHour", startHour);
+    dataValueMap.put("startMinute", startMinute);
+    dataValueMap.put("endHour", endHour);
+    dataValueMap.put("endMinute",endMinute);
+
+    return dataValueMap;
+
+  }
+
+  public boolean isAuthorizingTime(LocalDateTime today, String type, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("isAuthorizingTime method - begin. Time : {} , Type : {}", today, type);
+    boolean validDayTime = false;
+    String strDay = null;
+    int intHour = 0;
+    int intMinute = 0;
+
+    Map<String, Integer> data = cutoffValues(today, type, bankCode);
+    intHour = data.get("intHour");
+    intMinute = data.get("intMinute");
+    int startHour = data.get("startHour");
+    int startMinute = data.get("startMinute");
+    int endHour = data.get("endHour");
+    int endMinute = data.get("endMinute");
+    if (((intHour > startHour && intHour < endHour) && (intMinute <= 59)) ||
+            ((intHour == endHour) && intMinute <= endMinute) ||
+            ((intHour == startHour) && intMinute >= startMinute))
+      validDayTime = true;
+
+    if (logger.isDebugEnabled())
+      logger.debug(" isAuthorizingTime returns : {} , for Day : {} , hour : {} , minute : {}", validDayTime, strDay, intHour, intMinute);
+    return validDayTime;
+  }
+
+  public void getNextDate(LocalDateTime date, int days, String paymentMode, String bankCode) {
+
+    date = date.plusDays(days);
+
+    Map<String, Integer> data;
+    data = cutoffValues(date, paymentMode, bankCode);
+    int startHour = data.get("startHour");
+    int startMinute = data.get("startMinute");
+
+    date = LocalDateTime.of(LocalDate.now(), LocalTime.of(startHour, startMinute, 0));
+
+    logger.info("getNextDate method date : {}", date);
+  }
+
+  public LocalDateTime getNextWorkingDate(LocalDateTime date, String paymentMode, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("getNextWorkingDate - begins for date : {} , Payment Mode : {} ", date, paymentMode);
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    String strDate = simpleDateFormat.format(date);
+    Map<String, Object> holiday = holidayMasterDAOImpl.findHoliday(strDate, paymentMode);
+    if (holiday.get("count") != null && holiday.get("count").equals("0")) {
+      if (isSameDay(date, paymentMode, bankCode)) {
+        getNextDate(date, 0, paymentMode, bankCode);
+      } else {
+        getNextDate(date, 1, paymentMode, bankCode);
+      }
+    } else {
+      getNextDate(date, 1, paymentMode, bankCode);
+    }
+    boolean blnFlag = isValidDateAndTime(date, paymentMode, bankCode);
+    while (!blnFlag) {
+      getNextDate(date, 1, paymentMode, bankCode);
+      blnFlag = isValidDateAndTime(date, paymentMode, bankCode);
+    }
+    if (logger.isDebugEnabled())
+      logger.debug("getNextWorkingDate - ends and date scheduled : {}", date);
+    return date;
+  }
+
+  private boolean isSameDay(LocalDateTime today, String paymentMode, String bankCode) {
+
+    logger.info(" isSameDay method begins for date : {} ", today);
+    boolean validDayTime = false;
+
+    DateTimeFormatter simpleDateFormat = DateTimeFormatter.ofPattern("E/MM/yyyy/HH/mm");
+    String strTxnDate = simpleDateFormat.format(today);
+    String[] dateArray = strTxnDate.split("/");
+    String strDay = dateArray[0];
+    int intHour = Integer.parseInt(dateArray[3]);
+    int intMinute = Integer.parseInt(dateArray[4]);
+    Map<String, Integer> data = cutoffValues(today, paymentMode, bankCode);
+    int startHour = data.get("startHour");
+    int startMinute = data.get("startMinute");
+    if (intHour < startHour || (intHour == startHour && intMinute <= startMinute))
+      validDayTime = true;
+    if (logger.isDebugEnabled())
+      logger.debug("isSameDay Method ends Day : {} ,hour : {},minute :{}", strDay, intHour, intMinute);
+
+    logger.info("isSameDay method returns {}", validDayTime);
+    return validDayTime;
+  }
+
+  public Map<String, Object> displayCutoffValues(String paymentMode, String bankCode) {
+    if (logger.isDebugEnabled())
+      logger.debug("Inside displayCutoffValues method begin::{}", paymentMode);
+    Map<String, Object> dataValueMap = new HashMap<>();
+    String startStamp = "A.M.";
+    String endStamp = "A.M.";
+    String satStartStamp = "A.M.";
+    String satEndStamp = "A.M.";
+
+    Map<String, String> data = getReferenceMap(paymentMode);
+    String startTime = data.get(paymentMode + "_CUTOFF_START_TIME_" + bankCode);
+    String endTime = data.get(paymentMode + "_CUTOFF_END_TIME_" + bankCode);
+    String[] startTimeArray = startTime.split(":");
+    int startHour = Integer.parseInt(startTimeArray[0]);
+    String startMinute = startTimeArray[1];
+    String[] endTimeArray = endTime.split(":");
+    int endHour = Integer.parseInt(endTimeArray[0]);
+    String endMinute = endTimeArray[1];
+    logger.info("startHour :{} ,startMinute : {},endHour :{} , endMinute :{}", startHour, startMinute, endHour, endMinute);
+    if (endHour >= 12) {
+      if (endHour > 12)
+        endHour = endHour - 12;
+      endStamp = "P.M.";
+    }
+    if (startHour >= 12) {
+      if (startHour > 12)
+        startHour = startHour - 12;
+      startStamp = "P.M.";
+    }
+    if (endHour == 00)
+      endHour = 12;
+    if (startHour == 00)
+      startHour = 12;
+    dataValueMap.put(paymentMode + "_startHour", startHour);
+    dataValueMap.put(paymentMode + "_startMinute", startMinute);
+    dataValueMap.put(paymentMode + "_endHour", endHour);
+    dataValueMap.put(paymentMode + "_endMinute", endMinute);
+
+    dataValueMap.put(paymentMode + "_startStamp", startStamp);
+    dataValueMap.put(paymentMode + "_endStamp", endStamp);
+
+    if (paymentMode.equalsIgnoreCase("NEFT") || paymentMode.equalsIgnoreCase("RTGS")) {
+      String satStartTime = data.get(paymentMode + "_SAT_CUTOFF_START_TIME_" + bankCode);
+      String satEndTime = data.get(paymentMode + "_SAT_CUTOFF_END_TIME_" + bankCode);
+      String[] satStartTimeArray = satStartTime.split(":");
+      int satStartHour = Integer.parseInt(satStartTimeArray[0]);
+      String satStartMinute = satStartTimeArray[1];
+      String[] satEndTimeArray = satEndTime.split(":");
+      int satEndHour = Integer.parseInt(satEndTimeArray[0]);
+      String satEndMinute = satEndTimeArray[1];
+      if (satEndHour >= 12) {
+        if (satEndHour > 12)
+          satEndHour = satEndHour - 12;
+        satStartStamp = "P.M.";
+      }
+      if (satStartHour >= 12) {
+        if (satStartHour > 12)
+          satStartHour = satStartHour - 12;
+        satEndStamp = "P.M.";
+      }
+      if (satEndHour == 00)
+        satEndHour = 12;
+      if (satStartHour == 00)
+        satStartHour = 12;
+      dataValueMap.put(paymentMode + "_sat_startHour", satStartHour);
+      dataValueMap.put(paymentMode + "_sat_startMinute", satStartMinute);
+      dataValueMap.put(paymentMode + "_sat_endHour", satEndHour);
+      dataValueMap.put(paymentMode + "_sat_endMinute", satEndMinute);
+      dataValueMap.put(paymentMode + "_sat_startStamp", satStartStamp);
+      dataValueMap.put(paymentMode + "_sat_endStamp", satEndStamp);
     }
 
+    if (logger.isDebugEnabled())
+      logger.debug("DATA VALUE MAP {}", dataValueMap);
 
-    static class NameValueMasterDataRowMapper implements RowMapper <Map<String, String>>  {
-        Map<String, String> data = new HashMap<>();
+    logger.debug("Inside displayCutoffValues method ends");
+    return dataValueMap;
+  }
 
-        public  Map<String, String>  mapRow(ResultSet rs, int index) throws SQLException {
-            data.put(rs.getString(1), rs.getString(2));
-            return data;
-        }
+  public boolean isScheduleTrue(String paymentMode, String bankCode) {
+    logger.info(" isScheduleTrue method begins for merchant:{} ", paymentMode);
+    boolean scheduling = false;
+
+    Map<String, String> data = getReferenceMap(paymentMode);
+    String startTime = data.get(paymentMode + "_CUTOFF_START_TIME_" + bankCode);
+    String endTime = data.get(paymentMode + "_CUTOFF_END_TIME_" + bankCode);
+    if (startTime != null && endTime != null) {
+      scheduling = true;
     }
+    logger.info("isScheduleTrue method  ends {}", scheduling);
+    return scheduling;
+  }
 
-    /**
-     *
-     * This below method is used to fetch the Cutt-off time of NEFT and RTGS transaction
-     * @return
-     */
-    public Map<String, String> getCutOffTime(){
 
-        logger.info("getCutOffTimeData() {}" , UtilsConstant.METHODBEGIN);
-        Map<String, String> data = null;
-        try {
-            List<Map<String, String>> cutOffList = jdbcTemplate.query(SQLConstants.CUT_OFF_TIME_VALUE, new NameValueMasterDataRowMapper());
-            data =  cutOffList.get(0);
+  private Map<String, String> getReferenceMap(String paymentMode) {
 
-            logger.info("data {}", data);
+    Map<String, String> cutOffTime = new HashMap<>();
 
-        } catch(DataAccessException ex) {
-            logger.error("getCutOffTime() exception occured {}" ,ex.getMessage());
-            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
-        }
-        logger.info("getCutOffTimeData() {}" , UtilsConstant.METHODEND);
-        return data;
+    if (paymentMode.equals("RTGS") || paymentMode.equals("NEFT")) {
+      cutOffTime = referenceDataCache.getCutOffTime();
     }
+    return cutOffTime;
+  }
 
-
-
-
-    public Map getSBICoreErrorData()
-    {
-
-        logger.info("getSBICoreErrorData() ");
-        Map data = null;
-        try
-        {
-            List l = jdbcTemplate.query(SQLConstants.SBI_CORE_ERROR_DATA, new NameValueMasterDataRowMapper());
-            data = (Map) l.get(0);
-            if (logger.isDebugEnabled())
-            {
-                logger.debug("data :" + data);
-            }
-
-        }
-        catch (DataAccessException ex)
-        {
-            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
-        }
-        logger.info("getSBICoreErrorData() ");
-        return data;
-    }
-
-
-
-
-    public Map findAllBranchName()
-    {
-
-        logger.info("findAllBranchName() " );
-        Map data = null;
-        try
-        {
-            List branchData = jdbcTemplate.query(SQLConstants.BRANCH_CODE_NAME_QUERY, new NameValueMasterDataRowMapper());
-            data = (Map) branchData.get(0);
-            if (logger.isDebugEnabled())
-            {
-                logger.debug("data :" + data);
-            }
-
-        }
-        catch (DataAccessException ex)
-        {
-            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
-        }
-        logger.info("findAllBranchName() ");
-        return data;
-    }
-
-    /*	CR-5655 Ramanan M - BEGIN - NRE check through Product Code	*/
-    public Map findAllNREProductCodes()
-    {
-
-        logger.info("findAllNREProductCodes ");
-        Map data = null;
-        try
-        {
-            List nreProductCodeData = jdbcTemplate.query(SQLConstants.NRE_PRODUCT_CODE_QUERY, new NameValueMasterDataRowMapper());
-            if(nreProductCodeData != null && nreProductCodeData.size() > 0) {
-                data = (Map) nreProductCodeData.get(0);
-            }
-            if (logger.isDebugEnabled())
-            {
-                logger.debug("FindAll NRE ProductCodes Data :" + data);
-            }
-
-        }
-        catch (DataAccessException ex)
-        {
-            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
-        }
-        logger.info("findAllNREProductCodes " );
-        return data;
-    }
-
-
-    public Map getSBISwitchErrorData()
-    {
-
-        logger.info("getSBISwitchErrorData() ");
-        Map data = null;
-        try
-        {
-            List l = jdbcTemplate.query(SQLConstants.SBI_SWITCH_ERROR_DATA, new NameValueMasterDataRowMapper());
-            data = (Map) l.get(0);
-            if (logger.isDebugEnabled())
-            {
-                logger.debug("data :" + data);
-            }
-        }
-        catch (DataAccessException ex)
-        {
-            throw new TechnicalException(UtilsConstant.CONNECTION_ESTABLISH,ErrorCodes.DB_ACCESS_FAILURE);
-        }
-        logger.info("getSBISwitchErrorData() ");
-        return data;
-    }
-
-}
-
-
-
-
-package com.sbi.yb.services.repository.impl;
-
-import com.sbi.microservice.framework.constant.ErrorCodes;
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.services.constants.SQLConstants;
-import com.sbi.yb.services.constants.UtilsConstant;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.*;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
-class SBINameValueMasterDAOImplTest {
-
-    @Mock
-    private NamedParameterJdbcTemplate jdbcTemplate;
-
-    private SBINameValueMasterDAOImpl dao;
-
-    @BeforeEach
-    void setUp() {
-        MockitoAnnotations.openMocks(this);
-        dao = new SBINameValueMasterDAOImpl(jdbcTemplate);
-    }
-
-    // ---------- SUCCESS CASES ----------
-
-    @Test
-    void testGetNameValueMasterData_Success() {
-        Map<String, String> mockData = new HashMap<>();
-        mockData.put("K1", "V1");
-        List<Map<String, String>> list = Collections.singletonList(mockData);
-
-        when(jdbcTemplate.query(eq(SQLConstants.NAME_VALUE_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(list);
-
-        Map<String, String> result = dao.getNameValueMasterData();
-        assertEquals(mockData, result);
-        verify(jdbcTemplate).query(eq(SQLConstants.NAME_VALUE_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class));
-    }
-
-    @Test
-    void testGetCutOffTime_Success() {
-        Map<String, String> mockData = Map.of("C1", "T1");
-        when(jdbcTemplate.query(eq(SQLConstants.CUT_OFF_TIME_VALUE), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(Collections.singletonList(mockData));
-
-        Map<String, String> result = dao.getCutOffTime();
-        assertEquals(mockData, result);
-    }
-
-    @Test
-    void testGetSBICoreErrorData_Success() {
-        Map<String, String> mockData = Map.of("ERR", "01");
-        when(jdbcTemplate.query(eq(SQLConstants.SBI_CORE_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(Collections.singletonList(mockData));
-
-        Map result = dao.getSBICoreErrorData();
-        assertEquals(mockData, result);
-    }
-
-    @Test
-    void testFindAllBranchName_Success() {
-        Map<String, String> mockData = Map.of("BR1", "BranchName");
-        when(jdbcTemplate.query(eq(SQLConstants.BRANCH_CODE_NAME_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(Collections.singletonList(mockData));
-
-        Map result = dao.findAllBranchName();
-        assertEquals(mockData, result);
-    }
-
-    @Test
-    void testFindAllNREProductCodes_Success() {
-        Map<String, String> mockData = Map.of("PC1", "NRE");
-        when(jdbcTemplate.query(eq(SQLConstants.NRE_PRODUCT_CODE_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(Collections.singletonList(mockData));
-
-        Map result = dao.findAllNREProductCodes();
-        assertEquals(mockData, result);
-    }
-
-    @Test
-    void testFindAllNREProductCodes_EmptyList() {
-        when(jdbcTemplate.query(eq(SQLConstants.NRE_PRODUCT_CODE_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(Collections.emptyList());
-
-        Map result = dao.findAllNREProductCodes();
-        assertNull(result);
-    }
-
-    @Test
-    void testGetSBISwitchErrorData_Success() {
-        Map<String, String> mockData = Map.of("ERRSW", "99");
-        when(jdbcTemplate.query(eq(SQLConstants.SBI_SWITCH_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenReturn(Collections.singletonList(mockData));
-
-        Map result = dao.getSBISwitchErrorData();
-        assertEquals(mockData, result);
-    }
-
-    // ---------- EXCEPTION CASES ----------
-
-    @Test
-    void testGetNameValueMasterData_DataAccessException() {
-        when(jdbcTemplate.query(eq(SQLConstants.NAME_VALUE_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenThrow(new DataAccessException("DB error") {});
-
-        TechnicalException ex = assertThrows(TechnicalException.class, () -> dao.getNameValueMasterData());
-        assertEquals(UtilsConstant.CONNECTION_ESTABLISH, ex.getErrorCode());
-        assertEquals(ErrorCodes.DB_ACCESS_FAILURE, ex.getErrorMessage());
-    }
-
-    @Test
-    void testGetCutOffTime_DataAccessException() {
-        when(jdbcTemplate.query(eq(SQLConstants.CUT_OFF_TIME_VALUE), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenThrow(new DataAccessException("cutoff") {});
-
-        assertThrows(TechnicalException.class, () -> dao.getCutOffTime());
-    }
-
-    @Test
-    void testGetSBICoreErrorData_DataAccessException() {
-        when(jdbcTemplate.query(eq(SQLConstants.SBI_CORE_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenThrow(new DataAccessException("coreerr") {});
-
-        assertThrows(TechnicalException.class, () -> dao.getSBICoreErrorData());
-    }
-
-    @Test
-    void testFindAllBranchName_DataAccessException() {
-        when(jdbcTemplate.query(eq(SQLConstants.BRANCH_CODE_NAME_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenThrow(new DataAccessException("branch") {});
-
-        assertThrows(TechnicalException.class, () -> dao.findAllBranchName());
-    }
-
-    @Test
-    void testFindAllNREProductCodes_DataAccessException() {
-        when(jdbcTemplate.query(eq(SQLConstants.NRE_PRODUCT_CODE_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenThrow(new DataAccessException("nre") {});
-
-        assertThrows(TechnicalException.class, () -> dao.findAllNREProductCodes());
-    }
-
-    @Test
-    void testGetSBISwitchErrorData_DataAccessException() {
-        when(jdbcTemplate.query(eq(SQLConstants.SBI_SWITCH_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
-                .thenThrow(new DataAccessException("switcherr") {});
-
-        assertThrows(TechnicalException.class, () -> dao.getSBISwitchErrorData());
-    }
-
-    // ---------- INNER CLASS TEST ----------
-
-    @Test
-    void testNameValueMasterDataRowMapper_MapRow() throws SQLException {
-        SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper mapper = new SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper();
-        ResultSet rs = mock(ResultSet.class);
-        when(rs.getString(1)).thenReturn("Key1");
-        when(rs.getString(2)).thenReturn("Val1");
-
-        Map<String, String> result = mapper.mapRow(rs, 0);
-        assertEquals("Val1", result.get("Key1"));
-    }
-}
-
-
-
-
-
-
-
-package com.sbi.yb.services.repository.impl;
-
-import com.sbi.microservice.framework.exception.TechnicalException;
-import com.sbi.yb.services.constants.UtilsConstant;
-import com.sbi.yb.services.repository.BankSystemDAO;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class BankSystemDAOFactoryTest {
-
-    @Mock
-    private BankSystemDAO switchDAOImpl;
-
-    @Mock
-    private BankSystemDAO coreDAOImpl;
-
-    private BankSystemDAOFactory factory;
-
-    @BeforeEach
-    void setUp() {
-        factory = new BankSystemDAOFactory(switchDAOImpl, coreDAOImpl);
-    }
-
-    @Test
-    void testConstructorInjection() {
-        assertNotNull(factory);
-        // Verify constructor properly sets dependencies
-        BankSystemDAOFactory newFactory = new BankSystemDAOFactory(switchDAOImpl, coreDAOImpl);
-        assertNotNull(newFactory);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CoreToCore_ShouldReturnCoreDAOImpl() {
-        // When
-        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_CORE);
-
-        // Then
-        assertNotNull(result);
-        assertEquals(coreDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CoreToNonCore_ShouldReturnCoreDAOImpl() {
-        // When
-        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_NONCORE);
-
-        // Then
-        assertNotNull(result);
-        assertEquals(coreDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CMC_ShouldReturnCoreDAOImpl() {
-        // When
-        BankSystemDAO result = factory.getBankSystemDAO("CMC");
-
-        // Then
-        assertNotNull(result);
-        assertEquals(coreDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_CaseInsensitiveCorePaths_ShouldReturnCoreDAOImpl() {
-        // Test various case combinations
-        assertEquals(coreDAOImpl, factory.getBankSystemDAO("core_to_core"));
-        assertEquals(coreDAOImpl, factory.getBankSystemDAO("CORE_TO_CORE"));
-        assertEquals(coreDAOImpl, factory.getBankSystemDAO("Core_To_Core"));
-        assertEquals(coreDAOImpl, factory.getBankSystemDAO("core_to_noncore"));
-        assertEquals(coreDAOImpl, factory.getBankSystemDAO("cmc"));
-        assertEquals(coreDAOImpl, factory.getBankSystemDAO("Cmc"));
-    }
-
-    @Test
-    void testGetBankSystemDAO_NonCorePath_ShouldReturnSwitchDAOImpl() {
-        // Given
-        String nonCorePath = "SWITCH_PATH";
-
-        // When
-        BankSystemDAO result = factory.getBankSystemDAO(nonCorePath);
-
-        // Then
-        assertNotNull(result);
-        assertEquals(switchDAOImpl, result);
-    }
-
-    @Test
-    void testGetBankSystemDAO_VariousNonCorePaths_ShouldReturnSwitchDAOImpl() {
-        // Test various non-core paths
-        assertEquals(switchDAOImpl, factory.getBankSystemDAO("SWITCH"));
-        assertEquals(switchDAOImpl, factory.getBankSystemDAO("switch"));
-        assertEquals(switchDAOImpl, factory.getBankSystemDAO("ANY_PATH"));
-        assertEquals(switchDAOImpl, factory.getBankSystemDAO("RANDOM"));
-        assertEquals(switchDAOImpl, factory.getBankSystemDAO("NON_CORE"));
-    }
-
-    @Test
-    void testGetBankSystemDAO_NullTxnPath_ShouldThrowTechnicalException() {
-        // When & Then
-        TechnicalException exception = assertThrows(TechnicalException.class, 
-            () -> factory.getBankSystemDAO(null));
-        
-        assertNotNull(exception);
-        assertEquals("Error Code", exception.getErrorCode());
-        assertEquals("Error Message", exception.getMessage());
-    }
-
-    @Test
-    void testGetBankSystemDAO_EmptyTxnPath_ShouldThrowTechnicalException() {
-        // When & Then
-        TechnicalException exception = assertThrows(TechnicalException.class, 
-            () -> factory.getBankSystemDAO(""));
-        
-        assertNotNull(exception);
-        assertEquals("Error Code", exception.getErrorCode());
-        assertEquals("Error Message", exception.getMessage());
-    }
-
-    @Test
-    void testGetBankSystemDAO_WhitespaceTxnPath_ShouldThrowTechnicalException() {
-        // When & Then
-        TechnicalException exception = assertThrows(TechnicalException.class, 
-            () -> factory.getBankSystemDAO("   "));
-        
-        assertNotNull(exception);
-        assertEquals("Error Code", exception.getErrorCode());
-        assertEquals("Error Message", exception.getMessage());
-    }
-
-    @Test
-    void testGetBankSystemDAO_WithEmptyConstant_ShouldThrowTechnicalException() {
-        // When & Then
-        TechnicalException exception = assertThrows(TechnicalException.class, 
-            () -> factory.getBankSystemDAO(UtilsConstant.EMPTY));
-        
-        assertNotNull(exception);
-    }
-
-    // Test branch coverage for logger debug statements
-    @Test
-    void testGetBankSystemDAO_LoggerDebugEnabled() {
-        // This test verifies the logger debug branches are covered
-        // We can't easily mock the static logger, but we can ensure the code paths are executed
-        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_CORE);
-        assertNotNull(result);
-        
-        // Also test with non-core path
-        result = factory.getBankSystemDAO("SOME_PATH");
-        assertNotNull(result);
-    }
 }
