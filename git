@@ -54,7 +54,79 @@ public class BankSystemDAOFactory{
 
 
 
+package com.sbi.yb.services.repository.impl;
 
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.services.constants.UtilsConstant;
+import com.sbi.yb.services.repository.BankSystemDAO;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class BankSystemDAOFactoryTest {
+
+    @Mock
+    private BankSystemDAO switchDAOImpl;
+
+    @Mock
+    private BankSystemDAO coreDAOImpl;
+
+    private BankSystemDAOFactory factory;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        factory = new BankSystemDAOFactory(switchDAOImpl, coreDAOImpl);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CoreToCore_ShouldReturnCoreDAOImpl() {
+        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_CORE);
+        assertEquals(coreDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CoreToNonCore_ShouldReturnCoreDAOImpl() {
+        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_NONCORE);
+        assertEquals(coreDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CMC_ShouldReturnCoreDAOImpl() {
+        BankSystemDAO result = factory.getBankSystemDAO("CMC");
+        assertEquals(coreDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_OtherTxn_ShouldReturnSwitchDAOImpl() {
+        BankSystemDAO result = factory.getBankSystemDAO("NONCORE_TO_SWITCH");
+        assertEquals(switchDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_NullTxn_ShouldThrowException() {
+        TechnicalException exception = assertThrows(TechnicalException.class, () -> {
+            factory.getBankSystemDAO(null);
+        });
+        assertEquals("Error Code", exception.getErrorCode());
+        assertEquals("Error Message", exception.getErrorMessage());
+    }
+
+    @Test
+    void testGetBankSystemDAO_EmptyTxn_ShouldThrowException() {
+        TechnicalException exception = assertThrows(TechnicalException.class, () -> {
+            factory.getBankSystemDAO("   "); // whitespace only
+        });
+        assertEquals("Error Code", exception.getErrorCode());
+        assertEquals("Error Message", exception.getErrorMessage());
+    }
+}
 
 
 
@@ -278,3 +350,346 @@ public class SBINameValueMasterDAOImpl implements SBINameValueMasterDAO {
 
 }
 
+
+
+
+package com.sbi.yb.services.repository.impl;
+
+import com.sbi.microservice.framework.constant.ErrorCodes;
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.services.constants.SQLConstants;
+import com.sbi.yb.services.constants.UtilsConstant;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+class SBINameValueMasterDAOImplTest {
+
+    @Mock
+    private NamedParameterJdbcTemplate jdbcTemplate;
+
+    private SBINameValueMasterDAOImpl dao;
+
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
+        dao = new SBINameValueMasterDAOImpl(jdbcTemplate);
+    }
+
+    // ---------- SUCCESS CASES ----------
+
+    @Test
+    void testGetNameValueMasterData_Success() {
+        Map<String, String> mockData = new HashMap<>();
+        mockData.put("K1", "V1");
+        List<Map<String, String>> list = Collections.singletonList(mockData);
+
+        when(jdbcTemplate.query(eq(SQLConstants.NAME_VALUE_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(list);
+
+        Map<String, String> result = dao.getNameValueMasterData();
+        assertEquals(mockData, result);
+        verify(jdbcTemplate).query(eq(SQLConstants.NAME_VALUE_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class));
+    }
+
+    @Test
+    void testGetCutOffTime_Success() {
+        Map<String, String> mockData = Map.of("C1", "T1");
+        when(jdbcTemplate.query(eq(SQLConstants.CUT_OFF_TIME_VALUE), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(Collections.singletonList(mockData));
+
+        Map<String, String> result = dao.getCutOffTime();
+        assertEquals(mockData, result);
+    }
+
+    @Test
+    void testGetSBICoreErrorData_Success() {
+        Map<String, String> mockData = Map.of("ERR", "01");
+        when(jdbcTemplate.query(eq(SQLConstants.SBI_CORE_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(Collections.singletonList(mockData));
+
+        Map result = dao.getSBICoreErrorData();
+        assertEquals(mockData, result);
+    }
+
+    @Test
+    void testFindAllBranchName_Success() {
+        Map<String, String> mockData = Map.of("BR1", "BranchName");
+        when(jdbcTemplate.query(eq(SQLConstants.BRANCH_CODE_NAME_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(Collections.singletonList(mockData));
+
+        Map result = dao.findAllBranchName();
+        assertEquals(mockData, result);
+    }
+
+    @Test
+    void testFindAllNREProductCodes_Success() {
+        Map<String, String> mockData = Map.of("PC1", "NRE");
+        when(jdbcTemplate.query(eq(SQLConstants.NRE_PRODUCT_CODE_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(Collections.singletonList(mockData));
+
+        Map result = dao.findAllNREProductCodes();
+        assertEquals(mockData, result);
+    }
+
+    @Test
+    void testFindAllNREProductCodes_EmptyList() {
+        when(jdbcTemplate.query(eq(SQLConstants.NRE_PRODUCT_CODE_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(Collections.emptyList());
+
+        Map result = dao.findAllNREProductCodes();
+        assertNull(result);
+    }
+
+    @Test
+    void testGetSBISwitchErrorData_Success() {
+        Map<String, String> mockData = Map.of("ERRSW", "99");
+        when(jdbcTemplate.query(eq(SQLConstants.SBI_SWITCH_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenReturn(Collections.singletonList(mockData));
+
+        Map result = dao.getSBISwitchErrorData();
+        assertEquals(mockData, result);
+    }
+
+    // ---------- EXCEPTION CASES ----------
+
+    @Test
+    void testGetNameValueMasterData_DataAccessException() {
+        when(jdbcTemplate.query(eq(SQLConstants.NAME_VALUE_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenThrow(new DataAccessException("DB error") {});
+
+        TechnicalException ex = assertThrows(TechnicalException.class, () -> dao.getNameValueMasterData());
+        assertEquals(UtilsConstant.CONNECTION_ESTABLISH, ex.getErrorCode());
+        assertEquals(ErrorCodes.DB_ACCESS_FAILURE, ex.getErrorMessage());
+    }
+
+    @Test
+    void testGetCutOffTime_DataAccessException() {
+        when(jdbcTemplate.query(eq(SQLConstants.CUT_OFF_TIME_VALUE), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenThrow(new DataAccessException("cutoff") {});
+
+        assertThrows(TechnicalException.class, () -> dao.getCutOffTime());
+    }
+
+    @Test
+    void testGetSBICoreErrorData_DataAccessException() {
+        when(jdbcTemplate.query(eq(SQLConstants.SBI_CORE_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenThrow(new DataAccessException("coreerr") {});
+
+        assertThrows(TechnicalException.class, () -> dao.getSBICoreErrorData());
+    }
+
+    @Test
+    void testFindAllBranchName_DataAccessException() {
+        when(jdbcTemplate.query(eq(SQLConstants.BRANCH_CODE_NAME_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenThrow(new DataAccessException("branch") {});
+
+        assertThrows(TechnicalException.class, () -> dao.findAllBranchName());
+    }
+
+    @Test
+    void testFindAllNREProductCodes_DataAccessException() {
+        when(jdbcTemplate.query(eq(SQLConstants.NRE_PRODUCT_CODE_QUERY), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenThrow(new DataAccessException("nre") {});
+
+        assertThrows(TechnicalException.class, () -> dao.findAllNREProductCodes());
+    }
+
+    @Test
+    void testGetSBISwitchErrorData_DataAccessException() {
+        when(jdbcTemplate.query(eq(SQLConstants.SBI_SWITCH_ERROR_DATA), any(SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper.class)))
+                .thenThrow(new DataAccessException("switcherr") {});
+
+        assertThrows(TechnicalException.class, () -> dao.getSBISwitchErrorData());
+    }
+
+    // ---------- INNER CLASS TEST ----------
+
+    @Test
+    void testNameValueMasterDataRowMapper_MapRow() throws SQLException {
+        SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper mapper = new SBINameValueMasterDAOImpl.NameValueMasterDataRowMapper();
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getString(1)).thenReturn("Key1");
+        when(rs.getString(2)).thenReturn("Val1");
+
+        Map<String, String> result = mapper.mapRow(rs, 0);
+        assertEquals("Val1", result.get("Key1"));
+    }
+}
+
+
+
+
+
+
+
+package com.sbi.yb.services.repository.impl;
+
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.services.constants.UtilsConstant;
+import com.sbi.yb.services.repository.BankSystemDAO;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class BankSystemDAOFactoryTest {
+
+    @Mock
+    private BankSystemDAO switchDAOImpl;
+
+    @Mock
+    private BankSystemDAO coreDAOImpl;
+
+    private BankSystemDAOFactory factory;
+
+    @BeforeEach
+    void setUp() {
+        factory = new BankSystemDAOFactory(switchDAOImpl, coreDAOImpl);
+    }
+
+    @Test
+    void testConstructorInjection() {
+        assertNotNull(factory);
+        // Verify constructor properly sets dependencies
+        BankSystemDAOFactory newFactory = new BankSystemDAOFactory(switchDAOImpl, coreDAOImpl);
+        assertNotNull(newFactory);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CoreToCore_ShouldReturnCoreDAOImpl() {
+        // When
+        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_CORE);
+
+        // Then
+        assertNotNull(result);
+        assertEquals(coreDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CoreToNonCore_ShouldReturnCoreDAOImpl() {
+        // When
+        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_NONCORE);
+
+        // Then
+        assertNotNull(result);
+        assertEquals(coreDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CMC_ShouldReturnCoreDAOImpl() {
+        // When
+        BankSystemDAO result = factory.getBankSystemDAO("CMC");
+
+        // Then
+        assertNotNull(result);
+        assertEquals(coreDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_CaseInsensitiveCorePaths_ShouldReturnCoreDAOImpl() {
+        // Test various case combinations
+        assertEquals(coreDAOImpl, factory.getBankSystemDAO("core_to_core"));
+        assertEquals(coreDAOImpl, factory.getBankSystemDAO("CORE_TO_CORE"));
+        assertEquals(coreDAOImpl, factory.getBankSystemDAO("Core_To_Core"));
+        assertEquals(coreDAOImpl, factory.getBankSystemDAO("core_to_noncore"));
+        assertEquals(coreDAOImpl, factory.getBankSystemDAO("cmc"));
+        assertEquals(coreDAOImpl, factory.getBankSystemDAO("Cmc"));
+    }
+
+    @Test
+    void testGetBankSystemDAO_NonCorePath_ShouldReturnSwitchDAOImpl() {
+        // Given
+        String nonCorePath = "SWITCH_PATH";
+
+        // When
+        BankSystemDAO result = factory.getBankSystemDAO(nonCorePath);
+
+        // Then
+        assertNotNull(result);
+        assertEquals(switchDAOImpl, result);
+    }
+
+    @Test
+    void testGetBankSystemDAO_VariousNonCorePaths_ShouldReturnSwitchDAOImpl() {
+        // Test various non-core paths
+        assertEquals(switchDAOImpl, factory.getBankSystemDAO("SWITCH"));
+        assertEquals(switchDAOImpl, factory.getBankSystemDAO("switch"));
+        assertEquals(switchDAOImpl, factory.getBankSystemDAO("ANY_PATH"));
+        assertEquals(switchDAOImpl, factory.getBankSystemDAO("RANDOM"));
+        assertEquals(switchDAOImpl, factory.getBankSystemDAO("NON_CORE"));
+    }
+
+    @Test
+    void testGetBankSystemDAO_NullTxnPath_ShouldThrowTechnicalException() {
+        // When & Then
+        TechnicalException exception = assertThrows(TechnicalException.class, 
+            () -> factory.getBankSystemDAO(null));
+        
+        assertNotNull(exception);
+        assertEquals("Error Code", exception.getErrorCode());
+        assertEquals("Error Message", exception.getMessage());
+    }
+
+    @Test
+    void testGetBankSystemDAO_EmptyTxnPath_ShouldThrowTechnicalException() {
+        // When & Then
+        TechnicalException exception = assertThrows(TechnicalException.class, 
+            () -> factory.getBankSystemDAO(""));
+        
+        assertNotNull(exception);
+        assertEquals("Error Code", exception.getErrorCode());
+        assertEquals("Error Message", exception.getMessage());
+    }
+
+    @Test
+    void testGetBankSystemDAO_WhitespaceTxnPath_ShouldThrowTechnicalException() {
+        // When & Then
+        TechnicalException exception = assertThrows(TechnicalException.class, 
+            () -> factory.getBankSystemDAO("   "));
+        
+        assertNotNull(exception);
+        assertEquals("Error Code", exception.getErrorCode());
+        assertEquals("Error Message", exception.getMessage());
+    }
+
+    @Test
+    void testGetBankSystemDAO_WithEmptyConstant_ShouldThrowTechnicalException() {
+        // When & Then
+        TechnicalException exception = assertThrows(TechnicalException.class, 
+            () -> factory.getBankSystemDAO(UtilsConstant.EMPTY));
+        
+        assertNotNull(exception);
+    }
+
+    // Test branch coverage for logger debug statements
+    @Test
+    void testGetBankSystemDAO_LoggerDebugEnabled() {
+        // This test verifies the logger debug branches are covered
+        // We can't easily mock the static logger, but we can ensure the code paths are executed
+        BankSystemDAO result = factory.getBankSystemDAO(UtilsConstant.CORE_TO_CORE);
+        assertNotNull(result);
+        
+        // Also test with non-core path
+        result = factory.getBankSystemDAO("SOME_PATH");
+        assertNotNull(result);
+    }
+}
