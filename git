@@ -1,1 +1,453 @@
+package com.sbi.yb.services.service.impl;
 
+import com.sbi.microservice.framework.exception.BusinessException;
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.microservice.framework.exception.ValidationException;
+
+import com.sbi.yb.services.constants.ErrorConstants;
+import com.sbi.yb.services.constants.UtilsConstant;
+import com.sbi.yb.services.model.FileConfigurationEntity;
+import com.sbi.yb.services.model.FileDownloadRequest;
+import com.sbi.yb.services.model.FileDownloadResponse;
+import com.sbi.yb.services.repository.FileConfigurationDao;
+import com.sbi.yb.services.repository.FileDownloadDao;
+import com.sbi.yb.services.service.FileDownloadService;
+import com.sbi.yb.services.service.ValidationFilterService;
+import com.sbi.yb.services.utils.ServiceUtils;
+import org.apache.commons.io.FilenameUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+
+import static com.sbi.yb.services.constants.UtilsConstant.*;
+import static java.io.File.separator;
+
+
+/**
+ * This service is for getting file configuration data for sample file or
+ * original file to be placed in server.
+ *
+ * @author V1017583
+ * @version 1.0
+ */
+
+@Service
+public class FileDownloadServiceImpl implements FileDownloadService {
+    /**
+     * LOGGER.
+     **/
+    private final Logger logger = LoggerFactory.getLogger(FileDownloadServiceImpl.class);
+
+    /**
+     * Database call.
+     **/
+    private final FileConfigurationDao fileConfigurationDao;
+
+    /**
+     * Database call.
+     **/
+    private final FileDownloadDao fileDownloadDao;
+
+    /**
+     *
+     */
+    private final ValidationFilterService validationFilterService;
+
+    /**
+     * Constructor call.
+     *
+     * @param fileConfigurationDao Database object
+     * @param fileDownloadDao      Database object
+     */
+    @Autowired
+    public FileDownloadServiceImpl(FileConfigurationDao fileConfigurationDao, FileDownloadDao fileDownloadDao, ValidationFilterService validationFilterService) {
+        this.fileConfigurationDao = fileConfigurationDao;
+        this.fileDownloadDao = fileDownloadDao;
+        this.validationFilterService = validationFilterService;
+    }
+
+    /**
+     * properties value.
+     */
+    @Value("${path.temp}")
+    private String originalFilePath;
+
+
+    /**
+     * This service is for getting file configuration data for sample file or
+     * original file to be placed in server.
+     *
+     * @param fileDownloadRequest filDownloadRequest model object
+     * @return returning API response
+     */
+    @Override
+    public FileDownloadResponse downloadTxnFile(final FileDownloadRequest fileDownloadRequest) {
+        logger.info("downloadTxnFile(FileDownloadRequest fileDownloadRequest)- begin");
+
+        FileDownloadResponse fileDownloadResponse = null;
+
+
+        String isSampleFile = fileDownloadRequest.getIsSampleFile();
+        String corporateId = fileDownloadRequest.getCorporateId();
+        String userName = fileDownloadRequest.getUserName();
+
+        if (isSampleFile.equalsIgnoreCase("true")) {
+            if ("SARAL".equalsIgnoreCase(corporateId)) {
+                String txnType = Optional.ofNullable(fileDownloadRequest.getTxnType()).filter(ServiceUtils::isNotNullString)
+                        .orElseThrow(() -> new ValidationException(ErrorConstants.TXNTYPE_NULL, "TxnType cannot be empty or null"));
+
+                String txnTypeData = Optional.ofNullable(txnType)
+                        .filter(txn -> UtilsConstant.SAME_TRANSACTION.equalsIgnoreCase(txn) || UtilsConstant.RTGS_TRANSACTION.equalsIgnoreCase(txn) || UtilsConstant.NEFT_TRANSACTION.equalsIgnoreCase(txn) || UtilsConstant.COMPOSITE_TRANSACTION.equalsIgnoreCase(txn))
+                        .orElseThrow(() -> new ValidationException(ErrorConstants.INVALID_TXNTYPE, "Invalid TxnType"));
+
+                fileDownloadResponse = downloadSampleFile(corporateId, txnTypeData);
+            }
+
+        } else {
+
+            String uploadedFileName = Optional.ofNullable(fileDownloadRequest.getUploadedFileName()).filter(upfileName -> !upfileName.isEmpty() && !"null".equalsIgnoreCase(upfileName))
+                    .orElseThrow(() -> new ValidationException(ErrorConstants.INVALID_FILENAME, "Invalid FileName"));
+            String fileRefNo = Optional.ofNullable(fileDownloadRequest.getFileRefno()).filter(ServiceUtils::isNotNullString)
+                    .orElseThrow(() -> new ValidationException(ErrorConstants.FILE_REFERENCE_NUMBER_IS_MANDATORY, "Invalid FileRefNo"));
+
+            fileDownloadResponse = downloadOriginalFile(userName, fileRefNo, uploadedFileName, corporateId);
+
+        }
+        logger.info("downloadTxnFile(FileDownloadRequest fileDownloadRequest) - end");
+        return fileDownloadResponse;
+    }
+
+    /**
+     * downloadSampleFile.
+     *
+     * @param corporateId corporateId
+     * @param txnTypeData txnTypeData
+     * @return returns sample file
+     */
+    private FileDownloadResponse downloadSampleFile(String corporateId, String txnTypeData) {
+        logger.info("downloadSampleFile(String corporateId, String txnTypeData) - begin");
+        FileDownloadResponse fileDownloadResponse = null;
+        try {
+
+            List<FileConfigurationEntity> configList = Optional.ofNullable(fileConfigurationDao.getFileConfiguration(corporateId, txnTypeData))
+                    .filter(confList -> !confList.isEmpty())
+                    .orElseThrow(() -> new BusinessException("No configuration available", ErrorConstants.NO_FILE_CONFIG_EXISTS));
+
+            logger.info("List of Configuration {} ", configList);
+            List<String> configurationString = Optional.ofNullable(getConfigurationString(configList, txnTypeData)).filter(config -> !config.isEmpty())
+                    .orElseThrow(() -> new BusinessException("Error Downloading sample file", ErrorConstants.ERROR_DOWNLOAD_FILE));
+            String fileName = "";
+            switch (txnTypeData) {
+                case UtilsConstant.SAME_TRANSACTION -> fileName = "SameBank.txt";
+                case UtilsConstant.NEFT_TRANSACTION -> fileName = "NEFT.txt";
+                case UtilsConstant.RTGS_TRANSACTION -> fileName = "RTGS.txt";
+                case UtilsConstant.COMPOSITE_TRANSACTION -> fileName = "Composite.txt";
+                default -> throw new IllegalStateException("Unexpected value: " + txnTypeData);
+            }
+
+            logger.info("FileName to be downloaded {}", fileName);
+
+            File finaldownloadFile = new File(fileName);
+            char a = 13;
+            char b = 10;
+
+            logger.info("Final Data size::{}", configurationString);
+            try (FileOutputStream outputStream = new FileOutputStream(finaldownloadFile)) {
+                configurationString.forEach(configValue -> {
+                    try {
+                        outputStream.write(configValue.getBytes(StandardCharsets.UTF_8));
+                        outputStream.write(a);
+                        outputStream.write(b);
+                    } catch (IOException e) {
+                        throw new TechnicalException("Error Downloading file", ErrorConstants.ERROR_DOWNLOAD_FILE);
+                    }
+
+                });
+
+            }
+            // converting file data to bytes
+            byte[] byteData = Files.readAllBytes(finaldownloadFile.toPath());
+            String encodeData = Base64.getEncoder().encodeToString(byteData);
+
+            logger.info("Encoded the file of file Configuration::{} ", encodeData);
+
+            fileDownloadResponse = new FileDownloadResponse(encodeData, fileName, String.valueOf(MediaType.TEXT_PLAIN));
+
+        } catch (IOException e) {
+            throw new TechnicalException("Error Downloading file", ErrorConstants.ERROR_DOWNLOAD_FILE);
+        }
+        logger.info("downloadSampleFile {}", fileDownloadResponse);
+        logger.info("downloadSampleFile(String corporateId, String txnTypeData) - end");
+        return fileDownloadResponse;
+    }
+
+    /**
+     * downloadOriginalFile.
+     *
+     * @param userName         userName
+     * @param fileRefNo        fileRefNo
+     * @param uploadedFileName uploadedFileName
+     * @return return orginal file response
+     */
+    private FileDownloadResponse downloadOriginalFile(String userName, String fileRefNo, String uploadedFileName, String corporateId) {
+        logger.info("downloadOriginalFile(String userName ,String fileRefNo , String uploadedFileName, String corporateId) - method begin");
+        FileDownloadResponse fileDownloadResponse = null;
+
+
+        String userRole = validationFilterService.getUserRole(userName, corporateId);
+
+        if (UtilsConstant.AUTHORIZER_ROLE_VALUE.equalsIgnoreCase(userRole) || UtilsConstant.APPROVER_ROLE_VALUE.equalsIgnoreCase(userRole) || UtilsConstant.UPLOADER_ROLE_VALUE.equalsIgnoreCase(userRole) || ("SARAL".equalsIgnoreCase(corporateId) && UtilsConstant.SARAL_ROLE_VALUE.equalsIgnoreCase(userRole))) {
+            fileDownloadResponse = Optional.ofNullable(fileDownloadDao.getFileDetails(fileRefNo, corporateId, uploadedFileName)).map(validFile -> {
+
+                String downloadFilePath = null;
+
+                logger.info("Path of the file to be read {}", downloadFilePath);
+
+                String fileExtension = FilenameUtils.getExtension(uploadedFileName);
+                logger.info("extension{}", fileExtension);
+                String encodeData = "";
+                String contentType = "";
+
+                if (fileExtension.equalsIgnoreCase("txt") || fileExtension.equalsIgnoreCase("TXT")) {
+                    downloadFilePath = originalFilePath + separator + fileRefNo + TXT_EXTENSION;
+                } else {
+                    downloadFilePath = originalFilePath + separator + fileRefNo + XLS_EXTENSIONWITHDOT;
+
+                }
+                try (FileInputStream inputStream = new FileInputStream(downloadFilePath)) {
+                    logger.info("Reading data from the path is successfull");
+                    // Creating a byte array
+                    byte[] byteData = inputStream.readAllBytes();
+                    encodeData = Base64.getEncoder().encodeToString(byteData);
+
+                    logger.debug("Encoded the file of file Configuration::{} ", encodeData);
+
+                } catch (IOException ex) {
+                    throw new TechnicalException("File Not found in server", ErrorConstants.FILE_NOT_FOUND);
+                }
+
+                switch (fileExtension) {
+                    case "txt" -> contentType = String.valueOf(MediaType.TEXT_PLAIN);
+                    case UtilsConstant.XLSX_EXTENSION, "xls" ->
+                            contentType = String.valueOf(MediaType.APPLICATION_OCTET_STREAM);
+                    default ->
+                            throw new BusinessException("Not a valid content type", ErrorConstants.INVALID_FILE_EXTENSION);
+
+                }
+
+                return new FileDownloadResponse(encodeData, uploadedFileName, contentType);
+            }).orElseThrow(() -> new ValidationException(ErrorConstants.INVALID_FILE_REFERENCE_NUMBER, "Invalid File  RefNo"));
+        } else {
+            throw new BusinessException("Your are not allowed to download file", ErrorConstants.INVALID_USER_DOWNLOAD);
+        }
+
+
+        logger.info("downloadOriginalFile(String userName ,String fileRefNo , String uploadedFileName, String corporateId) - end");
+        return fileDownloadResponse;
+
+    }
+
+    /**
+     * getConfigurationString.
+     *
+     * @param input   configurationList
+     * @param txnType txnType
+     * @return configuration List
+     */
+    private List<String> getConfigurationString(List<FileConfigurationEntity> input, String txnType) {
+        logger.info("getConfigurationString(List input) - begin");
+
+        List<List<String>> finalData = null;
+        Map<String, List<String>> result = null;
+
+        Map<String, String> configuration = configurationValues(txnType);
+
+        Optional<FileConfigurationEntity> config = input.stream().findFirst();
+
+        if (config.isPresent() && config.get().getFormat() == 0) {
+            logger.info("fileConfiguration format is delimited:{} ", config.get().getFormat());
+            List<Map<String, List<String>>> finalList = new ArrayList<>();
+
+            if (txnType.equalsIgnoreCase(UtilsConstant.SAME_TRANSACTION) || txnType.equalsIgnoreCase(UtilsConstant.RTGS_TRANSACTION)
+                    || txnType.equalsIgnoreCase(UtilsConstant.NEFT_TRANSACTION)) {
+                result = configureMap(input, configuration, txnType);
+                finalList.add(result);
+
+            } else {
+
+                if (txnType.contains("CT")) {
+                    configuration.replace(UtilsConstant.PAYMENT_IDENTIFIER, "");
+                    configuration.replace(UtilsConstant.CREDIT_BRANCH_CODE, UtilsConstant.SAME_BRANCH_VALUE);
+                    result = configureMap(input, configuration, txnType);
+                    finalList.add(result);
+
+                }
+                if (txnType.contains("CR")) {
+                    configuration.replace(UtilsConstant.PAYMENT_IDENTIFIER, "RTGS");
+                    configuration.replace(UtilsConstant.CREDIT_BRANCH_CODE, UtilsConstant.OTHER_BRANCH_VALUE);
+                    result = configureMap(input, configuration, txnType);
+                    finalList.add(result);
+                }
+                if (txnType.contains("CN")) {
+                    configuration.replace(UtilsConstant.PAYMENT_IDENTIFIER, "NEFT");
+                    configuration.replace(UtilsConstant.CREDIT_BRANCH_CODE, UtilsConstant.OTHER_BRANCH_VALUE);
+                    result = configureMap(input, configuration, txnType);
+                    finalList.add(result);
+                }
+
+            }
+            String fieldDelimiter = config.get().getFieldDelimiter();
+            logger.info("FieldDelimiter of fileConfiguration: {}", fieldDelimiter);
+            finalData = finalList.stream().map(key -> {
+                List<String> debitString = Optional.ofNullable(key.get("debitString")).filter(debit -> !debit.isEmpty()).get();
+                List<String> creditString = Optional.ofNullable(key.get("creditString")).filter(credit -> !credit.isEmpty()).get();
+
+                return processTransactionFile(debitString, creditString, fieldDelimiter, txnType);
+
+            }).toList();
+
+        }
+        logger.info("Configuration Data::{}", finalData);
+        logger.info("getConfigurationString(List input) - end");
+        List<String> finalListData = Objects.requireNonNull(finalData).stream().flatMap(Collection::stream).toList();
+        logger.info("Configuration finalData::{}", finalListData);
+        return finalListData;
+    }
+
+    /**
+     * configurationValues.
+     *
+     * @param txnType transactionType
+     * @return returns configValues
+     */
+    private Map<String, String> configurationValues(String txnType) {
+        logger.info("configurationValues(String txnType) - begin");
+
+        Map<String, String> configuration = new HashMap<>();
+        logger.info("txnType- {}", txnType);
+
+        LocalDate currentDate = LocalDate.now();
+
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern(UtilsConstant.DATE_FORMAT);
+
+        String dateTimeString = currentDate.format(formatter);
+
+        configuration.put("Debit Branch Code", UtilsConstant.SAME_BRANCH_VALUE);
+        configuration.put("Debit Account No", "01600123456890967");
+        configuration.put("Date", dateTimeString);
+        configuration.put("Description", "Ankit Electricals Ltd");
+        configuration.put("Reference No", "UNIQ_REF_NO");
+        configuration.put("Debit Amount", "1.00#");
+        configuration.put("Credit Branch Code", UtilsConstant.SAME_BRANCH_VALUE);
+
+        if (StringUtils.hasText(txnType) && (txnType.equalsIgnoreCase(UtilsConstant.RTGS_TRANSACTION) || txnType.equalsIgnoreCase(UtilsConstant.NEFT_TRANSACTION))) {
+            configuration.put(UtilsConstant.CREDIT_BRANCH_CODE, UtilsConstant.OTHER_BRANCH_VALUE);
+        }
+        configuration.put("Credit Account No", "01004567891");
+        configuration.put("Credit Amount", "#1.00");
+
+        configuration.put(UtilsConstant.PAYMENT_IDENTIFIER, (txnType.equalsIgnoreCase(UtilsConstant.SAME_TRANSACTION) ? "" : "RTGS"));
+
+        logger.info("configurationValues(String txnType) - end");
+        return configuration;
+    }
+
+    /**
+     * processTransactionFile of data .
+     *
+     * @param debitString    debitString
+     * @param creditString   creditString
+     * @param fieldDelimiter fieldDelimiter
+     * @param txnType        txnType
+     * @return returns processTransaction Deatils
+     */
+    private List<String> processTransactionFile(List<String> debitString, List<String> creditString, String fieldDelimiter, String txnType) {
+        logger.info(" processTransactionFile(List<String> debitString, List<String> creditString, String fieldDelimiter, String txnType) - begin");
+        List<String> finalResult = new ArrayList<>();
+        StringBuilder builder = new StringBuilder();
+        StringBuilder builder1 = new StringBuilder();
+
+        debitString.stream().forEach(debit -> {
+
+            if (debit.equalsIgnoreCase(UtilsConstant.RTGS) || debit.equalsIgnoreCase(UtilsConstant.NEFT) || debit.equalsIgnoreCase(UtilsConstant.EMPTY)) {
+                builder.append(debit);
+            } else {
+                builder.append(debit).append(fieldDelimiter);
+            }
+
+
+        });
+
+        creditString.stream().forEach(credit -> {
+
+            if (UtilsConstant.DESCRIPTION.equalsIgnoreCase(credit)) {
+                builder1.append(credit);
+            } else {
+                builder1.append(credit).append(fieldDelimiter);
+            }
+        });
+        finalResult.add(builder.toString());
+        finalResult.add(builder1.toString());
+        if (txnType.equalsIgnoreCase(UtilsConstant.COMPOSITE_TRANSACTION)) {
+            finalResult.add("");
+        }
+
+        logger.info("finalresult Data::{}", finalResult);
+        logger.info(" processTransactionFile(List<String> debitString, List<String> creditString, String fieldDelimiter, String txnType) - end");
+        return finalResult;
+    }
+
+    /**
+     * @param fileConfigList
+     * @param configuration
+     * @param txnType
+     * @return returns configuration Details based on credit and debit
+     */
+    private Map<String, List<String>> configureMap(List<FileConfigurationEntity> fileConfigList, Map<String, String> configuration, String txnType) {
+        logger.info("configureMap(List<FileConfigurationEntity> fileConfigList, Map<String, String> configuration) - begin");
+        Map<String, List<String>> data = new HashMap<>();
+        List<String> debitString = new ArrayList<>();
+        List<String> creditString = new ArrayList<>();
+
+        if (txnType.equalsIgnoreCase(UtilsConstant.NEFT_TRANSACTION)) {
+            configuration.replace(UtilsConstant.PAYMENT_IDENTIFIER, "NEFT");
+        }
+        fileConfigList.stream().forEach(fileConfig -> {
+            logger.info("Field Value: {} ,FieldName: {} , TransactionCode:{}", fileConfig.getOrderNumber(), fileConfig.getFieldName(), fileConfig.getTransactionCode());
+            switch (fileConfig.getTransactionCode()) {
+                case "D" -> debitString.add(configuration.get(fileConfig.getFieldName().trim()));
+                case "C" -> creditString.add(configuration.get(fileConfig.getFieldName().trim()));
+                case "B" -> {
+                    if (UtilsConstant.PAYMENT_IDENTIFIER.equalsIgnoreCase(fileConfig.getFieldName().trim())) {
+                        debitString.add(configuration.get(fileConfig.getFieldName()));
+                    } else {
+                        debitString.add(configuration.get(fileConfig.getFieldName()));
+                        creditString.add(configuration.get(fileConfig.getFieldName()));
+                    }
+                }
+                default ->
+                        throw new BusinessException("Invalid Transaction Code", ErrorConstants.INVALID_TRANSACTION_CODE);
+
+            }
+        });
+        data.put("debitString", debitString);
+        data.put("creditString", creditString);
+        logger.info("finalresult creditString::{}, debitString::{}", creditString, debitString);
+        logger.info("configureMap(List<FileConfigurationEntity> fileConfigList, Map<String, String> configuration) - end");
+        return data;
+    }
+}
