@@ -1,0 +1,619 @@
+package com.sbi.yb.services.repository.impl;
+
+
+import com.sbi.microservice.framework.exception.BusinessException;
+import com.sbi.microservice.framework.exception.TechnicalException;
+import com.sbi.yb.services.constants.MergerConstants;
+import com.sbi.yb.services.model.CorporateTransactionLeg;
+import com.sbi.yb.services.model.FieldCollection;
+import com.sbi.yb.services.model.FieldsModel;
+import com.sbi.yb.services.repository.EchequeMasterDAO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.ResultSetExtractor;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+
+
+@Repository
+public class EchequeMasterDAOImpl implements EchequeMasterDAO {
+
+    private static final Logger logger = LoggerFactory.getLogger(EchequeMasterDAOImpl.class);
+
+    private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+    private static final String GET_SUPPLIER_PARAMS_WITH_BID = """
+            SELECT * FROM VIEW_ECHEQUE_SUPPLIER_PARAMS WHERE ECHEQUE_NO=:echequeNo AND BUSINESSLINE_ID=:bussinessLineID
+            """;
+
+    private static final String GET_SUPPLIER_PARAMS_WITHOUT_BID = """
+            SELECT * FROM VIEW_ECHEQUE_SUPPLIER_PARAMS WHERE ECHEQUE_NO=:echequeNo
+            """;
+
+
+    private final String INSERT_IB_STATUS_BILLPAYMENT = """
+            insert into sbi_ib_status( OID,REFERENCE_NO,STORE_ID,CREATION_TIME,STATUS,DELETED,LAST_MOD_TIME,ACCOUNT_NO,BRANCH_CODE,REASON_FAILURE,USER_NAME,AMOUNT,STATUS_CODE,CREDIT_STATUS_CODE,MERCHANT_CODE,THIRD_PARTY_REF,BILLER_SHORTNAME)
+            values (oid_sequence.nextval,:refNo,'101',sysdate,'1','0',sysdate,:accountNo,:branchCode,:reasonFailure,:userName,:amount,:status,'Pending',:merchCode,:thirdPartyRef,:billerShortName)
+            """;
+
+    private final String INSERT_IB_STATUS = """
+            insert into sbi_ib_status( OID,REFERENCE_NO,STORE_ID,CREATION_TIME,STATUS,DELETED,LAST_MOD_TIME,ACCOUNT_NO,BRANCH_CODE,REASON_FAILURE,USER_NAME,AMOUNT,STATUS_CODE,CREDIT_STATUS_CODE)
+            values (oid_sequence.nextval,:refNo,'101',sysdate,'1','0',sysdate,:accountNo,:branchCode,:reasonFailure,:userName,:amount,:status,'Pending')
+            """;
+
+    private static final String UPDATE_NPS_STATUS = "update SBICORP_NPS_FILE_DETAILS set status='TRANSACTION_AUTHORIZED', TRANSACTION_AUTH_TIME=sysdate where echeque_no=:echequeNO";
+
+
+    private static final String FindImpsCreditDetails = """
+            SELECT * FROM (select ROWNUM RNO, decode(nvl(CREDIT_NARRATIVE3,'*'),'*',(select b.NAME_THIRD_PARTY from bvsbi.sbicorp_third_party b where b.account_no=a.account_no
+             and b.corporate_id = a.corporate_id and status = 1 and b.creation_time= (select max(creation_time) from bvsbi.sbicorp_third_party c where c.account_no=b.account_no  and b.branch_code=c.branch_code and b.corporate_id = c.corporate_id and c.status = 1  )
+             and rownum < 2 ), CREDIT_NARRATIVE3) CREDIT_NARRATIVE7,imps_type beneficiary_code,
+             a.*  from bvsbi.sbi_imps_credits a  where debit_reference_no = :debitReferenceNumber  and validation_status=1)
+            """;
+
+
+    private static final String FindCreditDetailsForCN = """
+            SELECT * FROM (select ROWNUM RNO, decode(nvl(CREDIT_NARRATIVE3,'*'),'*', (select b.NAME_THIRD_PARTY from bvsbi.sbicorp_third_party b
+             where b.account_no=a.account_no and b.corporate_id = a.corporate_id  and status = 1
+             and  b.creation_time= (select max(creation_time) from bvsbi.sbicorp_third_party c where c.account_no=b.account_no
+             and b.branch_code=c.branch_code and b.corporate_id = c.corporate_id and c.status = 1  ) and rownum < 2 ),
+             CREDIT_NARRATIVE3) CREDIT_NARRATIVE7,  (select outref7 from bvsbi.sbi_ib_transactions  where narrative1=a.account_no
+             and substr(narrative2,0,5)=a.branch_code  and corporate_id = a.corporate_id  and substr(reference_no,0,10) = a.debit_reference_no
+             and substr(reference_no,11,5) != '00000' and rownum < 2 ) beneficiary_code,( select transaction_status from sbi_utr_status f
+             where f.reference_no=a.utr_no  )utr_credit_status, a.*   from bvsbi.sbi_ib_credits a
+             where debit_reference_no = :debitReferenceNumber )
+            """;
+
+
+    private static final String FindCreditDetailsForCZ = """
+            SELECT * FROM (select ROWNUM RNO, decode(nvl(CREDIT_NARRATIVE3,'*'),'*', (select b.NAME_THIRD_PARTY from bvsbi.sbicorp_third_party b
+             where b.account_no=a.account_no and b.corporate_id = a.corporate_id  and status = 1
+             and  b.creation_time= (select max(creation_time) from bvsbi.sbicorp_third_party c where c.account_no=b.account_no
+             and b.branch_code=c.branch_code and b.corporate_id = c.corporate_id and c.status = 1  ) and rownum < 2 ),
+             CREDIT_NARRATIVE3) CREDIT_NARRATIVE7,  (select outref7 from bvsbi.sbi_ib_transactions  where narrative1=a.account_no
+             and substr(narrative2,0,5)=a.branch_code  and corporate_id = a.corporate_id  and substr(reference_no,0,10) = a.debit_reference_no
+             and substr(reference_no,11,5) != '00000' and rownum < 2 ) beneficiary_code,( select transaction_status from sbi_utr_status f
+             where f.reference_no=a.utr_no  )utr_credit_status, a.*   from bvsbi.sbi_ib_credits a
+             where debit_reference_no = :debitReferenceNumber )
+            """;
+
+    private static final String FindCreditDetailsForCQ = """
+            SELECT * FROM (SELECT ROWNUM RNO, DECODE(NVL(CREDIT_NARRATIVE3,'*'),'*',(SELECT B.NAME_THIRD_PARTY FROM BVSBI.SBICORP_THIRD_PARTY B WHERE B.ACCOUNT_NO=A.ACCOUNT_NO
+             AND B.CORPORATE_ID = A.CORPORATE_ID AND STATUS = 1 AND B.CREATION_TIME= (SELECT MAX(CREATION_TIME) FROM BVSBI.SBICORP_THIRD_PARTY C WHERE C.ACCOUNT_NO=B.ACCOUNT_NO  AND B.BRANCH_CODE=C.BRANCH_CODE AND B.CORPORATE_ID = C.CORPORATE_ID AND C.STATUS = 1  )
+             AND ROWNUM < 2 ), CREDIT_NARRATIVE3) CREDIT_NARRATIVE7, (SELECT OUTREF7 FROM BVSBI.SBI_IB_TRANSACTIONS WHERE NARRATIVE1=A.ACCOUNT_NO AND SUBSTR(NARRATIVE2,0,5)=A.BRANCH_CODE AND CORPORATE_ID = A.CORPORATE_ID AND SUBSTR(REFERENCE_NO,0,10) = A.DEBIT_REFERENCE_NO
+             AND SUBSTR(REFERENCE_NO,11,5) != '00000' AND ROWNUM < 2) BENEFICIARY_CODE, " +
+             (SELECT BGL_ACCOUNT_NO  FROM BVSBI.SBI_USER_VAN_BEN_MASTER  WHERE LONG_VAN_ID = A.CREDIT_NARRATIVE1 AND STATUS = '1' AND ROWNUM < 2 ) BGL_ACCOUNT_NO ,
+             A.*  FROM BVSBI.SBI_IB_CREDITS A  WHERE DEBIT_REFERENCE_NO = :debitReferenceNumber )
+            """;
+
+
+    private static final String FindCreditDetails = """
+            SELECT * FROM (select ROWNUM RNO, decode(nvl(CREDIT_NARRATIVE3,'*'),'*',(select b.NAME_THIRD_PARTY from bvsbi.sbicorp_third_party b where b.account_no=a.account_no
+            and b.corporate_id = a.corporate_id and status = 1 and b.creation_time= (select max(creation_time) from bvsbi.sbicorp_third_party c where c.account_no=b.account_no  and b.branch_code=c.branch_code and b.corporate_id = c.corporate_id and c.status = 1  )
+            and rownum < 2 ), CREDIT_NARRATIVE3) CREDIT_NARRATIVE7, (select outref7 from bvsbi.sbi_ib_transactions where narrative1=a.account_no and substr(narrative2,0,5)=a.branch_code and corporate_id = a.corporate_id and substr(reference_no,0,10) = a.debit_reference_no
+            and substr(reference_no,11,5) != '00000' and rownum < 2) beneficiary_code,a.*  from bvsbi.sbi_ib_credits a  where debit_reference_no = :debitReferenceNumber )
+            """;
+
+
+    private static final String GET_TRICKLE_FLAG = """
+            select DECODE(AA.TRICKLE_FLAG,0,'N','Y')TRICKLE_FLAG
+             from (SELECT count(1)TRICKLE_FLAG from SBI_TRICKLE_CORPORATE_CONFIG a,sbicorp_echeque_master b
+             WHERE a.status='ACTIVE'
+             AND INSTR(a.TRANSACTION_TYPE,'CT',1) > 0
+             AND  b.credits_count BETWEEN lower_txn_limit and upper_txn_limit
+             AND b.reco_created='T'
+             AND (a.corporate_id = b.corporate_id  OR a.corporate_id ='ALL')
+             AND b.echeque_no= :eChequeNo )AA
+            """;
+
+    private static final String UPDATE_ECHEQUE = "update SBICORP_ECHEQUE_MASTER set #tobereplaced# where echeque_no = ?";
+
+
+    public String getMakerEmail(String userName) {
+        logger.info("public String getMakerEmail(String userName) begins");
+        String GET_EMAIL = "select email from bv_user_profile where  user_id in (select  user_id from bv_user where user_alias=:userName)";
+        String email = "";
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("userName", userName);
+        logger.info("userName-->" + userName);
+        if (userName != null && !"".equals(userName)) {
+            String sql = "select count(1) from bv_user_profile where  user_id in (select  user_id from bv_user where user_alias=:userName) and email is not null";
+
+            int count = namedParameterJdbcTemplate.queryForObject(sql, params, Integer.class);
+            logger.info("count-->" + count);
+            if (count > 0) {
+                email = (String) namedParameterJdbcTemplate.queryForObject(GET_EMAIL, params, String.class);
+                logger.info("email-->" + email);
+            } else {
+                logger.info("no email present for the user");
+            }
+        } else {
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+        logger.info("public String getMakerEmail(String userName) ends");
+        return email;
+    }
+
+
+    public String getMakerMobileNo(String userName) {
+        logger.info("public String getMakerMobileNo(String userName) begins");
+        String GET_MOBILE_NO = "select mobile_no from bv_user_profile where  user_id in (select  user_id from bv_user where user_alias=:userName)";
+        String mobile_no = "";
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("userName", userName);
+        if (userName != null && !userName.isEmpty()) {
+
+            String sql = "select count(1) from bv_user_profile where  user_id in (select  user_id from bv_user where user_alias=:userName) and mobile_no is not null";
+
+            int count = namedParameterJdbcTemplate.queryForObject(sql, params, Integer.class);
+            logger.info("count-->" + count);
+            if (count > 0) {
+                mobile_no = namedParameterJdbcTemplate.queryForObject(GET_MOBILE_NO, params, String.class);
+                logger.info("mobile_no-->" + mobile_no);
+            } else {
+                logger.info("no mobile_no present for the user");
+            }
+        } else {
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+        logger.info("public String getMakerMobileNo(String userName) ends");
+        return mobile_no;
+    }
+
+    public int isBilldeskBillerCount(String billerId) {
+        int billerCount;
+        String billerExistenceCount = "select count(1) from sbi_bp_biller_master where biller_id=? and status=1 and billdesk_bcode='99100' and aggregator='billdesk'";
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("billerId", billerId);
+        billerCount = namedParameterJdbcTemplate.queryForObject(billerExistenceCount, params, Integer.class);
+        logger.info("Biller existence count:::::::" + billerCount);
+        return billerCount;
+    }
+
+    public String[][] findDAUAccNoAndBrCode(String bankCode, String billerId) {
+        logger.info("findDAUAccNoAndBrCode(String bankCode, String billerId) ");
+
+        logger.info("bankCode :" + bankCode);
+        logger.info("billerId :" + billerId);
+
+        if (billerId != null && !billerId.trim().isEmpty() && bankCode != null && !bankCode.trim().isEmpty()) {
+            try {
+                if (MergerConstants.ABSMerger.contains(bankCode))
+                    bankCode = "0";
+                MapSqlParameterSource params = new MapSqlParameterSource();
+                params.addValue("bankCode", bankCode);
+                String fetchAccNoAndBrCode = null;
+                Map creditAccounts = null;
+                if ("SBCOLLECT".equals(billerId)) {
+                    fetchAccNoAndBrCode = "select account_no,branch_code,field_value from bvsbi.sbi_merchant_multiple_accounts where  merchant_code ='SBCOLLECT' and mandatory ='1' " +
+                            "and decode(substr(branch_code,1,1),'A','0','3','0','6','0','7','0','8','0','4','0','5','0','2','0',substr(branch_code,1,1))=:bankCode and field_value = (select to_char(sysdate,'DY') from dual)";// Modified for ABS_MERGER
+
+                    creditAccounts = namedParameterJdbcTemplate.queryForMap(fetchAccNoAndBrCode, params);
+                } else {
+                    fetchAccNoAndBrCode = "select account_no,branch_code from bvsbi.sbi_biller_multiple_accounts where  " +
+                            " merchant_code ='BILLDESK_BILLER' and mandatory ='0' and field_value = (select " +
+                            " fn_get_billdesk_credit_acct('EBPP') from dual)";
+                    creditAccounts = namedParameterJdbcTemplate.queryForMap(fetchAccNoAndBrCode, new MapSqlParameterSource());
+                }
+                logger.info("DAU Billdesk credit Account and Br code :" + creditAccounts);
+                String[][] accountNoAndBranchCode = new String[1][2];
+                if (!creditAccounts.isEmpty()) {
+                    accountNoAndBranchCode[0][0] = (String) creditAccounts.get("ACCOUNT_NO");
+                    accountNoAndBranchCode[0][1] = (String) creditAccounts.get("BRANCH_CODE");
+                } else {
+                    logger.info("Credit Account for Biller Not available");
+                    throw new BusinessException("ErrorCode", "Error Message");
+                }
+                logger.info("findDAUAccNoAndBrCode(String bankCode,String billerId) ");
+                return accountNoAndBranchCode;
+
+            } catch (DataAccessException ex) {
+                logger.error("DataAccessException :", ex);
+                throw new TechnicalException("Error Code", "Error Message");
+            }
+
+        } else {
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+
+    }
+
+
+    public void updateBillPaymentCreditAccount(String creditRefNo, String creditAccountNo, String creditBranchCode) {
+        logger.info("updateBillPaymentCreditAccount(String creditRefNo,String creditAccountNo,String creditBranchCode) method begins");
+        boolean result = false;
+
+
+        try {
+            MapSqlParameterSource params = new MapSqlParameterSource();
+            params.addValue("creditAccountNo", creditAccountNo);
+            params.addValue("creditBranchCode", creditBranchCode);
+            logger.info("Credit Reference number::::" + creditRefNo + "credit values inside dao impl:::" + creditAccountNo + "Brnach Code value :::" + creditBranchCode);
+            String sql = "update sbi_ib_transactions set narrative1=:creditAccountNo,narrative2=:creditBranchCode where reference_no in ( #refNo# ) ";
+            sql = sql.replace("#refNo#", creditRefNo);
+            int upd = namedParameterJdbcTemplate.update(sql, params);
+            if (upd > 0)
+                result = true;
+            logger.info("Updated count:::" + upd);
+        } catch (DataAccessException dataAccessException) {
+            logger.error("Exception Occured : ", dataAccessException);
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+        logger.info("updateBillPaymentCreditAccount(String creditRefNo,String creditAccountNo,String creditBranchCode) method ends");
+
+
+    }
+
+
+    public void insertIBStatus(CorporateTransactionLeg debitLeg) {
+        logger.info("insertIBStatus(CorpTransactionLeg debitLeg) method begins");
+        String refNo = "";
+        String accountNo = "";
+        String branchCode = "";
+        String reasonFailure = "";
+        String userName = "";
+        Double amount = null;
+        String status = "";
+
+
+        String corpRefNo = "";
+        String merchCode = "";
+        String thirdPartyRef = "";
+        String billerShortName = "";
+        String cbMaker = "";
+
+
+        if (debitLeg.getReferenceNo() != null)
+            refNo = debitLeg.getEchequeNo();
+        if (debitLeg.getAccountNo() != null)
+            accountNo = debitLeg.getAccountNo();
+        if (debitLeg.getBranchCode() != null)
+            branchCode = debitLeg.getBranchCode();
+        if (debitLeg.getStatusDescription() != null)
+            reasonFailure = debitLeg.getStatusDescription();
+        if (debitLeg.getUserName() != null)
+            userName = debitLeg.getUserName();
+        if (debitLeg.getAmount() != null)
+            amount = debitLeg.getAmount();
+        if (debitLeg.getStatus() != null)
+            status = debitLeg.getStatus();
+        if (debitLeg.getCorpRefNo() != null)
+            corpRefNo = debitLeg.getCorpRefNo();
+        if (debitLeg.getMerchantCode() != null)
+            merchCode = debitLeg.getMerchantCode();
+        if (debitLeg.getMaker() != null)//added by nidhi 26Sep2012
+            cbMaker = debitLeg.getMaker();//added by nidhi 26Sep2012
+
+        logger.info("refNo " + refNo);
+        logger.info("accountNo " + accountNo);
+        logger.info("branchCode " + branchCode);
+        logger.info("reasonFailure " + reasonFailure);
+        logger.info("userName " + userName);
+        logger.info("amount " + amount);
+        logger.info("status " + status);
+        logger.info("corpRefNo = " + corpRefNo);
+        StringTokenizer token = new StringTokenizer(corpRefNo, "|");
+        if (token.hasMoreTokens())
+            thirdPartyRef = token.nextToken();
+        if (token.hasMoreTokens())
+            billerShortName = token.nextToken();
+
+
+        if (billerShortName.equalsIgnoreCase("")) {
+            billerShortName = thirdPartyRef;
+            thirdPartyRef = "";
+        }
+        logger.info("thirdPartyRef = " + thirdPartyRef);
+        logger.info("merchCode = " + merchCode);
+        logger.info("billerShortName = " + billerShortName);
+        status = "";
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("refNo", refNo);
+        params.addValue("accountNo", accountNo);
+        params.addValue("branchCode", branchCode);
+        params.addValue("reasonFailure", reasonFailure);
+        params.addValue("userName", userName);
+        params.addValue("amount", amount);
+        params.addValue("status", status);
+        if (refNo.substring(0, 2).equalsIgnoreCase("CB")) {
+            logger.info("cbMaker ==== " + cbMaker);
+            userName = cbMaker;
+        }
+
+        MapSqlParameterSource billParams = new MapSqlParameterSource();
+        billParams.addValue("refNo", refNo);
+        billParams.addValue("accountNo", accountNo);
+        billParams.addValue("branchCode", branchCode);
+        billParams.addValue("reasonFailure", reasonFailure);
+        billParams.addValue("userName", userName);
+        billParams.addValue("amount", amount);
+        billParams.addValue("status", status);
+        billParams.addValue("merchCode", merchCode);
+        billParams.addValue("thirdPartyRef", thirdPartyRef);
+        billParams.addValue("billerShortName", billerShortName);
+        try {
+
+            if (refNo.substring(0, 2).equalsIgnoreCase("CB")) {
+                logger.info("For Bill Payment" + userName);
+                namedParameterJdbcTemplate.update(INSERT_IB_STATUS_BILLPAYMENT, billParams);
+            } else {
+                namedParameterJdbcTemplate.update(INSERT_IB_STATUS, params);
+            }
+
+        } catch (DataAccessException dataAccessException) {
+            logger.error("INSERT_IB_STATUS exception ", dataAccessException);
+            logger.error("dataAccessException ", dataAccessException);
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+        logger.info("insertIBStatus(CorpTransactionLeg debitLeg) method ends");
+    }
+
+
+    public void updateNPSStatus(String echequeNO) {
+        logger.info("updateNPSStatus(String echequeNO)Method Begin ");
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("echequeNO", echequeNO);
+
+        try {
+            namedParameterJdbcTemplate.update(UPDATE_NPS_STATUS, params);
+        } catch (DataAccessException e) {
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+        logger.info("updateNPSStatus(String echequeNO)Method ends ");
+
+    }
+
+    public List findCredits(String debitReferenceNumber) {
+
+        logger.info("findCredits(String debitReferenceNumber) debitReferenceNumber:" + debitReferenceNumber);
+
+        List allechequeslst;
+        if (debitReferenceNumber != null) {
+            try {
+
+                MapSqlParameterSource params = new MapSqlParameterSource();
+                params.addValue("debitReferenceNumber", debitReferenceNumber);
+                logger.info("params are " + params);
+
+                if (debitReferenceNumber.substring(0, 2).equalsIgnoreCase("CJ"))
+                    allechequeslst = namedParameterJdbcTemplate.query(FindImpsCreditDetails, params, new CorpTransactionLegRowMapper());
+                else if (debitReferenceNumber.substring(0, 2).equalsIgnoreCase("CN"))
+                    allechequeslst = namedParameterJdbcTemplate.query(FindCreditDetailsForCN, params, new CorpTransactionLegRowMapper());
+                else if (debitReferenceNumber.substring(0, 2).equalsIgnoreCase("CZ"))
+                    allechequeslst = namedParameterJdbcTemplate.query(FindCreditDetailsForCZ, params, new CorpTransactionLegRowMapper());
+                else if (debitReferenceNumber.substring(0, 2).equalsIgnoreCase("CQ"))
+                    allechequeslst = namedParameterJdbcTemplate.query(FindCreditDetailsForCQ, params, new CorpTransactionLegRowMapper());
+                else
+                    allechequeslst = namedParameterJdbcTemplate.query(FindCreditDetails, params, new CorpTransactionLegRowMapper());
+
+
+                logger.info("findCredits(String debitReferenceNumber) method End");
+                return allechequeslst;
+
+            } catch (DataAccessException dataAccessException) {
+                throw new TechnicalException("Error Code", "Error Message");
+            }
+
+        } else {
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+
+    }
+
+
+    public String getTrickleFlag(String eChequeNo) {
+        logger.info("getTrickleFlag(String eChequeNo) method begins");
+        String trickleFlag;
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("eChequeNo", eChequeNo);
+        try {
+            trickleFlag = namedParameterJdbcTemplate.queryForObject(GET_TRICKLE_FLAG, params, String.class);
+        } catch (DataAccessException ex) {
+            logger.error("Exception Occured", ex);
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+        logger.info("getTrickleFlag(String eChequeNo) method ends");
+        return trickleFlag;
+    }
+
+
+    static class CorpTransactionLegRowMapper implements RowMapper<CorporateTransactionLeg> {
+        public CorporateTransactionLeg mapRow(ResultSet rs, int index) throws SQLException {
+
+            CorporateTransactionLeg corpTransactionLeg = new CorporateTransactionLeg();
+            corpTransactionLeg.setDebitReferenceNo(rs.getString("debit_reference_no"));
+            corpTransactionLeg.setCreditReferenceNo(rs.getString("credit_reference_no"));
+            if ("CQ".equalsIgnoreCase(corpTransactionLeg.getDebitReferenceNo().substring(0, 2))) {
+                corpTransactionLeg.setAccountNo(rs.getString("CREDIT_MERCHANT_CODE"));
+            } else {
+                corpTransactionLeg.setAccountNo(rs.getString("account_no"));
+            }
+            corpTransactionLeg.setBranchCode(rs.getString("branch_code"));
+            corpTransactionLeg.setAmount(rs.getDouble("amount"));
+            corpTransactionLeg.setOriginalDebitBranch(rs.getString("original_debit_branch"));
+            corpTransactionLeg.setCreditStatus(rs.getString("credit_status"));
+
+
+            corpTransactionLeg.setStatusDescription(rs.getString("status_description"));
+            corpTransactionLeg.setCreditDescription(rs.getString("credit_description"));
+            corpTransactionLeg.setCreditNarrative1(rs.getString("credit_narrative1"));
+            corpTransactionLeg.setCreditNarrative2(rs.getString("credit_narrative2"));
+            corpTransactionLeg.setCreditNarrative3(rs.getString("credit_narrative3"));
+            corpTransactionLeg.getDebitReferenceNo();
+            try {
+                if (rs.getString("credit_narrative3") == null || rs.getString("credit_narrative3").isEmpty()) {
+                    corpTransactionLeg.setCreditNarrative3(rs.getString("credit_narrative7"));
+                }
+            } catch (SQLException e) {
+                throw new TechnicalException("Error Code", "Error Message");
+
+            }
+
+            corpTransactionLeg.setCorpRefNo(rs.getString("corp_ref_no"));
+            corpTransactionLeg.setRecoRequired(rs.getString("reco_required"));
+            corpTransactionLeg.setCreationTime(rs.getString("creation_time"));
+
+            corpTransactionLeg.setFileName(rs.getString("file_name"));
+            corpTransactionLeg.setCreditsCreated(rs.getString("credits_created"));
+            corpTransactionLeg.setErrorCode(rs.getString("error_code"));
+            corpTransactionLeg.setName(rs.getString("name"));
+            corpTransactionLeg.setUserName(rs.getString("user_name"));
+            corpTransactionLeg.setProductType("product_type");
+            corpTransactionLeg.setLastModTime(rs.getTimestamp("last_mod_time").toLocalDateTime());
+            corpTransactionLeg.setType(rs.getString("CREDIT_TYPE"));
+            corpTransactionLeg.setNarrative1(rs.getString("credit_narrative1"));
+            corpTransactionLeg.setNarrative2(rs.getString("credit_narrative2"));
+            corpTransactionLeg.setBeneficiaryCode(rs.getString("beneficiary_code")); //<!-- CR5603 Phase3 Bulk Inbox Pagination-->
+
+
+            logger.info("substring of credit reference NO :" + corpTransactionLeg.getCreditReferenceNo().substring(0, 2));
+
+            String merchCode = "|CR|CN|CZ";
+            if (merchCode.indexOf(corpTransactionLeg.getCreditReferenceNo().substring(0, 2)) > 0) {
+                corpTransactionLeg.setUtrNo(rs.getString("utr_no"));
+
+                logger.info("utr no :::" + corpTransactionLeg.getUtrNo());
+
+            }
+
+            String merchNEFTCode = "CN";
+            if (merchNEFTCode.contains(corpTransactionLeg.getCreditReferenceNo().substring(0, 2))) {
+                corpTransactionLeg.setUtrCreditStatus(rs.getString("utr_credit_status"));
+
+                logger.info("UtrCreditStatus" + corpTransactionLeg.getUtrCreditStatus());
+            }
+
+            merchNEFTCode = "CZ";
+            if (merchNEFTCode.contains(corpTransactionLeg.getCreditReferenceNo().substring(0, 2))) {
+                corpTransactionLeg.setUtrCreditStatus(rs.getString("utr_credit_status"));
+
+                logger.info("UtrCreditStatus" + corpTransactionLeg.getUtrCreditStatus());
+            }
+
+            if (corpTransactionLeg.getCreditReferenceNo().substring(0, 2).equalsIgnoreCase("CJ")) {
+                if (rs.getString("imps_type").equalsIgnoreCase("P2P")) {
+                    corpTransactionLeg.setAccountNo(rs.getString("mmid"));
+                    corpTransactionLeg.setUtrNo(rs.getString("mobile_no"));
+                    corpTransactionLeg.setCreditStatus(rs.getString("response_status"));
+                } else if (rs.getString("imps_type").equalsIgnoreCase("P2A")) {
+                    corpTransactionLeg.setUtrNo(rs.getString("ifsc_code"));
+                    corpTransactionLeg.setCreditStatus(rs.getString("response_status"));
+                }
+            }
+
+            String refNo = corpTransactionLeg.getCreditReferenceNo().substring(0, 2);
+            if (refNo.equalsIgnoreCase("CR")) {
+                corpTransactionLeg.setPurposeCode(rs.getString("FILE_NAME"));
+                corpTransactionLeg.setInstrPriority(rs.getString("RECO_REFERENCE_NO"));
+            }
+            return corpTransactionLeg;
+        }
+    }
+
+    public int updateEcheque(FieldCollection fieldCollection, String echequeNumber) {
+        logger
+                .info("updateEcheque(List echequeMasterParamList, String echequeNumber)Method Begin ");
+        List<MapSqlParameterSource> batchArgs = new ArrayList<>();
+        logger.info("FieldCollection : " + fieldCollection + "," + "EchequeNumber : " + echequeNumber);
+        int rowAffected = 0;
+        List echequeMasterParamList = null;
+        try {
+            if (fieldCollection == null && echequeNumber == null) {
+                throw new TechnicalException("Error Code", "Error Message");
+
+            } else {
+                echequeMasterParamList = fieldCollection.getFieldList();
+                int listSize = echequeMasterParamList.size();
+
+                StringBuilder queryBuilder = new StringBuilder("UPDATE sbicorp_echeque_master SET ");
+                MapSqlParameterSource params = new MapSqlParameterSource();
+
+                boolean first = true;
+                for (int count = 0; count < echequeMasterParamList.size(); count++) {
+                    FieldsModel dataForUpdateQuery = (FieldsModel) echequeMasterParamList.get(count);
+                    String filedName = dataForUpdateQuery.getName();
+                    Object value = dataForUpdateQuery.getValue();
+                    if (!first) {
+                        queryBuilder.append(" , ");
+                    }
+                    queryBuilder.append(filedName).append(" = :").append(filedName);
+                    params.addValue(filedName, value);
+                    first = false;
+                }
+                queryBuilder.append(" , LAST_MOD_TIME =sysdate ");
+                queryBuilder.append(" WHERE ECHEQUE_NO= :echequeNumber");
+                params.addValue("echequeNumber", echequeNumber);
+                String finalQuery = queryBuilder.toString();
+                logger.info("Values in Field Object", finalQuery);
+                rowAffected = namedParameterJdbcTemplate.update(finalQuery, params);
+
+
+                logger.info("No of rows updated succesfully in echeque master after authorization:  " + rowAffected + "for echequeNo:" + echequeNumber);
+            }
+        } catch (DataAccessException e) {
+            logger.info("Exception in updating the audit trial");
+            throw new TechnicalException("Error Code", "Error Message");
+
+        }
+
+        logger.info("updateEcheque(List echequeMasterParamList, String echequeNumber)Method ends ");
+        return rowAffected;
+    }
+
+
+    public Map getSupplierParams(String echequeNo) {
+
+        logger.info("getSupplierParams(String echequeNo) method begins");
+        Map codesMap = null;
+        //String query="select param,value from sbicorp_echeque_supplier_param where reference_no= ?"; //????
+        String query = "SELECT PARAM,VALUE FROM SBICORP_ECHEQUE_SUPPLIER_PARAM WHERE OID=(SELECT oid FROM SBICORP_ECHEQUE_MASTER WHERE ECHEQUE_NO=?)";
+        try {
+            MapSqlParameterSource param = new MapSqlParameterSource();
+            param.addValue("echequeNo", echequeNo);
+            codesMap = (Map) namedParameterJdbcTemplate.query(query, param, new FindAllCodesExtractor());
+        } catch (DataAccessException dataAccessException) {
+            throw new TechnicalException("Error Code", "Error Message");
+        }
+
+        logger.info("getSupplierParams(String echequeNo) method ends");
+        return codesMap;
+    }
+
+
+    private class FindAllCodesExtractor implements ResultSetExtractor {
+
+        public Object extractData(ResultSet rs) throws SQLException, DataAccessException {
+            Map result = new LinkedHashMap();
+            while (rs.next()) {
+                String value = "";
+                value = rs.getString("value");
+                if (value == null) {
+                    value = "";
+
+                } else {
+                    value = value.trim();
+                }
+
+
+                result.put(rs.getString("param"), value);
+            }
+            return result;
+        }
+
+    }
+
+
+    @Autowired
+    public EchequeMasterDAOImpl(final NamedParameterJdbcTemplate namedParameterJdbcTemplate) {
+        this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
+    }
+}
