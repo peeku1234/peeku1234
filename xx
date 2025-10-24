@@ -1,8 +1,11 @@
 package com.sbi.yb.services.service.impl;
 
+
 import com.sbi.microservice.framework.exception.BusinessException;
 import com.sbi.microservice.framework.model.CorporateProfile;
+import com.sbi.microservice.framework.repository.CorporateDAO;
 import com.sbi.microservice.framework.services.CorporateService;
+import com.sbi.microservice.framework.utils.StringUtils;
 import com.sbi.yb.services.cache.ReferenceDataCache;
 import com.sbi.yb.services.constants.MergerConstants;
 import com.sbi.yb.services.constants.UtilsConstant;
@@ -15,508 +18,457 @@ import com.sbi.yb.services.service.ManageTransactionServiceDetails;
 import com.sbi.yb.services.utils.CorpTransactionUtil;
 import com.sbi.yb.services.utils.ImpsTransactionUtil;
 import com.sbi.yb.services.utils.TransactionRequestMapper;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+/**
+ * @author V1017583
+ * 1.	Loop through echequelist to authorize
+ * 2.	Check the authflag of echeque to authorize
+ * 3.	if the authflag is set to "no" then the echeque will not be processed
+ * 4.	else call modifyAuthorizationParameter to set new value for current_auth_level,auth1_name/auth2_name and other details for the echeque
+ * 5.	If the modified current_auth_level is set to 0, then set txnType as "ONLINE_MODE" else set as "OFFLINE_MODE"
+ * 6.	if ONLINE_MODE
+ * i.		Call findMerchantName to find the merchant for the echeque
+ * ii.		set merchantcode for the echeque
+ * iii.	Call findMapper to find the request mapper to be used, it will either corpDDTransactionRequestMapper or corpTransactionRequestMapper
+ * iv.		Call getTransactionObject which will set credit legs and other details required for posting.
+ * 7.	Call postTransaction to post(ONLINE_MODE) and to update echeque details
+ * 8.	Call transactionManageBP.setEchequePropeties to set status and details of the echeque.
+ */
 
-@ExtendWith(MockitoExtension.class)
-class AuthorizationEchequeServiceTest {
+@Component
+public class AuthorizationEchequeService {
 
-    @Mock
-    private CorporateService corporateService;
-
-    @Mock
-    private AuthorizeOrRejectSelectionListDAO authorizeOrRejectSelectionListDAO;
-
-    @Mock
-    private DealerPaymentDAO dealerPaymentDAOImpl;
-
-    @Mock
-    private ValidationFilterDAO validationFilterDAOImpl;
-
-    @Mock
-    private CutoffTimeService cutoffTimeService;
-
-    @Mock
-    private ReferenceDataCache referenceDataCache;
-
-    @Mock
-    private ManageTransactionServiceDetails manageTransactionDetails;
-
-    @Mock
-    private CorpTransactionUtil corpTransactionUtil;
-
-    @Mock
-    private ImpsTransactionUtil impsTransactionUtil;
-
-    @Mock
-    private RequestMapperFactory requestMapperFactory;
-
-    @InjectMocks
-    private AuthorizationEchequeService authorizationEchequeService;
-
-    private CorporateTransactionLeg debitLeg;
-    private List<CorporateTransactionLeg> transactionDetails;
-    private final String userName = "testUser";
-    private final String corporateId = "testCorp";
-    private final String gstnNo = "testGSTN";
-
-    @BeforeEach
-    void setUp() {
-        debitLeg = new CorporateTransactionLeg();
-        debitLeg.setEchequeNo("CK123456");
-        debitLeg.setAuthFlag("YES");
-        debitLeg.setCurrentAuthLevel("1");
-        debitLeg.setScheduledDate(LocalDateTime.now().plusDays(1));
-        debitLeg.setBranchCode("0123");
-        debitLeg.setMerchantCode("IMPS");
-
-        transactionDetails = Arrays.asList(debitLeg);
-    }
-
-    @Test
-    void authorizeEcheques_WithNullTransactionDetails_ShouldReturnNull() {
-        // Act
-        List<CorporateTransactionLeg> result = authorizationEchequeService.authorizeEcheques(null, userName, corporateId, gstnNo);
-
-        // Assert
-        assertNull(result);
-    }
-
-    @Test
-    void authorizeEcheques_WithValidTransactionDetails_ShouldProcessAllLegs() {
-        // Arrange
-        MergerConstants.ABSMerger = Arrays.asList("0", "1");
-        
-        // Act
-        List<CorporateTransactionLeg> result = authorizationEchequeService.authorizeEcheques(transactionDetails, userName, corporateId, gstnNo);
-
-        // Assert
-        assertNotNull(result);
-        assertEquals(1, result.size());
-    }
-
-    @Test
-    void authorizeEcheques_WithPastScheduledDate_ShouldUpdateToCurrentDate() {
-        // Arrange
-        CorporateTransactionLeg pastDebitLeg = new CorporateTransactionLeg();
-        pastDebitLeg.setEchequeNo("CK123457");
-        pastDebitLeg.setAuthFlag("YES");
-        pastDebitLeg.setCurrentAuthLevel("1");
-        pastDebitLeg.setScheduledDate(LocalDateTime.now().minusDays(1));
-        pastDebitLeg.setBranchCode("1123");
-        pastDebitLeg.setMerchantCode("IMPS");
-        
-        List<CorporateTransactionLeg> pastTransactions = Arrays.asList(pastDebitLeg);
-
-        // Act
-        List<CorporateTransactionLeg> result = authorizationEchequeService.authorizeEcheques(pastTransactions, userName, corporateId, gstnNo);
-
-        // Assert
-        assertNotNull(result);
-    }
-
-    @Test
-    void debitLegAuthorizationDetails_WithAuthFlagNo_ShouldSetStatus() {
-        // Arrange
-        debitLeg.setAuthFlag("NO");
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.debitLegAuthorizationDetails(
-            debitLeg, LocalDateTime.now(), LocalDateTime.now(), userName, "0", corporateId, gstnNo);
-
-        // Assert
-        assertNotNull(result);
-        assertEquals("Echeque cannot be authorized", result.getStatus());
-    }
-
-    @Test
-    void debitLegAuthorizationDetails_WithDealerPaymentMode_ShouldProcessDealer() {
-        // Arrange
-        debitLeg.setMerchantCode("DEALER");
-        debitLeg.setEchequeNo("CM123456");
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("DEALER"), eq("0"))).thenReturn(true);
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.debitLegAuthorizationDetails(
-            debitLeg, LocalDateTime.now(), LocalDateTime.now(), userName, "0", corporateId, gstnNo);
-
-        // Assert
-        assertNotNull(result);
-        verify(dealerPaymentDAOImpl).findExceedingConsignOutstanding(anyString());
-    }
-
-    @Test
-    void debitLegAuthorizationDetails_WithDealerPaymentMode_ShouldThrowExceptionForInvalidTime() {
-        // Arrange
-        debitLeg.setMerchantCode("DEALER");
-        debitLeg.setEchequeNo("CM123456");
-        debitLeg.setCurrentAuthLevel("0");
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("DEALER"), eq("0"))).thenReturn(false);
-
-        // Act & Assert
-        assertThrows(BusinessException.class, () -> 
-            authorizationEchequeService.debitLegAuthorizationDetails(
-                debitLeg, LocalDateTime.now(), LocalDateTime.now(), userName, "0", corporateId, gstnNo));
-    }
-
-    @Test
-    void debitLegAuthorizationDetails_WithIMPSPaymentMode_ShouldProcessIMPS() {
-        // Arrange
-        debitLeg.setMerchantCode("IMPS");
-        when(cutoffTimeService.isScheduleTrue(eq("CORP_IMPS"), eq("0"))).thenReturn(true);
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("CORP_IMPS"), eq("0"))).thenReturn(true);
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.debitLegAuthorizationDetails(
-            debitLeg, LocalDateTime.now(), LocalDateTime.now(), userName, "0", corporateId, gstnNo);
-
-        // Assert
-        assertNotNull(result);
-    }
-
-    @Test
-    void debitLegAuthorizationDetails_WithIMPSPaymentMode_ShouldThrowExceptionForCutoffTime() {
-        // Arrange
-        debitLeg.setMerchantCode("IMPS");
-        debitLeg.setCurrentAuthLevel("0");
-        when(cutoffTimeService.isScheduleTrue(eq("CORP_IMPS"), eq("0"))).thenReturn(true);
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("CORP_IMPS"), eq("0"))).thenReturn(false);
-
-        // Act & Assert
-        assertThrows(BusinessException.class, () -> 
-            authorizationEchequeService.debitLegAuthorizationDetails(
-                debitLeg, LocalDateTime.now(), LocalDateTime.now(), userName, "0", corporateId, gstnNo));
-    }
-
-    @Test
-    void validatingOtherTransactionDetails_WithValidSchedule_ShouldUpdateAuthLevel() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("0");
-        when(cutoffTimeService.isScheduleTrue(anyString(), anyString())).thenReturn(true);
-        when(cutoffTimeService.isValidDateAndTime(any(), anyString(), anyString())).thenReturn(false);
-        when(cutoffTimeService.getNextWorkingDate(any(), anyString(), anyString()))
-            .thenReturn(LocalDateTime.now().plusDays(1));
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.validatingOtherTransactionDetails(
-            debitLeg, LocalDateTime.now(), "TEST_MODE", "0");
-
-        // Assert
-        assertNotNull(result);
-        assertEquals("50", result.getCurrentAuthLevel());
-    }
-
-    @Test
-    void validatingImpsDetails_WithValidCutoff_ShouldProcessNormally() {
-        // Arrange
-        when(cutoffTimeService.isScheduleTrue(eq("CORP_IMPS"), eq("0"))).thenReturn(true);
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("CORP_IMPS"), eq("0"))).thenReturn(true);
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.validatingImpsDetails(
-            debitLeg, LocalDateTime.now(), "IMPS", "0");
-
-        // Assert
-        assertNotNull(result);
-    }
-
-    @Test
-    void validatingDealerDetails_WithValidTime_ShouldProcessNormally() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("0");
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("DEALER"), eq("0"))).thenReturn(true);
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.validatingDealerDetails(
-            debitLeg, LocalDateTime.now(), "DEALER", "0");
-
-        // Assert
-        assertNotNull(result);
-        verify(dealerPaymentDAOImpl).findExceedingConsignOutstanding(anyString());
-        verify(dealerPaymentDAOImpl).findInterestRoutineExecution(anyString());
-    }
-
-    @Test
-    void setCurrentAuthLevelInTransaction_WithCSTransaction_ShouldScheduleForCutoff() {
-        // Arrange
-        debitLeg.setEchequeNo("CS123456");
-        debitLeg.setCurrentAuthLevel("0");
+  private final Logger logger = LoggerFactory.getLogger(AuthorizationEchequeService.class);
+  private final CorporateService corporateService;
+  private final AuthorizeOrRejectSelectionListDAO authorizeOrRejectSelectionListDAO;
+  private final DealerPaymentDAO dealerPaymentDAOImpl;
+  private final ValidationFilterDAO validationFilterDAOImpl;
+  private final CutoffTimeService cutoffTimeService;
+  private final ReferenceDataCache referenceDataCache;
+  private final ManageTransactionServiceDetails manageTransactionDetails;
+  private final ImpsTransactionUtil impsTransactionUtil;
+  private final RequestMapperFactory requestMapperFactory;
+e CorpTransactionUtil corpTransactionUtil;
+  @Autowired
+  public AuthorizationEchequeService( AuthorizeOrRejectSelectionListDAO authorizeOrRejectSelectionListDAO,
+                                     DealerPaymentDAO dealerPaymentDAOImpl, CutoffTimeService cutoffTimeService, ReferenceDataCache referenceDataCache,
+                                     ValidationFilterDAO validationFilterDAOImpl, ManageTransactionServiceDetails manageTransactionDetails, CorpTransactionUtil corpTransactionUtil, ImpsTransactionUtil impsTransactionUtil,
+                                     final RequestMapperFactory requestMapperFactory, final CorporateService corporateService) {
+    this.authorizeOrRejectSelectionListDAO = authorizeOrRejectSelectionListDAO;
+    this.dealerPaymentDAOImpl = dealerPaymentDAOImpl;
+    this.cutoffTimeService = cutoffTimeService;
+    this.referenceDataCache = referenceDataCache;
+    this.validationFilterDAOImpl = validationFilterDAOImpl;
+    this.manageTransactionDetails = manageTransactionDetails;
+    this.corpTransactionUtil = corpTransactionUtil;
+    this.impsTransactionUtil = impsTransactionUtil;
+    this.requestMapperFactory=requestMapperFactory;
+    this.corporateService = corporateService;
+  }
+  public List<CorporateTransactionLeg> authorizeEcheques(List<CorporateTransactionLeg> transactionDetails, String userName, String corporateId, String gstnNo) {
+    logger.info("Authorization authorizeEcheques(AuthorizationBP) ****  Begins");
+    List<CorporateTransactionLeg> echqList = null;
+    if (transactionDetails != null) {
+      logger.info("gstnNo ::::{}", gstnNo);
+      echqList = transactionDetails.stream().map(debitLeg -> {
+        LocalDateTime payDate = debitLeg.getScheduledDate();
         LocalDateTime today = LocalDateTime.now();
-        LocalDateTime payDate = LocalDateTime.now().plusDays(1);
-        
-        Map<String, String> transactionLimit = new HashMap<>();
-        transactionLimit.put("CS_CUTOFF_START_TIME_0", "09:00");
-        when(cutoffTimeService.isValidDateAndTime(any(), eq("CS"), eq("0"))).thenReturn(false);
-        when(cutoffTimeService.getNextWorkingDate(any(), eq("CS"), eq("0")))
-            .thenReturn(LocalDateTime.now().plusDays(1));
-        when(referenceDataCache.getTransactionLimit()).thenReturn(transactionLimit);
-        
-        Map<String, Object> userMap = new HashMap<>();
-        userMap.put("user_type", "1");
-        userMap.put("mobile_no", "1234567890");
-        when(validationFilterDAOImpl.getUserProfileDetails(eq(userName), eq(corporateId))).thenReturn(userMap);
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.setCurrentAuthLevelInTransaction(
-            debitLeg, today, payDate, "0", userName, corporateId, gstnNo);
-
-        // Assert
-        assertNotNull(result);
-        assertEquals("50", result.getCurrentAuthLevel());
+        logger.info("debitLeg.getScheduledDate():{},today::{},before::{}", debitLeg.getScheduledDate(), today, payDate.isBefore(today));
+        payDate = payDate.isBefore(today) ? today : payDate;
+        String branchCode = debitLeg.getBranchCode();
+        String debitBankcCode = branchCode.substring(0, 1);
+        if (debitBankcCode != null && MergerConstants.ABSMerger != null && MergerConstants.ABSMerger.contains(debitBankcCode))
+          debitBankcCode = "0";
+        return debitLegAuthorizationDetails(debitLeg, payDate, today, userName, debitBankcCode, corporateId, gstnNo);
+      }).toList();
+    }
+    return echqList;
+  }
+  public CorporateTransactionLeg debitLegAuthorizationDetails(CorporateTransactionLeg debitLeg, LocalDateTime payDate, LocalDateTime today, String userName, String debitBankcCode, String coporateId, String gstnNo) {
+    String iPAddress = null;
+    if (debitLeg.getAuthFlag().equalsIgnoreCase(UtilsConstant.YES)) {
+      modifyAuthorizationParameter(debitLeg, userName, iPAddress);
+      String paymentMode = debitLeg.getMerchantCode();
+      if (debitLeg.getEchequeNo() != null && debitLeg.getEchequeNo().substring(0, 2).equalsIgnoreCase("CM")) {
+        paymentMode = "DEALER";
+      }
+      logger.info("paymentMode :{},payDate::{}", paymentMode, payDate);
+      if (paymentMode != null) {
+        switch (paymentMode) {
+          case "DEALER" -> validatingDealerDetails(debitLeg, payDate, paymentMode, debitBankcCode);
+          case "IMPS" -> validatingImpsDetails(debitLeg, payDate, paymentMode, debitBankcCode);
+          default -> validatingOtherTransactionDetails(debitLeg, payDate, paymentMode, debitBankcCode);
+        }
+      }
+      debitLeg = setCurrentAuthLevelInTransaction(debitLeg, today, payDate, debitBankcCode, userName, coporateId, gstnNo);
+    } else {
+      logger.info("Authorization authorizeEcheques(AuthorizationBP) **** Validation Failed: Echeque cannot be authorized for echequeNo : {}", debitLeg.getEchequeNo());
+      if (debitLeg.getStatus() == null)
+        debitLeg.setStatus("Echeque cannot be authorized");
     }
 
-    @Test
-    void setCurrentAuthLevelInTransaction_WithCOTAndAadhar_ShouldSetAuthLevelTo85() {
-        // Arrange
-        debitLeg.setEchequeNo("CO123456");
-        debitLeg.setMerchantCode("AADHAR");
-        debitLeg.setCurrentAuthLevel("1");
-        
-        Map<String, Object> userMap = new HashMap<>();
-        userMap.put("user_type", "1");
-        userMap.put("mobile_no", "1234567890");
-        when(validationFilterDAOImpl.getUserProfileDetails(eq(userName), eq(corporateId))).thenReturn(userMap);
+    return debitLeg;
+  }
+  public CorporateTransactionLeg validatingOtherTransactionDetails(CorporateTransactionLeg debitLeg, LocalDateTime payDate, String paymentMode, String debitBankcCode) {
+    boolean isScheduleTrue = false;
+    isScheduleTrue = cutoffTimeService.isScheduleTrue(paymentMode, debitBankcCode);
+    if (isScheduleTrue) {
+      logger.info("inside Scheduling");
+      if (paymentMode != null && debitLeg.getCurrentAuthLevel().equals("0") && !cutoffTimeService.isValidDateAndTime(payDate, paymentMode, debitBankcCode)) {
+        LocalDateTime nextDate = cutoffTimeService.getNextWorkingDate(payDate, paymentMode, debitBankcCode);
+        DateTimeFormatter scheduleDate = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+        logger.info("scheduleDate :{}", scheduleDate);
+        debitLeg.setCurrentAuthLevel("50");
+        debitLeg.setScheduledDate(LocalDateTime.parse(nextDate.format(scheduleDate)));
+        debitLeg.setScheduled("0");
+      }
 
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.setCurrentAuthLevelInTransaction(
-            debitLeg, LocalDateTime.now(), LocalDateTime.now(), "0", userName, corporateId, gstnNo);
+    }
+    return debitLeg;
+  }
+  public CorporateTransactionLeg validatingImpsDetails(CorporateTransactionLeg debitLeg, LocalDateTime payDate, String paymentMode, String debitBankcCode) {
+    boolean isScheduleTrue = false;
+    isScheduleTrue = cutoffTimeService.isScheduleTrue("CORP_" + paymentMode, debitBankcCode);
+    if (isScheduleTrue) {
+      logger.info("inside Scheduling");
+      if (debitLeg.getCurrentAuthLevel().equals("0") && cutoffTimeService.isValidDateAndTime(payDate, "CORP_" + paymentMode, debitBankcCode)) {
+        throw new BusinessException("IMPS services are currently not available between 10:45 PM and 11:15 PM", "");
+      }
+    }
+    return debitLeg;
+  }
+  public CorporateTransactionLeg validatingDealerDetails(CorporateTransactionLeg debitLeg, LocalDateTime payDate, String paymentMode, String debitBankcCode) {
+    dealerPaymentDAOImpl.findExceedingConsignOutstanding(debitLeg.getEchequeNo());
+    if (debitLeg.getCurrentAuthLevel().equals("0")) {
+      if (!cutoffTimeService.isValidDateAndTime(payDate, paymentMode, debitBankcCode))
+        throw new BusinessException("ealer Finance payment can be made only from 4AM to 11PM", "");
+      dealerPaymentDAOImpl.findInterestRoutineExecution(debitLeg.getEchequeNo());
+    }
+    return debitLeg;
+  }
+  public CorporateTransactionLeg setCurrentAuthLevelInTransaction(CorporateTransactionLeg debitLeg, LocalDateTime today, LocalDateTime payDate, String debitBankcCode, String userName, String corporateId, String gstnNO) {
+    String csTxnNo = debitLeg.getEchequeNo();
+    if (csTxnNo != null && csTxnNo.substring(0, 2).equalsIgnoreCase("CS")) {
+      if (debitLeg.getCurrentAuthLevel().equals("0") && !cutoffTimeService.isValidDateAndTime(today, "CS", debitBankcCode)) {
+        logger.info("CS transaction going to scheduled mode....");
+        LocalDateTime nextDate = cutoffTimeService.getNextWorkingDate(payDate, "CS", debitBankcCode);
+        Map<String, String> data = referenceDataCache.getTransactionLimit();
+        String startTime = data.get(csTxnNo.substring(0, 2) + "_CUTOFF_START_TIME_" + debitBankcCode);
+        String[] startTimeArray = startTime.split(":");
+        LocalDateTime newDateTime = nextDate.withHour(Integer.parseInt(startTimeArray[0])).withMinute(Integer.parseInt(startTimeArray[1]));
+        DateTimeFormatter scheduleDate = DateTimeFormatter.ofPattern("dd/MM/yyyy:HH:mm");
+        logger.info("CS transaction final scheduleDate :{}", scheduleDate);
+        debitLeg.setCurrentAuthLevel("50");
+        debitLeg.setScheduledDate(LocalDateTime.parse(newDateTime.format(scheduleDate)));
+        debitLeg.setScheduled("0");
+      }
+    } else if (debitLeg.getEchequeNo() != null && debitLeg.getEchequeNo().substring(0, 2).equalsIgnoreCase("CO") &&
+            debitLeg.getMerchantCode() != null && debitLeg.getMerchantCode().equalsIgnoreCase("AADHAR") && !debitLeg.getCurrentAuthLevel().equals("2")) {
+      debitLeg.setCurrentAuthLevel("85");
+    }
+    Map<String, Object> userMap = validationFilterDAOImpl.getUserProfileDetails(userName, corporateId);
+    String userType = String.valueOf(userMap.get("user_type"));
+    String mobileNo = String.valueOf(userMap.get("mobile_no"));
+    if (userType != null && userType.equalsIgnoreCase("8") && !debitLeg.getCurrentAuthLevel().equals("2"))
+      debitLeg.setCurrentAuthLevel("99");
+    logger.info("current auth level for echeque {}, is ::{} ", debitLeg.getEchequeNo(), debitLeg.getCurrentAuthLevel());
+    debitLeg = postTransaction(debitLeg, corporateId, userName, mobileNo, gstnNO);
+    logger.info("Updated CorporateTransactionLeg{}",debitLeg);
+    return debitLeg;
+  }
+  public CorporateTransactionLeg postTransaction(CorporateTransactionLeg debitLeg, String corporateId, String userName, String mobileNo, String gstnNo) {
+    String merchantCode = "";
+    String mapperName = "";
+    String transactionName = "";
+    String status = "";
+    CorpTransaction corpTransaction = new CorpTransaction();
+    Map<String, Object> requestMap = new HashMap<>();
+    if (debitLeg.getCurrentAuthLevel().equals("0")) {
+      String txnType = "ONLINE_MODE";
+      merchantCode = Optional.ofNullable(findMerchantName(debitLeg)).orElseThrow();
+      logger.info("Authorization authorizeEcheques(AuthorizationBP) ****  Merchant COde for echequeNo {}, is {}", debitLeg.getEchequeNo(), merchantCode);
+      debitLeg.setMerchantCode(merchantCode);
+      corpTransaction.setDebit(debitLeg);
+      requestMap.put("corpTransaction", corpTransaction);
+      requestMap.put("corpId", corporateId);
+      mapperName = Optional.ofNullable(findMapper(debitLeg)).orElseThrow();
+      logger.info("Authorization authorizeEcheques(AuthorizationBP) ****  Mapper Name for echequeNo{},is{} ", debitLeg.getEchequeNo(), mapperName);
+      TransactionRequestMapper corpTransactionRequestMapper=null;
+      corpTransactionRequestMapper = requestMapperFactory.getRequestMapper(mapperName);
+      corpTransaction = Optional.ofNullable((CorpTransaction) corpTransactionRequestMapper.getTransactionObject(requestMap)).orElseThrow();
+      CorporateProfile corpProfile = corporateService.getCorporateProfile(corporateId);
+      String corporateName = corpProfile.corporateName();
+      String corporateAddress1 = (corpProfile.corporateAddress1() == null ? "" : corpProfile.corporateAddress1());
+      String corporateAddress2 = (corpProfile.corporateAddress2() == null ? "" : corpProfile.corporateAddress2());
+      String corporateAddress = corporateAddress1 + corporateAddress2;
+      String corporateCity = corpProfile.corporateCity();
+      String corporateState = corpProfile.corporateState();
+      String corporateZip = corpProfile.corporatePincode();
+      if (corpTransaction.getName() == null) // for CK & CS transaction name will be set in request mapper itself
+      {
+        transactionName = Optional.ofNullable(getTransactionName(debitLeg)).orElseThrow();
+        logger.info("Authorization authorizeEcheques ****  Transaction Name for echequeNo{} is {}", debitLeg.getEchequeNo(), transactionName);
+        corpTransaction.setName(transactionName);
+      }
+      corpTransaction.setUserName(userName);
+      corpTransaction.setCorporateId(corporateId);
+      corpTransaction.setCorporateName(corporateName);
+      corpTransaction.setCorpAddress(corporateAddress);
+      corpTransaction.setCorpCity(corporateCity);
+      corpTransaction.setCorpState(corporateState);
+      corpTransaction.setCorpZip(corporateZip);
+      corpTransaction.setGstnNo(gstnNo);//GSTN_CHG
+      logger.info("Authorization authorizeEcheques(AuthorizationBP) **** Set Debit Leg for echequeNo {},( for ONLINE_MODE or when posting is required) ", debitLeg.getEchequeNo());
+      logger.info("Authorization authorizeEcheques(AuthorizationBP) ****  Calling Post Transaction method for echequeNo  {}", debitLeg.getEchequeNo());
+      corpTransaction = (CorpTransaction) corpTransactionUtil.postTransaction(corpTransaction, txnType, userName);
+      logger.info("Authorization authorizeEcheques(AuthorizationBP) ****  Post Transaction method for echequeNo {},returns{} ", debitLeg.getEchequeNo(), corpTransaction);
+      debitLeg = ((CorporateTransactionLeg) corpTransaction.getDebit());
+      if (debitLeg.getEchequeNo() != null && "CJ".equalsIgnoreCase(debitLeg.getEchequeNo().substring(0, 2))) {
+        debitLeg.setMobileNo(mobileNo);
+        impsTransactionUtil.postRequestForImpsTransaction(debitLeg);
+      }
 
-        // Assert
-        assertNotNull(result);
-        assertEquals("85", result.getCurrentAuthLevel());
+    } else {      logger.info("Authorization authorizeEcheques(AuthorizationBP) **** Set Debit Leg for echequeNo {} (for FILE_MODE or when posting is not required) ", debitLeg.getEchequeNo());
+      corpTransaction.setDebit(debitLeg);
+      corpTransaction.setGstnNo(gstnNo);//GSTN_CHG
+      String txntype = debitLeg.getEchequeNo().substring(0, 2);
+      logger.info("TRANSACTION TYPE-->{}", txntype);
+      if (txntype.equalsIgnoreCase("CQ")) {
+        requestMap.put("corpTransaction", corpTransaction);
+        requestMap.put("corpId", corporateId);
+        mapperName = findMapper(debitLeg);
+        logger.info("Authorization authorizeEcheques(AuthorizationBP) ****  Mapper Name for echequeNo {} is {} ", debitLeg.getEchequeNo(), mapperName);
+         TransactionRequestMapper corpTransactionRequestMapper = null;
+        corpTransactionRequestMapper = requestMapperFactory.getRequestMapper(mapperName);
+        corpTransaction = (CorpTransaction) corpTransactionRequestMapper.getTransactionObject(requestMap);
+      }
+      corpTransaction = (CorpTransaction) corpTransactionUtil.postTransaction(corpTransaction, "FILE_MODE", userName);
+    }
+    debitLeg = (CorporateTransactionLeg) corpTransaction.getDebit();
+    debitLeg.setDebitStatus(debitLeg.getStatusCode());
+    debitLeg = manageTransactionDetails.setEchequePropeties(debitLeg);
+    status = getEchequeStatus(debitLeg);
+    debitLeg.setReason(status);
+
+    return debitLeg;
+  }
+  public String getEchequeStatus(CorporateTransactionLeg debitLeg) {
+    String status = "";
+    String currentAuthlevel = debitLeg.getCurrentAuthLevel();
+    if (currentAuthlevel.equalsIgnoreCase("0") || currentAuthlevel.equalsIgnoreCase("50") || currentAuthlevel.equalsIgnoreCase("99") || currentAuthlevel.equalsIgnoreCase("85")) {
+      status = "Echeque Authorized successfully.";
+    } else if (currentAuthlevel.equalsIgnoreCase("2")) {
+      status = "Echeque Authorized successfully. Awaiting for second level authorization.";
+
+    }
+    logger.info(" status of echeque :{} ", status);
+    return status;
+  }
+
+  public String getTransactionName(CorporateTransactionLeg debitLeg) {
+    String txnName = "";
+    String echequeNo = debitLeg.getEchequeNo();
+
+    if (echequeNo != null) {
+      txnName = switch (txnName) {
+        case "CD" -> "CORP_DD";
+        case "CK", "CS" -> "CORP_SPL";
+        default -> "CORP_OTHER";
+      };
+    } else {
+      txnName = null;
+    }
+    logger.info(" Transaction Name for echeque : {}", txnName);
+    return txnName;
+  }
+
+  public CorporateTransactionLeg modifyAuthorizationParameter(CorporateTransactionLeg corpTransactionLeg, String userName, String iPAddress) {
+    int currentAuthlevelint = Integer.parseInt(corpTransactionLeg.getCurrentAuthLevel());
+    String userAuthType = "";
+    if (currentAuthlevelint != 2) {
+      userAuthType = String.valueOf(authorizeOrRejectSelectionListDAO.findUserAuthType(corpTransactionLeg.getAccountNo(), corpTransactionLeg.getBranchCode(), corpTransactionLeg.getAmount(), userName));
+      corpTransactionLeg.setAuthType(userAuthType);
+    }
+    if (corpTransactionLeg.getAuthType().equals("0"))//single
+    {
+      firstLevelAuthorization(corpTransactionLeg, userName, iPAddress);
+    } else // two level authorization
+    {
+      secondLevelAuthorization(corpTransactionLeg, userName, iPAddress);
+    }
+    if (corpTransactionLeg.getSupplierId() != null && corpTransactionLeg.getSupplierId().equalsIgnoreCase("LSC_PAYMENTS")) {
+      corpTransactionLeg.setCurrentAuthLevel("50");
+      logger.info("current auth level changed to 50 for LSC transactions::");
+    }
+    logger.info("Authorization authorizeEcheques for echequeNo {}, ::: Authorisation level : {},Auth type :{},current auth level :{},auth 1 name : {},auth 2 name :{} ", corpTransactionLeg.getEchequeNo(), corpTransactionLeg.getAuthorisationLevel(),
+            corpTransactionLeg.getAuthType(), corpTransactionLeg.getCurrentAuthLevel(), corpTransactionLeg.getAuth1Name(), corpTransactionLeg.getAuth2Name());
+    return corpTransactionLeg;
+  }
+
+  public void firstLevelAuthorization(CorporateTransactionLeg corpTransactionLeg, String userName, String iPAddress) {
+
+    String currentAuthLevel = corpTransactionLeg.getCurrentAuthLevel();
+    logger.info("Single ::::  Current Auth Level : {}", currentAuthLevel);
+    corpTransactionLeg.setAuthorisationLevel("single");
+    if (currentAuthLevel.equalsIgnoreCase("1")) {
+      corpTransactionLeg.setAuth1Name(userName);
+      corpTransactionLeg.setAuth1IP(iPAddress);
+      corpTransactionLeg.setAuthType("0");
+    } else {
+      corpTransactionLeg.setAuthType("1");
     }
 
-    @Test
-    void setCurrentAuthLevelInTransaction_WithUserType8_ShouldSetAuthLevelTo99() {
-        // Arrange
-        Map<String, Object> userMap = new HashMap<>();
-        userMap.put("user_type", "8");
-        userMap.put("mobile_no", "1234567890");
-        when(validationFilterDAOImpl.getUserProfileDetails(eq(userName), eq(corporateId))).thenReturn(userMap);
 
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.setCurrentAuthLevelInTransaction(
-            debitLeg, LocalDateTime.now(), LocalDateTime.now(), "0", userName, corporateId, gstnNo);
+    // process immediately with current date, if schedule status is
+    // no(1)
+    if (corpTransactionLeg.getScheduled().equals("1")) {
+      corpTransactionLeg.setScheduledDate(StringUtils.currentTimeStamp().toLocalDateTime());
 
-        // Assert
-        assertNotNull(result);
-        assertEquals("99", result.getCurrentAuthLevel());
     }
 
-    @Test
-    void postTransaction_WithOnlineMode_ShouldProcessTransaction() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("0");
-        
-        CorporateProfile corporateProfile = new CorporateProfile(
-            corporateId, "Test Corp", "Address1", "Address2", 
-            "City", "State", "123456", "ACTIVE");
-        
-        when(corporateService.getCorporateProfile(corporateId)).thenReturn(corporateProfile);
-        when(validationFilterDAOImpl.getUserProfileDetails(eq(userName), eq(corporateId)))
-            .thenReturn(Collections.singletonMap("mobile_no", "1234567890"));
-        
-        // Mock the mapper and transaction processing
-        TransactionRequestMapper mockMapper = mock(TransactionRequestMapper.class);
-        CorpTransaction mockCorpTransaction = new CorpTransaction();
-        mockCorpTransaction.setDebit(debitLeg);
-        
-        when(requestMapperFactory.getRequestMapper(anyString())).thenReturn(mockMapper);
-        when(mockMapper.getTransactionObject(anyMap())).thenReturn(mockCorpTransaction);
-        when(corpTransactionUtil.postTransaction(any(), eq("ONLINE_MODE"), eq(userName)))
-            .thenReturn(mockCorpTransaction);
-        when(manageTransactionDetails.setEchequePropeties(any())).thenReturn(debitLeg);
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.postTransaction(
-            debitLeg, corporateId, userName, "1234567890", gstnNo);
-
-        // Assert
-        assertNotNull(result);
-        verify(corpTransactionUtil).postTransaction(any(), eq("ONLINE_MODE"), eq(userName));
+    logger.info("Single :::  Filename : {}", corpTransactionLeg.getFileName());
+    if (corpTransactionLeg.getFileName() == null) {
+      // Alteration for Online authorization.
+      if (corpTransactionLeg.getScheduled().equals("0") && corpTransactionLeg.getProcessed().equals("1")) {
+        corpTransactionLeg.setCurrentAuthLevel("50");
+      } else {
+        corpTransactionLeg.setCurrentAuthLevel("0");
+      }
+    } else {
+      // Alteration for file mode(bulktxn) authorization.
+      corpTransactionLeg.setScheduled("0");
+      corpTransactionLeg.setCurrentAuthLevel("50");
+      corpTransactionLeg.setProcessed("1");
     }
 
-    @Test
-    void postTransaction_WithCJTransaction_ShouldProcessImps() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("0");
-        debitLeg.setEchequeNo("CJ123456");
-        
-        CorporateProfile corporateProfile = new CorporateProfile(
-            corporateId, "Test Corp", "Address1", "Address2", 
-            "City", "State", "123456", "ACTIVE");
-        
-        when(corporateService.getCorporateProfile(corporateId)).thenReturn(corporateProfile);
-        when(validationFilterDAOImpl.getUserProfileDetails(eq(userName), eq(corporateId)))
-            .thenReturn(Collections.singletonMap("mobile_no", "1234567890"));
-        
-        TransactionRequestMapper mockMapper = mock(TransactionRequestMapper.class);
-        CorpTransaction mockCorpTransaction = new CorpTransaction();
-        CorporateTransactionLeg updatedDebitLeg = new CorporateTransactionLeg();
-        updatedDebitLeg.setEchequeNo("CJ123456");
-        updatedDebitLeg.setMobileNo("1234567890");
-        mockCorpTransaction.setDebit(updatedDebitLeg);
-        
-        when(requestMapperFactory.getRequestMapper(anyString())).thenReturn(mockMapper);
-        when(mockMapper.getTransactionObject(anyMap())).thenReturn(mockCorpTransaction);
-        when(corpTransactionUtil.postTransaction(any(), eq("ONLINE_MODE"), eq(userName)))
-            .thenReturn(mockCorpTransaction);
-        when(manageTransactionDetails.setEchequePropeties(any())).thenReturn(updatedDebitLeg);
+    firstLevelAuthorizationForImps(corpTransactionLeg);
 
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.postTransaction(
-            debitLeg, corporateId, userName, "1234567890", gstnNo);
+  }
 
-        // Assert
-        assertNotNull(result);
-        verify(impsTransactionUtil).postRequestForImpsTransaction(any());
+  public void secondLevelAuthorization(CorporateTransactionLeg corpTransactionLeg, String userName, String iPAddress) {
+    String currentAuthLevel = corpTransactionLeg.getCurrentAuthLevel();
+    corpTransactionLeg.setAuthorisationLevel("joint");
+    logger.info("Two level ::::  Current Auth Level : {}", currentAuthLevel);
+    if (currentAuthLevel.equalsIgnoreCase("1")) // first level authorization
+    {
+      corpTransactionLeg.setAuth1Name(userName);
+      corpTransactionLeg.setCurrentAuthLevel("2");
+      corpTransactionLeg.setAuth1IP(iPAddress);
+    } else {
+      logger.info("Two level :::  Filename :{} ", corpTransactionLeg.getFileName());
+      if (corpTransactionLeg.getFileName() == null) // online mode (view inbox)
+      {
+        corpTransactionLeg.setAuth2Name(userName);
+        corpTransactionLeg.setAuth2IP(iPAddress);
+        if (corpTransactionLeg.getScheduled().equals("0") && corpTransactionLeg.getProcessed().equals("1")) {
+          corpTransactionLeg.setCurrentAuthLevel("50");
+        } else {
+          corpTransactionLeg.setCurrentAuthLevel("0");
+        }
+
+      } else // for file_mode(bulk inbox)
+      {
+
+        corpTransactionLeg.setAuth2Name(userName);
+        corpTransactionLeg.setScheduled("0");
+        corpTransactionLeg.setCurrentAuthLevel("50");
+        corpTransactionLeg.setProcessed("1");
+        corpTransactionLeg.setAuth2IP(iPAddress);
+
+      }
+      secondLevelAuthorizationForImps(corpTransactionLeg);
+
+    }
+  }
+
+  public void secondLevelAuthorizationForImps(CorporateTransactionLeg corpTransactionLeg) {
+    if (corpTransactionLeg.getReferenceNo().substring(0, 2).equalsIgnoreCase("CJ")) {//Added for IMPS
+      if (isImpsSingleCreditOnlineTxn(corpTransactionLeg) && !"0".equals(corpTransactionLeg.getScheduled())) {
+        corpTransactionLeg.setCurrentAuthLevel("0");
+      } else {
+        corpTransactionLeg.setCurrentAuthLevel("50");
+        corpTransactionLeg.setScheduled("0"); //Added for form mode multiple credits imps transaction
+        corpTransactionLeg.setProcessed("1");
+        corpTransactionLeg.setAuth2Channel("CORPINB");//added for IMPS mobility
+      }
+      logger.info("current auth level changed to 50 for CJ transactions::");
+    }
+  }
+
+  public void firstLevelAuthorizationForImps(CorporateTransactionLeg corpTransactionLeg) {
+    if (corpTransactionLeg.getReferenceNo().substring(0, 2).equalsIgnoreCase("CJ")) {//Added for IMPS
+      if (isImpsSingleCreditOnlineTxn(corpTransactionLeg) && !"0".equals(corpTransactionLeg.getScheduled())) {
+        corpTransactionLeg.setCurrentAuthLevel("0");
+      } else {
+        corpTransactionLeg.setCurrentAuthLevel("50");
+        corpTransactionLeg.setAuth1Channel("CORPINB");//added IMPS mobility
+      }
+      logger.info("current auth level changed to 50 for CJ transactions::");
+
     }
 
-    @Test
-    void postTransaction_WithFileMode_ShouldProcessTransaction() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("2");
-        debitLeg.setEchequeNo("CQ123456");
-        
-        when(validationFilterDAOImpl.getUserProfileDetails(eq(userName), eq(corporateId)))
-            .thenReturn(Collections.singletonMap("mobile_no", "1234567890"));
-        
-        TransactionRequestMapper mockMapper = mock(TransactionRequestMapper.class);
-        CorpTransaction mockCorpTransaction = new CorpTransaction();
-        mockCorpTransaction.setDebit(debitLeg);
-        
-        when(requestMapperFactory.getRequestMapper(anyString())).thenReturn(mockMapper);
-        when(mockMapper.getTransactionObject(anyMap())).thenReturn(mockCorpTransaction);
-        when(corpTransactionUtil.postTransaction(any(), eq("FILE_MODE"), eq(userName)))
-            .thenReturn(mockCorpTransaction);
-        when(manageTransactionDetails.setEchequePropeties(any())).thenReturn(debitLeg);
+  }
 
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.postTransaction(
-            debitLeg, corporateId, userName, "1234567890", gstnNo);
-
-        // Assert
-        assertNotNull(result);
-        verify(corpTransactionUtil).postTransaction(any(), eq("FILE_MODE"), eq(userName));
+  boolean isImpsSingleCreditOnlineTxn(CorporateTransactionLeg debitLeg) {
+    boolean returnVal = false;
+    Map<String, Object> requestMap = new HashMap<>();
+    CorpTransaction corpTransaction = new CorpTransaction();
+    String merchantCode = findMerchantName(debitLeg);
+    logger.info("Merchant COde for echequeNo {}", merchantCode);
+    debitLeg.setMerchantCode(merchantCode);
+    corpTransaction.setDebit(debitLeg);
+    requestMap.put("corpTransaction", corpTransaction);
+    requestMap.put("corpId", debitLeg.getCorporateId());
+    String mapperName = Optional.ofNullable(findMapper(debitLeg)).orElseThrow();
+    TransactionRequestMapper corpTransactionRequestMapper = requestMapperFactory.getRequestMapper(mapperName);
+    corpTransaction = (CorpTransaction) corpTransactionRequestMapper.getTransactionObject(requestMap);
+    if (corpTransaction.getCredit() != null && corpTransaction.getCredit().length == 1 && (debitLeg.getFileName() == null || "".equals(debitLeg.getFileName().trim()))) {
+      returnVal = true;
     }
-
-    @Test
-    void getEchequeStatus_WithAuthLevel0_ShouldReturnAuthorizedMessage() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("0");
-
-        // Act
-        String result = authorizationEchequeService.getEchequeStatus(debitLeg);
-
-        // Assert
-        assertEquals("Echeque Authorized successfully.", result);
+    return returnVal;
+  }
+  public String findMerchantName(CorporateTransactionLeg debitLeg) {
+    logger.info("getMerchantName :{} ", debitLeg.getMerchantCode());
+    String merchantCode = null;
+    String echequeNo = debitLeg.getEchequeNo();
+    String supplierId = debitLeg.getSupplierId();
+    echequeNo = echequeNo.substring(0, 2);
+    switch (echequeNo) {
+      case "CH", "CK", "CR", "CN", "CO", "CJ", "CZ", "CQ" -> merchantCode = debitLeg.getMerchantCode();
+      case "CB" -> {
+        if (debitLeg.getMerchantCode() == null) {
+          merchantCode = "BILL";
+        } else merchantCode = debitLeg.getMerchantCode();
+      }
+      case "CS" -> {
+        if ((supplierId.equals("300")) || (supplierId.equals("301")) || (supplierId.equals("302")) || (supplierId.equals("303")) || (supplierId.equals("304"))) {
+          merchantCode = "BPCL";
+        }
+      }
+      default -> merchantCode = "CORPORATE";
     }
-
-    @Test
-    void getEchequeStatus_WithAuthLevel2_ShouldReturnAwaitingMessage() {
-        // Arrange
-        debitLeg.setCurrentAuthLevel("2");
-
-        // Act
-        String result = authorizationEchequeService.getEchequeStatus(debitLeg);
-
-        // Assert
-        assertEquals("Echeque Authorized successfully. Awaiting for second level authorization.", result);
+    return merchantCode;
+  }
+  public String findMapper(CorporateTransactionLeg debitLeg) {
+    String mapperName = null;
+    String echequeNo = debitLeg.getEchequeNo().substring(0, 2);
+    switch (echequeNo) {
+      case "CK" -> mapperName = "CORP_SPL";
+      case "CD" -> mapperName = "CORP_DD";
+      case "CQ" -> mapperName = "CORP_VAN";
+      default -> mapperName = "CORP_OTHER";
     }
-
-    @Test
-    void getTransactionName_WithCDTransaction_ShouldReturnCorpDD() {
-        // Arrange
-        debitLeg.setEchequeNo("CD123456");
-
-        // Act
-        String result = authorizationEchequeService.getTransactionName(debitLeg);
-
-        // Assert
-        assertEquals("CORP_DD", result);
-    }
-
-    @Test
-    void getTransactionName_WithCKTransaction_ShouldReturnCorpSpl() {
-        // Arrange
-        debitLeg.setEchequeNo("CK123456");
-
-        // Act
-        String result = authorizationEchequeService.getTransactionName(debitLeg);
-
-        // Assert
-        assertEquals("CORP_SPL", result);
-    }
-
-    @Test
-    void getTransactionName_WithCSTransaction_ShouldReturnCorpSpl() {
-        // Arrange
-        debitLeg.setEchequeNo("CS123456");
-
-        // Act
-        String result = authorizationEchequeService.getTransactionName(debitLeg);
-
-        // Assert
-        assertEquals("CORP_SPL", result);
-    }
-
-    @Test
-    void getTransactionName_WithOtherTransaction_ShouldReturnCorpOther() {
-        // Arrange
-        debitLeg.setEchequeNo("CQ123456");
-
-        // Act
-        String result = authorizationEchequeService.getTransactionName(debitLeg);
-
-        // Assert
-        assertEquals("CORP_OTHER", result);
-    }
-
-    @Test
-    void getTransactionName_WithNullEchequeNo_ShouldReturnNull() {
-        // Arrange
-        debitLeg.setEchequeNo(null);
-
-        // Act
-        String result = authorizationEchequeService.getTransactionName(debitLeg);
-
-        // Assert
-        assertNull(result);
-    }
-
-    @Test
-    void modifyAuthorizationParameter_ShouldUpdateAuthorizationDetails() {
-        // Arrange
-        String ipAddress = "192.168.1.1";
-
-        // Act
-        CorporateTransactionLeg result = authorizationEchequeService.modifyAuthorizationParameter(
-            debitLeg, userName, ipAddress);
-
-        // Assert
-        assertNotNull(result);
-        // Add more specific assertions based on your business logic
-    }
-
-    // Helper methods for the unimplemented private methods
-    @Test
-    void findMerchantName_ShouldReturnMerchantCode() {
-        // This would test the private method indirectly through postTransaction
-        // Implementation depends on the actual logic
-    }
-
-    @Test
-    void findMapper_ShouldReturnMapperName() {
-        // This would test the private method indirectly through po
+    return mapperName;
+  }
+}
